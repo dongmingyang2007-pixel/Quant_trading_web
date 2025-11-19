@@ -14,7 +14,7 @@ DATA_CACHE_DIR = settings.DATA_CACHE_DIR
 DATA_CACHE_DIR.mkdir(exist_ok=True)
 
 CACHE_PATH = DATA_CACHE_DIR / "global_headlines.json"
-CACHE_TTL = timedelta(hours=6)
+CACHE_TTL = timedelta(minutes=int(os.environ.get("HEADLINE_CACHE_MINUTES", "10") or 10))
 FRESHNESS_THRESHOLD = timedelta(hours=48)
 HEADLINE_MAX_AGE = timedelta(days=int(os.environ.get("HEADLINE_MAX_AGE_DAYS", "7") or 7))
 MAX_HEADLINES = max(6, int(os.environ.get("GLOBAL_HEADLINES_MAX", "12") or 12))
@@ -209,6 +209,10 @@ def _has_fresh_story(stories: List[Dict[str, Any]]) -> bool:
 
 
 def _fetch_remote_headlines() -> tuple[List[Dict[str, str]], bool]:
+    # 先尝试用 yfinance 自带新闻源，命中则可直接使用
+    yf_headlines = _fetch_yfinance_headlines()
+    if yf_headlines:
+        return (yf_headlines, False)
     if os.environ.get("ENABLE_WEB_SEARCH", "1") == "0":
         return (DEFAULT_HEADLINES, True)
     try:
@@ -340,3 +344,69 @@ def get_global_headlines(refresh: bool = False) -> List[Dict[str, str]]:
         _save_cache(payload)
 
     return stories
+def _fetch_yfinance_headlines() -> List[Dict[str, str]]:
+    """Use yfinance ticker news as a lightweight, dependency-free headline source."""
+    try:
+        import yfinance as yf  # type: ignore
+    except Exception:
+        return []
+
+    tickers = [sym.strip() for sym in os.environ.get("HEADLINE_TICKERS", "SPY,QQQ,GLD,BTC-USD").split(",") if sym.strip()]
+    aggregated: List[Dict[str, str]] = []
+    seen_urls: set[str] = set()
+
+    def _extract_image(thumbnail: Dict[str, Any] | None) -> str:
+        if not thumbnail:
+            return ""
+        if thumbnail.get("originalUrl"):
+            return thumbnail["originalUrl"]
+        resolutions = thumbnail.get("resolutions") or []
+        for res in resolutions:
+            if res.get("url"):
+                return res["url"]
+        return ""
+
+    for symbol in tickers:
+        try:
+            ticker = yf.Ticker(symbol)
+            news_items = ticker.news or []
+        except Exception:
+            continue
+        for entry in news_items:
+            content = entry.get("content") or {}
+            title = content.get("title")
+            if not title:
+                continue
+            url = (
+                (content.get("canonicalUrl") or {}).get("url")
+                or (content.get("clickThroughUrl") or {}).get("url")
+                or ""
+            )
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            summary = content.get("summary") or content.get("description") or ""
+            provider = (content.get("provider") or {}).get("displayName") or symbol.upper()
+            published = content.get("pubDate") or content.get("displayTime") or ""
+            published_display, published_iso = _parse_datetime(published)
+            thumbnail = _extract_image(content.get("thumbnail"))
+            story_id = entry.get("id") or hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+            heat = int(entry.get("heat", 0) or 0)
+            aggregated.append(
+                {
+                    "id": story_id,
+                    "title": title.strip(),
+                    "url": url,
+                    "snippet": summary.strip(),
+                    "image": thumbnail,
+                    "source": provider,
+                    "published": published_display,
+                    "published_dt": published_iso,
+                    "heat": heat,
+                }
+            )
+            if len(aggregated) >= AGGREGATE_TARGET:
+                break
+        if len(aggregated) >= AGGREGATE_TARGET:
+            break
+    return aggregated

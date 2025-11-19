@@ -379,7 +379,8 @@ def backtest(request):
             entry["json_payload"] = "{}"
         entry["warnings_localized"] = translate_list(entry.get("warnings") or [], language)
 
-    focus_feed = get_global_headlines()
+    refresh_news = request.method == "POST" or request.GET.get("refresh_news") == "1"
+    focus_feed = get_global_headlines(refresh=refresh_news)
     for story in focus_feed:
         if "readers" not in story:
             story["readers"] = story.pop("heat", 0)
