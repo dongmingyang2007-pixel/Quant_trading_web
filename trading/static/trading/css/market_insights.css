@@ -1,0 +1,708 @@
+.market-page {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    margin-bottom: 48px;
+}
+
+.market-hero {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    padding: 32px 40px;
+    border-radius: 28px;
+    background: linear-gradient(135deg, rgba(15, 118, 110, 0.9), rgba(59, 130, 246, 0.85));
+    color: rgba(255, 255, 255, 0.95);
+    box-shadow: 0 24px 48px rgba(15, 23, 42, 0.18);
+}
+
+.market-hero-main {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 28px;
+    width: 100%;
+}
+
+.hero-cards {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 20px;
+}
+
+.market-kicker {
+    margin: 0;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-size: 0.78rem;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.market-title {
+    margin: 6px 0 10px;
+    font-size: clamp(2rem, 4vw, 2.6rem);
+    font-weight: 700;
+}
+
+.market-subtitle {
+    margin: 0;
+    font-size: 1rem;
+    max-width: 520px;
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.market-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: min(420px, 100%);
+}
+
+.tradingview-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    padding: 9px 18px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    background: rgba(255, 255, 255, 0.08);
+    transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+}
+
+.tradingview-link:hover {
+    text-decoration: none;
+    background: rgba(255, 255, 255, 0.18);
+    border-color: rgba(255, 255, 255, 0.85);
+    transform: translateY(-1px);
+    color: #0f172a;
+}
+
+.market-search {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.market-search-wrap {
+    position: relative;
+    width: 100%;
+}
+
+.market-search input[type="text"] {
+    flex: 1;
+    border-radius: 999px;
+    border: none;
+    padding: 10px 18px;
+    font-size: 0.95rem;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+    background: rgba(255, 255, 255, 0.2);
+    color: #0f172a;
+}
+
+.market-search input[type="text"]::placeholder {
+    color: rgba(15, 23, 42, 0.6);
+}
+
+.market-typeahead {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(100% + 6px);
+    border-radius: 20px;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: rgba(248, 250, 252, 0.98);
+    box-shadow: 0 22px 40px rgba(15, 23, 42, 0.15);
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    z-index: 25;
+}
+
+.market-typeahead[hidden] {
+    display: none;
+}
+
+.typeahead-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.typeahead-option {
+    width: 100%;
+    border: none;
+    border-radius: 14px;
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 12px;
+    background: rgba(15, 23, 42, 0.025);
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.typeahead-option:hover,
+.typeahead-option:focus-visible {
+    background: rgba(59, 130, 246, 0.12);
+    outline: none;
+    transform: translateY(-1px);
+}
+
+.typeahead-option.is-active {
+    background: rgba(59, 130, 246, 0.18);
+    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.45);
+}
+
+.typeahead-option .option-symbol {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: #0f172a;
+}
+
+.option-meta {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.typeahead-option .option-source {
+    font-size: 0.8rem;
+    color: #475569;
+    margin-left: 0;
+}
+
+.typeahead-watch {
+    padding-left: 12px;
+    border-left: 1px solid rgba(71, 85, 105, 0.35);
+}
+
+.typeahead-watch button {
+    border: none;
+    background: none;
+    color: #1d4ed8;
+    padding: 0;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.78rem;
+}
+
+.typeahead-empty {
+    padding: 10px 12px;
+    font-size: 0.85rem;
+    color: #64748b;
+}
+
+.typeahead-hint {
+    margin: 0;
+}
+
+.market-timeframes {
+    display: inline-flex;
+    gap: 10px;
+}
+
+.market-timeframe {
+    border: none;
+    border-radius: 999px;
+    padding: 8px 18px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    background: rgba(255, 255, 255, 0.16);
+    color: rgba(255, 255, 255, 0.9);
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.market-timeframe:hover {
+    background: rgba(255, 255, 255, 0.24);
+    transform: translateY(-1px);
+}
+
+.market-timeframe.is-active {
+    background: #f9fafb;
+    color: #0f172a;
+    box-shadow: 0 10px 20px rgba(15, 23, 42, 0.16);
+}
+
+.market-watch-btn {
+    align-self: flex-start;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.7);
+    color: rgba(255, 255, 255, 0.9);
+    padding: 8px 16px;
+    font-weight: 600;
+    background: transparent;
+    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.market-watch-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+    color: #0f172a;
+    border-color: rgba(255, 255, 255, 0.95);
+    transform: translateY(-1px);
+}
+
+.market-chip-section {
+    margin-top: 1.5rem;
+}
+
+.memory-card {
+    position: relative;
+    max-width: 100%;
+    margin: 4px 0 0;
+}
+
+.memory-card__glass {
+    position: absolute;
+    inset: 0;
+    border-radius: 32px;
+    background: linear-gradient(145deg, rgba(59, 130, 246, 0.15), rgba(16, 185, 129, 0.12));
+    filter: blur(12px);
+    z-index: 0;
+}
+
+.memory-card__shell {
+    position: relative;
+    z-index: 1;
+    border-radius: 32px;
+    background: #ffffff;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    box-shadow: 0 30px 45px rgba(15, 23, 42, 0.12);
+    overflow: hidden;
+}
+
+.memory-card__header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    justify-content: space-between;
+    padding: 1.75rem 2rem 1rem;
+}
+
+.memory-card__title {
+    display: flex;
+    gap: 14px;
+    flex: 1;
+    min-width: 260px;
+}
+
+.memory-card__badge {
+    width: 56px;
+    height: 56px;
+    border-radius: 18px;
+    background: linear-gradient(135deg, #22d3ee, #6366f1);
+    color: #fff;
+    font-size: 1.6rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 20px 35px rgba(79, 70, 229, 0.25);
+}
+
+.memory-eyebrow {
+    margin: 0;
+    font-size: 0.75rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: rgba(15, 23, 42, 0.55);
+}
+
+.memory-card__title h3 {
+    margin: 0.2rem 0 0.35rem;
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.memory-card__title p {
+    margin: 0;
+    color: rgba(15, 23, 42, 0.72);
+    font-size: 0.95rem;
+}
+
+.memory-card__meta {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.memory-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 52px;
+    height: 52px;
+    border-radius: 18px;
+    background: #0ea5e9;
+    color: #fff;
+    font-weight: 700;
+    font-size: 1.3rem;
+    box-shadow: 0 12px 30px rgba(14, 165, 233, 0.4);
+}
+
+.memory-card__watch {
+    background: #fde68a;
+    color: #92400e;
+    border: none;
+    font-weight: 600;
+}
+
+.memory-card__watch:hover {
+    background: #fbbf24;
+    color: #78350f;
+}
+
+.memory-card__clear,
+.memory-card__watch {
+    min-width: 120px;
+}
+
+.memory-card__body {
+    padding: 1.25rem 2rem 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.memory-chip-flow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 1rem 1.5rem;
+    border-radius: 22px;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    background: rgba(248, 250, 252, 0.9);
+}
+
+.memory-card__footer {
+    font-size: 0.82rem;
+    color: rgba(15, 23, 42, 0.6);
+}
+
+.market-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: 32px;
+    margin-bottom: 12px;
+}
+
+.market-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 999px;
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    padding: 6px 15px;
+    font-size: 0.9rem;
+    background: rgba(255, 255, 255, 0.9);
+    color: #0f172a;
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    backdrop-filter: blur(4px);
+}
+
+.market-chip:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 7px 14px rgba(15, 23, 42, 0.12);
+}
+
+.market-chip-remove {
+    font-size: 0.85rem;
+    padding-left: 4px;
+    cursor: pointer;
+    color: inherit;
+    opacity: 0.8;
+    transition: opacity 0.15s ease;
+}
+
+.market-chip-remove:hover {
+    opacity: 1;
+}
+
+.memory-chip-flow .market-chip {
+    background: linear-gradient(120deg, rgba(59, 130, 246, 0.1), rgba(16, 185, 129, 0.1));
+    border-color: rgba(59, 130, 246, 0.25);
+}
+
+.memory-chip-flow .market-chip:hover {
+    box-shadow: 0 10px 20px rgba(59, 130, 246, 0.18);
+}
+
+.memory-card--favorites .memory-card__glass {
+    background: linear-gradient(145deg, rgba(245, 158, 11, 0.18), rgba(248, 113, 113, 0.18));
+}
+
+.memory-card--favorites .memory-card__badge {
+    background: linear-gradient(135deg, #fcd34d, #f97316);
+    box-shadow: 0 20px 35px rgba(249, 115, 22, 0.3);
+}
+
+.memory-count--favorites {
+    background: #f472b6;
+    box-shadow: 0 12px 25px rgba(244, 114, 182, 0.35);
+}
+
+.favorites-chip-flow {
+    background: rgba(255, 247, 237, 0.9);
+    border-color: rgba(251, 191, 36, 0.35);
+}
+
+.favorites-chip-flow .market-chip {
+    background: linear-gradient(120deg, rgba(251, 191, 36, 0.12), rgba(248, 113, 113, 0.1));
+    border-color: rgba(251, 191, 36, 0.4);
+}
+
+.favorites-chip-flow .market-chip:hover {
+    box-shadow: 0 12px 22px rgba(251, 191, 36, 0.2);
+}
+
+.market-chip-empty {
+    font-size: 0.88rem;
+    color: inherit;
+    opacity: 0.8;
+}
+
+.chip-hint {
+    margin: 0;
+    font-size: 0.8rem;
+    letter-spacing: 0.02em;
+    color: inherit;
+    opacity: 0.8;
+}
+
+
+.market-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    border-radius: 18px;
+    background: rgba(148, 163, 184, 0.16);
+    color: #334155;
+    font-size: 0.92rem;
+}
+
+.market-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 24px;
+}
+
+.market-column {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.market-column-head h2 {
+    margin: 0;
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.market-column-sub {
+    margin: 4px 0 0;
+    color: #475569;
+    font-size: 0.92rem;
+}
+
+.market-list {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 320px;
+}
+
+.market-card {
+    border-radius: 18px;
+    border: 1px solid rgba(148, 163, 184, 0.32);
+    padding: 14px 16px 18px;
+    background: rgba(248, 250, 252, 0.95);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08);
+}
+
+.market-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.market-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.market-symbol {
+    font-weight: 700;
+    font-size: 1rem;
+    color: #0f172a;
+    text-decoration: none;
+}
+
+.market-symbol:hover {
+    text-decoration: underline;
+}
+
+.market-price {
+    display: inline-flex;
+    align-self: flex-start;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.08);
+    font-weight: 600;
+    font-size: 0.88rem;
+    color: #1f2937;
+}
+
+.market-change-group {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.market-metric {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 68px;
+}
+
+.metric-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #64748b;
+}
+
+.metric-value {
+    display: inline-flex;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.9rem;
+    padding: 4px 8px;
+    border-radius: 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+.metric-value.is-up {
+    background: rgba(16, 185, 129, 0.16);
+    color: #047857;
+}
+
+.metric-value.is-down {
+    background: rgba(248, 113, 113, 0.18);
+    color: #b91c1c;
+}
+
+.metric-value.subtle {
+    background: rgba(148, 163, 184, 0.2);
+    color: #334155;
+    font-weight: 600;
+}
+
+.metric-value.subtle.is-up {
+    background: rgba(45, 212, 191, 0.18);
+    color: #0f766e;
+}
+
+.metric-value.subtle.is-down {
+    background: rgba(248, 113, 113, 0.2);
+    color: #dc2626;
+}
+
+.market-card-chart {
+    position: relative;
+    border-radius: 14px;
+    background: rgba(15, 23, 42, 0.06);
+    padding: 6px 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.market-card-chart canvas {
+    width: 180px;
+    height: 48px;
+}
+
+.market-chart-window {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(15, 23, 42, 0.6);
+    background: rgba(255, 255, 255, 0.7);
+    padding: 2px 6px;
+    border-radius: 999px;
+}
+
+.market-card-foot {
+    display: flex;
+    justify-content: flex-end;
+    font-size: 0.78rem;
+    color: #64748b;
+}
+
+.market-list-empty {
+    display: grid;
+    place-items: center;
+    min-height: 160px;
+    border-radius: 16px;
+    border: 1px dashed rgba(148, 163, 184, 0.3);
+    color: #94a3b8;
+    background: rgba(148, 163, 184, 0.08);
+}
+
+.market-error {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    border-radius: 16px;
+    border: 1px solid rgba(220, 38, 38, 0.28);
+    background: rgba(254, 226, 226, 0.72);
+    color: #b91c1c;
+    padding: 12px 16px;
+}
+
+@media (max-width: 992px) {
+    .market-actions {
+        min-width: 100%;
+    }
+
+    .market-hero {
+        padding: 28px;
+    }
+}
+
+@media (max-width: 768px) {
+    .market-hero {
+        border-radius: 24px;
+    }
+
+    .market-change-group {
+        gap: 10px;
+    }
+
+    .market-card {
+        padding: 12px 14px 16px;
+    }
+}

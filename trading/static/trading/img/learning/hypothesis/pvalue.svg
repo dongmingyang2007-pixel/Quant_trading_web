@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="pvalueGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#pvalueGrad)"/>
+  <g fill="#f8fafc" font-family="'Segoe UI','PingFang SC','Helvetica Neue',Arial,sans-serif">
+    <text x="44" y="110" font-size="44" font-weight="700">p 值解读</text>
+    <text x="44" y="160" font-size="24">原假设成立时，结果出现的概率</text>
+  </g>
+  <g transform="translate(80 210)" fill="none" stroke-width="3">
+    <path d="M0 60h480" stroke="#94a3b8"/>
+    <path d="M60 60c40-60 80-90 120-90s80 30 120 90 80 90 120 90" stroke="#38bdf8"/>
+    <path d="M300 60c10-20 20-30 30-30s20 10 30 30 20 30 30 30" stroke="#facc15" stroke-width="4"/>
+    <text x="310" y="115" font-size="18" fill="#facc15">p</text>
+  </g>
+</svg>

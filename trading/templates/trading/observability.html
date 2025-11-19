@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+
+{% block title %}{% bilingual "Observability" "运行观测" %}{% endblock %}
+
+{% block content %}
+<div class="observability-page">
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3 mb-4">
+        <div>
+            <p class="text-uppercase text-muted small fw-semibold mb-1">{% bilingual "Diagnostics" "运行诊断" %}</p>
+            <h1 class="h3 mb-2">{% bilingual "Observability Dashboard" "可观测性仪表盘" %}</h1>
+            <p class="text-muted mb-0">{% bilingual "Review recent telemetry events, latency, and errors streamed to telemetry.ndjson." "查看写入 telemetry.ndjson 的最新事件、时延与错误情况。" %}</p>
+        </div>
+        <form method="get" class="row gx-2 gy-2 align-items-end">
+            <div class="col-auto">
+                <label class="form-label mb-1" for="event-filter">{% bilingual "Event" "事件类型" %}</label>
+                <select class="form-select form-select-sm" id="event-filter" name="event">
+                    <option value="">{% bilingual "All events" "全部事件" %}</option>
+                    {% for event in available_events %}
+                        <option value="{{ event }}" {% if event == active_event %}selected{% endif %}>{{ event }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-auto">
+                <label class="form-label mb-1" for="limit-select">{% bilingual "Window" "读取行数" %}</label>
+                <select class="form-select form-select-sm" id="limit-select" name="limit">
+                    {% for option in limit_options %}
+                        <option value="{{ option }}" {% if option == limit %}selected{% endif %}>{{ option }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-auto d-flex gap-2">
+                <button type="submit" class="btn btn-primary btn-sm align-self-end">{% bilingual "Apply" "应用" %}</button>
+                {% if active_event or limit != default_limit %}
+                    <a class="btn btn-outline-secondary btn-sm align-self-end" href="{% url 'trading:observability' %}">{% bilingual "Reset" "重置" %}</a>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+
+    {% if not file_exists %}
+        <div class="alert alert-warning">{% bilingual "No telemetry file detected in storage_bundle/data_cache." "未检测到 storage_bundle/data_cache 下的 telemetry.ndjson 文件。" %}</div>
+    {% endif %}
+
+    {% if file_exists %}
+    <div class="alert alert-light border d-flex flex-column flex-md-row justify-content-between gap-2">
+        <div>
+            {% bilingual "Displaying" "当前显示" %} <strong>{{ entries|length }}</strong> {% bilingual "events" "条事件" %}{% if active_event %}{% bilingual " for" "，类型" %} <code>{{ active_event }}</code>{% endif %}。
+            {% bilingual "Loaded" "本次读取" %} <strong>{{ loaded_lines }}</strong> {% bilingual "lines" "行" %} / {% bilingual "limit" "上限" %} {{ limit }}。
+            {% if has_more %}
+                <span class="text-warning ms-1">{% bilingual "Older records exist beyond the selected window." "还有更早的记录，可调大窗口查看。" %}</span>
+            {% endif %}
+        </div>
+        <div class="text-muted small">{% bilingual "Telemetry path" "数据文件" %}: <code>telemetry.ndjson</code></div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-5">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div>
+                            <h2 class="h5 mb-1">{% bilingual "Event summary" "事件概览" %}</h2>
+                            <p class="text-muted small mb-0">{% bilingual "Counts, success ratio, and latency by event." "展示各事件数量、成功率与耗时。" %}</p>
+                        </div>
+                    </div>
+                    {% if summaries %}
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th scope="col">{% bilingual "Event" "事件" %}</th>
+                                        <th scope="col" class="text-end">{% bilingual "Count" "数量" %}</th>
+                                        <th scope="col" class="text-end">{% bilingual "Success" "成功率" %}</th>
+                                        <th scope="col" class="text-end">{% bilingual "Avg ms" "平均(ms)" %}</th>
+                                        <th scope="col" class="text-end">{% bilingual "P95 proxy" "最大(ms)" %}</th>
+                                        <th scope="col">{% bilingual "Last seen" "最近时间" %}</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for item in summaries %}
+                                        <tr>
+                                            <th scope="row">{{ item.event }}</th>
+                                            <td class="text-end">{{ item.count }}</td>
+                                            <td class="text-end">
+                                                {% if item.success_pct is not None %}
+                                                    {{ item.success_pct|floatformat:1 }}%
+                                                {% else %}
+                                                    —
+                                                {% endif %}
+                                            </td>
+                                            <td class="text-end">
+                                                {% if item.avg_duration %}
+                                                    {{ item.avg_duration|floatformat:1 }}
+                                                {% else %}
+                                                    —
+                                                {% endif %}
+                                            </td>
+                                            <td class="text-end">
+                                                {% if item.max_duration %}
+                                                    {{ item.max_duration|floatformat:1 }}
+                                                {% else %}
+                                                    —
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                {% if item.last_ts %}
+                                                    {{ item.last_ts|date:"Y-m-d H:i:s" }}
+                                                {% else %}
+                                                    —
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <p class="text-muted mb-0">{% bilingual "No matching events in the current window." "当前窗口内没有匹配的事件。" %}</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-7">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div>
+                            <h2 class="h5 mb-1">{% bilingual "Recent events" "最新事件" %}</h2>
+                            <p class="text-muted small mb-0">{% bilingual "Newest entries first. Durations in milliseconds." "按时间逆序展示，耗时单位毫秒。" %}</p>
+                        </div>
+                    </div>
+                    {% if entries %}
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th scope="col">{% bilingual "Time" "时间" %}</th>
+                                        <th scope="col">{% bilingual "Event" "事件" %}</th>
+                                        <th scope="col" class="text-end">{% bilingual "Duration" "耗时" %}</th>
+                                        <th scope="col">{% bilingual "Status" "状态" %}</th>
+                                        <th scope="col">{% bilingual "Details" "详情" %}</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for entry in entries %}
+                                        <tr>
+                                            <td class="text-nowrap">
+                                                {% if entry.ts_obj %}
+                                                    {{ entry.ts_obj|date:"Y-m-d H:i:s" }}
+                                                {% else %}
+                                                    {{ entry.ts|default:"—" }}
+                                                {% endif %}
+                                            </td>
+                                            <td class="text-nowrap"><code>{{ entry.event }}</code></td>
+                                            <td class="text-end">
+                                                {% if entry.duration_ms %}
+                                                    {{ entry.duration_ms|floatformat:1 }} ms
+                                                {% else %}
+                                                    —
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                {% if entry.error %}
+                                                    <span class="badge bg-danger-subtle text-danger">{% bilingual "Error" "异常" %}</span>
+                                                {% elif entry.success is False %}
+                                                    <span class="badge bg-warning-subtle text-warning">{% bilingual "Failed" "失败" %}</span>
+                                                {% elif entry.success %}
+                                                    <span class="badge bg-success-subtle text-success">{% bilingual "Success" "成功" %}</span>
+                                                {% else %}
+                                                    <span class="badge bg-secondary-subtle text-secondary">{% bilingual "Info" "提示" %}</span>
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                <div class="small text-muted">
+                                                    {% if entry.request_id %}<div>ID: <code>{{ entry.request_id }}</code></div>{% endif %}
+                                                    {% if entry.user_id %}<div>User: {{ entry.user_id }}</div>{% endif %}
+                                                    {% if entry.error %}<div class="text-danger">{{ entry.error }}</div>{% endif %}
+                                                    {% for key, value in entry.details %}
+                                                        <div>{{ key }}: <code>{{ value }}</code></div>
+                                                    {% endfor %}
+                                                    {% if not entry.request_id and not entry.user_id and not entry.error and not entry.details %}
+                                                        <div>—</div>
+                                                    {% endif %}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <p class="text-muted mb-0">{% bilingual "No events match the current filter." "当前筛选条件下没有事件。" %}</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

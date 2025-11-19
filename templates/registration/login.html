@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% load django_bootstrap5 %}
+
+{% block title %}{% bilingual "Sign in - Quant Trading Simulator" "登录 - 量化交易模拟器" %}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6 col-lg-5">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h4 class="mb-3">{% bilingual "Account Sign-in" "账户登录" %}</h4>
+        {% if form.errors %}
+          <div class="alert alert-danger">{% bilingual "Incorrect username or password." "用户名或密码不正确。" %}</div>
+        {% endif %}
+        <form method="post" novalidate>
+          {% csrf_token %}
+          {% bootstrap_form form %}
+          <div class="d-flex justify-content-between align-items-center mt-2">
+            <div class="d-flex gap-3">
+              <a class="small" href="{% url 'password_reset' %}">{% bilingual "Forgot password?" "忘记密码？" %}</a>
+              <a class="small" href="{% url 'trading:resend_activation' %}">{% bilingual "Need a new activation email?" "未收到激活邮件？" %}</a>
+            </div>
+            <button type="submit" class="btn btn-primary">{% bilingual "Sign in" "登录" %}</button>
+          </div>
+        </form>
+        <hr>
+        <p class="small mb-0">{% bilingual "Need an account?" "还没有账号？" %} <a href="{% url 'trading:signup' %}">{% bilingual "Create one" "立即注册" %}</a></p>
+      </div>
+    </div>
+  </div>
+  <div class="col-12 text-center text-muted small mt-3">{% bilingual "Sign in to unlock every feature." "登录后方可使用全部功能。" %}</div>
+  </div>
+{% endblock %}

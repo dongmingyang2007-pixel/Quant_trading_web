@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="tdBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#111827"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#tdBg)"/>
+  <path d="M90 280 C160 120 240 80 320 80 C400 80 480 120 550 280" fill="none" stroke="#93c5fd" stroke-width="6"/>
+  <path d="M90 280 C160 140 240 110 320 110 C400 110 480 140 550 280" fill="none" stroke="#2563eb" stroke-width="6" stroke-dasharray="10 10"/>
+  <text x="320" y="60" text-anchor="middle" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20" fill="#bfdbfe">df = 5 vs df = 30</text>
+  <text x="200" y="130" text-anchor="middle" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18" fill="#facc15">df = 5</text>
+  <text x="440" y="150" text-anchor="middle" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18" fill="#f8fafc">df = 30</text>
+</svg>

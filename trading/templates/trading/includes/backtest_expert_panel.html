@@ -1,0 +1,1025 @@
+{% load html_filters %}
+{% if result.combo_results %}
+                    <div class="combo-grid">
+                        {% for combo in result.combo_results %}
+                            <div class="combo-card">
+                                <div class="combo-header">
+                                    <span class="combo-title">{{ combo.engine }}</span>
+                                    {% if combo.confidence_label %}<span class="combo-tag">{{ combo.confidence_label }}信心</span>{% endif %}
+                                </div>
+                                <ul class="panel-list">
+                                    {% with stats=combo.stats %}
+                                        <li>累计收益：{{ stats.total_return|default_if_none:"-"|floatformat:3 }}</li>
+                                        <li>年化复合：{{ stats.cagr|default_if_none:"-"|floatformat:3 }}</li>
+                                        <li>夏普比：{{ stats.sharpe|default_if_none:"-"|floatformat:2 }}</li>
+                                        <li>最大回撤：{{ stats.max_drawdown|default_if_none:"-"|floatformat:3 }}</li>
+                                        <li>波动率：{{ stats.volatility|default_if_none:"-"|floatformat:3 }}</li>
+                                    {% endwith %}
+                                </ul>
+                                {% if combo.quick_summary %}
+                                    <div class="combo-box">
+                                        <span class="panel-step-title">亮点</span>
+                                        <ul class="panel-list">
+                                            {% for item in combo.quick_summary %}<li>{{ item }}</li>{% endfor %}
+                                        </ul>
+                                    </div>
+                                {% endif %}
+                                {% if combo.risk_alerts %}
+                                    <div class="combo-box warn">
+                                        <span class="panel-step-title">风险提醒</span>
+                                        <ul class="panel-list">
+                                            {% for item in combo.risk_alerts %}<li>{{ item }}</li>{% endfor %}
+                                        </ul>
+                                    </div>
+                                {% endif %}
+                                {% if combo.action_plan %}
+                                    <details class="combo-details">
+                                        <summary>查看执行步骤</summary>
+                                        <ul>
+                                            {% for step in combo.action_plan %}
+                                                <li>{{ step.title }}：{{ step.detail }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                    </details>
+                                {% endif %}
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+
+                <div class="metric-grid">
+                    {% for metric in result.metrics|slice:":6" %}
+                        <div class="metric-card">
+                            <div class="metric-label">{{ metric.label }}</div>
+                            <div class="metric-value">{{ metric.value }}</div>
+                            {% if metric.explain %}<div class="metric-desc">{{ metric.explain }}</div>{% endif %}
+                        </div>
+                    {% endfor %}
+                </div>
+
+                {% with stats=result.stats options=result.options_metrics scenario=result.scenario_simulation risk=result.risk_dashboard %}
+                <section class="expert-focus" aria-label="核心信号">
+                    <div class="focus-card">
+                        <div class="focus-label">正收益概率</div>
+                        <div class="focus-value">
+                            {% if stats.hit_ratio %}
+                                {% widthratio stats.hit_ratio 1 100 as hit_percent %}
+                                {{ hit_percent|floatformat:1 }}%
+                            {% else %}
+                                —
+                            {% endif %}
+                        </div>
+                        <p class="focus-desc">基于历史胜率的粗略估计，越高代表策略方向胜率越稳健。</p>
+                    </div>
+                    <div class="focus-card">
+                        <div class="focus-label">期权温度</div>
+                        <div class="focus-value">
+                            {% if options and options.available %}
+                                {{ options.call_iv|floatformat:2 }}% / {{ options.put_iv|floatformat:2 }}%
+                            {% else %}
+                                —
+                            {% endif %}
+                        </div>
+                        <p class="focus-desc">Call / Put 隐含波动率，可衡量多空需求是否极端。</p>
+                    </div>
+                    <div class="focus-card">
+                        <div class="focus-label">基线情景</div>
+                        <div class="focus-value">
+                            {% if scenario and scenario.available and scenario.expected_return %}
+                                {{ scenario.expected_return }}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </div>
+                        <p class="focus-desc">情景模拟的基线收益，若为正表示模型预期上涨空间大于回撤。</p>
+                    </div>
+                    <div class="focus-card">
+                        <div class="focus-label">风险等级</div>
+                        <div class="focus-value">{{ risk.risk_level|default:"—" }}</div>
+                        <p class="focus-desc">风险雷达综合波动、杠杆与回撤压力的即时评级。</p>
+                    </div>
+                </section>
+                {% endwith %}
+
+                {% if result.advanced_research %}
+                    {% with research=result.advanced_research %}
+                        <section class="advanced-research" aria-labelledby="advanced-research-title">
+                            <div class="advanced-header">
+                                <div>
+                                    <h3 id="advanced-research-title">旗舰研究舱 · 模型与数据栈</h3>
+                                    <p class="text-muted mb-0">
+                                        集成多周期绩效、数据接入、特征库与风险指标，帮助你评估策略稳健性与落地成熟度。
+                                    </p>
+                                </div>
+                                {% if research.uncertainty.recent_sharpe %}
+                                    <span class="hero-chip ghost">近 60 日夏普 {{ research.uncertainty.recent_sharpe }}</span>
+                                {% endif %}
+                            </div>
+                            <div class="advanced-grid">
+                                {% if research.multi_horizon %}
+                                    <div class="report-card advanced-card span-2">
+                                        <div class="advanced-card-head">
+                                            <h4 class="panel-title">分层绩效雷达</h4>
+                                            <span class="advanced-tag">多周期滚动</span>
+                                        </div>
+                                        <table class="advanced-table">
+                                            <thead>
+                                                <tr>
+                                                    <th scope="col">窗口</th>
+                                                    <th scope="col">收益</th>
+                                                    <th scope="col">波动率</th>
+                                                    <th scope="col">夏普</th>
+                                                    <th scope="col">最大回撤</th>
+                                                    <th scope="col">胜率</th>
+                                                    <th scope="col">置信度</th>
+                                                    <th scope="col">最新概率</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {% for row in research.multi_horizon %}
+                                                    <tr>
+                                                        <th scope="row">{{ row.label }}</th>
+                                                        <td>{{ row.return }}</td>
+                                                        <td>{{ row.volatility }}</td>
+                                                        <td>{{ row.sharpe }}</td>
+                                                        <td>{{ row.drawdown }}</td>
+                                                        <td>{{ row.hit_ratio }}</td>
+                                                        <td>{{ row.confidence }}</td>
+                                                        <td>{{ row.latest_probability|default_if_none:"—" }}</td>
+                                                    </tr>
+                                                {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                {% endif %}
+
+                                {% if research.data_sources %}
+                                    <div class="report-card advanced-card">
+                                        <div class="advanced-card-head">
+                                            <h4 class="panel-title">数据接入状态</h4>
+                                            <span class="advanced-tag">管线</span>
+                                        </div>
+                                        <ul class="advanced-list">
+                                            {% for source in research.data_sources %}
+                                                <li>
+                                                    <div class="advanced-list-title">
+                                                        <span>{{ source.name }}</span>
+                                                        <span class="advanced-status">{{ source.status|default:"进行中" }}</span>
+                                                    </div>
+                                                    <p class="advanced-meta">
+                                                        <span>{{ source.type }}</span>
+                                                        {% if source.coverage %} · <span>{{ source.coverage }}</span>{% endif %}
+                                                    </p>
+                                                    {% if source.notes %}<p class="text-muted mb-0">{{ source.notes }}</p>{% endif %}
+                                                </li>
+                                            {% endfor %}
+                                        </ul>
+                                    </div>
+                                {% endif %}
+
+                                {% if research.feature_library %}
+                                    <div class="report-card advanced-card">
+                                        <div class="advanced-card-head">
+                                            <h4 class="panel-title">特征库概览</h4>
+                                            <span class="advanced-tag">Feature Store</span>
+                                        </div>
+                                        <div class="feature-categories">
+                                            {% for category, features in research.feature_library.items %}
+                                                <div class="feature-group">
+                                                    <span class="feature-title">{{ category }}</span>
+                                                    {% if features %}
+                                                        <div class="feature-chips">
+                                                            {% for feat in features %}
+                                                                <span class="feature-chip">{{ feat }}</span>
+                                                            {% endfor %}
+                                                        </div>
+                                                    {% else %}
+                                                        <p class="text-muted small mb-0">待补充</p>
+                                                    {% endif %}
+                                                </div>
+                                            {% endfor %}
+                                        </div>
+                                    </div>
+                                {% endif %}
+
+                                {% if research.model_stack %}
+                                    <div class="report-card advanced-card">
+                                        <div class="advanced-card-head">
+                                            <h4 class="panel-title">模型族与职责</h4>
+                                            <span class="advanced-tag">Stacking</span>
+                                        </div>
+                                        <ul class="advanced-list">
+                                            {% for layer in research.model_stack %}
+                                                <li>
+                                                    <div class="advanced-list-title">
+                                                        <span>{{ layer.layer }}</span>
+                                                        <span class="advanced-status">{{ layer.status|default:"在线" }}</span>
+                                                    </div>
+                                                    <p class="advanced-meta">{{ layer.objective }}</p>
+                                                    {% if layer.models %}
+                                                        <div class="feature-chips">
+                                                            {% for model in layer.models %}
+                                                                <span class="feature-chip ghost">{{ model }}</span>
+                                                            {% endfor %}
+                                                        </div>
+                                                    {% endif %}
+                                                </li>
+                                            {% endfor %}
+                                        </ul>
+                                    </div>
+                                {% endif %}
+
+                                <div class="report-card advanced-card inline-couple">
+                                    <div class="advanced-card-head">
+                                        <h4 class="panel-title">风险与不确定性</h4>
+                                        <span class="advanced-tag">Risk</span>
+                                    </div>
+                                    <dl class="advanced-metrics">
+                                        <div>
+                                            <dt>波动率</dt>
+                                            <dd>{{ research.uncertainty.volatility }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>VaR 95%</dt>
+                                            <dd>{{ research.uncertainty.value_at_risk }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>CVaR 95%</dt>
+                                            <dd>{{ research.uncertainty.conditional_var }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>近期夏普</dt>
+                                            <dd>{{ research.uncertainty.recent_sharpe }}</dd>
+                                        </div>
+                                    </dl>
+                                </div>
+
+                                <div class="report-card advanced-card inline-couple">
+                                    <div class="advanced-card-head">
+                                        <h4 class="panel-title">风控框架</h4>
+                                        <span class="advanced-tag">Execution</span>
+                                    </div>
+                                    <dl class="advanced-metrics">
+                                        <div>
+                                            <dt>入场阈值</dt>
+                                            <dd>{{ research.risk_controls.entry_threshold }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>出场阈值</dt>
+                                            <dd>{{ research.risk_controls.exit_threshold }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>目标波动</dt>
+                                            <dd>{{ research.risk_controls.vol_target }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>最大杠杆</dt>
+                                            <dd>{{ research.risk_controls.max_leverage }}</dd>
+                                        </div>
+                                    </dl>
+                                    <p class="text-muted small mb-0">{{ research.risk_controls.stop_suggestion }}</p>
+                                </div>
+
+                                <div class="report-card advanced-card">
+                                    <div class="advanced-card-head">
+                                        <h4 class="panel-title">MLOps 状态</h4>
+                                        <span class="advanced-tag">Pipeline</span>
+                                    </div>
+                                    <dl class="advanced-metrics compact">
+                                        <div>
+                                            <dt>训练样本</dt>
+                                            <dd>{{ research.mlops.sample_size }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>训练窗口</dt>
+                                            <dd>{{ research.mlops.train_window }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>测试窗口</dt>
+                                            <dd>{{ research.mlops.test_window }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>Embargo</dt>
+                                            <dd>{{ research.mlops.embargo_days }} 天</dd>
+                                        </div>
+                                        <div>
+                                            <dt>自动复训</dt>
+                                            <dd>{{ research.mlops.auto_retrain|yesno:"开启,关闭" }}</dd>
+                                        </div>
+                                    </dl>
+                                    <p class="text-muted small mb-0">{{ research.mlops.comment }}</p>
+                                </div>
+
+                                <div class="report-card advanced-card">
+                                    <div class="advanced-card-head">
+                                        <h4 class="panel-title">知识图谱与情报</h4>
+                                        <span class="advanced-tag">Graph</span>
+                                    </div>
+                                    <p class="text-muted mb-2">{{ research.knowledge_graph.next }}</p>
+                                    {% if research.knowledge_graph.market_links %}
+                                        <div class="feature-chips">
+                                            {% for item in research.knowledge_graph.market_links %}
+                                                <span class="feature-chip ghost">{{ item }}</span>
+                                            {% endfor %}
+                                        </div>
+                                    {% endif %}
+                                    <p class="advanced-meta mb-0">当前状态：{{ research.knowledge_graph.status }}</p>
+                                </div>
+
+                                <div class="report-card advanced-card">
+                                    <div class="advanced-card-head">
+                                        <h4 class="panel-title">基准快照</h4>
+                                        <span class="advanced-tag">Benchmark</span>
+                                    </div>
+                                    <dl class="advanced-metrics compact">
+                                        <div>
+                                            <dt>年化波动</dt>
+                                            <dd>{{ research.benchmark_snapshot.vol|default:"—" }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>夏普比</dt>
+                                            <dd>{{ research.benchmark_snapshot.sharpe|default:"—" }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>α</dt>
+                                            <dd>{{ research.benchmark_snapshot.alpha|default:"—" }}</dd>
+                                        </div>
+                                    </dl>
+                                    <p class="text-muted small mb-0">用于评估策略相对表现及风格漂移。</p>
+                                </div>
+                            </div>
+                        </section>
+                    {% endwith %}
+                {% endif %}
+
+                {% if result.ensemble_bundle or result.statistical_bundle or result.deep_signal_bundle or result.multimodal_bundle %}
+                    <section class="model-ensemble" aria-labelledby="model-ensemble-title">
+                        <div class="ensemble-header">
+                            <div>
+                                <h3 id="model-ensemble-title">多模型协同 · 决策总览</h3>
+                                <p class="text-muted mb-0">统计基线、机器学习与深度信号的综合判断，结合情绪与因子视角，帮助识别信号一致性。</p>
+                            </div>
+                            {% if result.ensemble_bundle %}
+                                <span class="hero-chip ghost">综合置信度 {{ result.ensemble_bundle.confidence }}</span>
+                            {% endif %}
+                        </div>
+                        <div class="ensemble-grid">
+                            {% if result.ensemble_bundle %}
+                                <div class="panel-card ensemble-card main">
+                                    <h4 class="panel-title">{{ result.ensemble_bundle.title }}</h4>
+                                    <ul class="panel-list">
+                                        {% for line in result.ensemble_bundle.summary %}
+                                            <li>{{ line }}</li>
+                                        {% endfor %}
+                                    </ul>
+                                    <p class="text-muted mb-0">{{ result.ensemble_bundle.recommendation }}</p>
+                                </div>
+                            {% endif %}
+
+                            {% if result.statistical_bundle %}
+                                <div class="panel-card ensemble-card">
+                                    <div class="ensemble-card-head">
+                                        <h4 class="panel-title">统计基线（ARIMA/VAR）</h4>
+                                        <span class="advanced-tag">Baseline</span>
+                                    </div>
+                                    {% if result.statistical_bundle.arima %}
+                                        <p class="text-muted small mb-2">{{ result.statistical_bundle.arima.summary }}</p>
+                                        <p class="text-muted small mb-2">预测（5日）：{% for value in result.statistical_bundle.arima.forecast %}{{ value|floatformat:2 }}{% if not forloop.last %}、{% endif %}{% endfor %}</p>
+                                    {% endif %}
+                                    {% if result.statistical_bundle.var %}
+                                        <p class="text-muted small mb-2">{{ result.statistical_bundle.var.summary }}</p>
+                                    {% endif %}
+                                    {% if result.statistical_bundle.diagnostics %}
+                                        <ul class="panel-list muted">
+                                            {% for diag in result.statistical_bundle.diagnostics %}
+                                                <li>{{ diag }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                    {% endif %}
+                                </div>
+                            {% endif %}
+
+                            {% if result.deep_signal_bundle %}
+                                <div class="panel-card ensemble-card">
+                                    <div class="ensemble-card-head">
+                                        <h4 class="panel-title">深度信号引擎</h4>
+                                        <span class="advanced-tag">Deep</span>
+                                    </div>
+                                    <dl class="advanced-metrics compact">
+                                        <div>
+                                            <dt>测试准确率</dt>
+                                            <dd>{{ result.deep_signal_bundle.accuracy|default_if_none:"—"|floatformat:3 }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>平均置信度</dt>
+                                            <dd>{{ result.deep_signal_bundle.confidence|default_if_none:"—"|floatformat:3 }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>样本量</dt>
+                                            <dd>{{ result.deep_signal_bundle.sample }}</dd>
+                                        </div>
+                                    </dl>
+                                    {% if result.deep_signal_bundle.best_model %}
+                                        <p class="text-muted small mb-1">最佳模型：{{ result.deep_signal_bundle.best_model }}</p>
+                                    {% endif %}
+                                    {% if result.deep_signal_bundle.models %}
+                                        <ul class="panel-list muted">
+                                            {% for model in result.deep_signal_bundle.models %}
+                                                <li>{{ model.name }} · 准确率 {{ model.accuracy|floatformat:3 }} · 样本 {{ model.sample }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                    {% endif %}
+                                </div>
+                            {% endif %}
+
+                            {% if result.multimodal_bundle %}
+                                <div class="panel-card ensemble-card span-2">
+                                    <div class="ensemble-card-head">
+                                        <h4 class="panel-title">多模态洞察</h4>
+                                        <span class="advanced-tag">Multi-modal</span>
+                                    </div>
+                                    <div class="multimodal-grid">
+                                        {% if result.multimodal_bundle.fundamentals %}
+                                            <div class="multimodal-block">
+                                                <span class="feature-title">基本面快照</span>
+                                                <p class="text-muted small mb-2">{{ result.multimodal_bundle.fundamentals.meta.industry|default:"—" }} · 市值 {{ result.multimodal_bundle.fundamentals.meta.market_cap }}</p>
+                                                {% if result.multimodal_bundle.fundamentals.factors %}
+                                                    <ul class="panel-list">
+                                                        {% for factor in result.multimodal_bundle.fundamentals.factors %}
+                                                            <li>{{ factor.label }}：{{ factor.value }}</li>
+                                                        {% endfor %}
+                                                    </ul>
+                                                {% endif %}
+                                            </div>
+                                        {% endif %}
+                                        {% if result.multimodal_bundle.sentiment %}
+                                            <div class="multimodal-block">
+                                                <span class="feature-title">情绪分析</span>
+                                                <p class="text-muted small mb-2">均值 {{ result.multimodal_bundle.sentiment.average|floatformat:3 }} · {{ result.multimodal_bundle.sentiment.insight }}</p>
+                                                {% if result.multimodal_bundle.sentiment.items %}
+                                                    <ul class="panel-list muted">
+                                                        {% for item in result.multimodal_bundle.sentiment.items %}
+                                                            <li>
+                                                                <span class="sentiment-label {{ item.label }}">{{ item.label }}</span>
+                                                                {% if item.url %}<a href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}
+                                                                <span class="text-muted">({{ item.score|floatformat:3 }})</span>
+                                                            </li>
+                                                        {% endfor %}
+                                                    </ul>
+                                                {% endif %}
+                                            </div>
+                                        {% endif %}
+                                        {% if result.multimodal_bundle.technicals %}
+                                            <div class="multimodal-block">
+                                                <span class="feature-title">技术动量</span>
+                                                <ul class="panel-list muted">
+                                                    <li>近5日收益：{{ result.multimodal_bundle.technicals.short_return }}</li>
+                                                    <li>近1月收益：{{ result.multimodal_bundle.technicals.mid_return }}</li>
+                                                    <li>短周期动量：{{ result.multimodal_bundle.technicals.momentum_short|floatformat:3 }}</li>
+                                                    <li>长周期动量：{{ result.multimodal_bundle.technicals.momentum_long|floatformat:3 }}</li>
+                                                    <li>RSI：{{ result.multimodal_bundle.technicals.rsi|floatformat:2 }}</li>
+                                                </ul>
+                                            </div>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            {% endif %}
+                        </div>
+                    </section>
+                {% endif %}
+
+                {% if result.model_weights %}
+                    <section class="model-weights" aria-labelledby="model-weights-title">
+                        <div class="model-weights-header">
+                            <div>
+                                <h3 id="model-weights-title">模型权重建议</h3>
+                                <p class="text-muted mb-0">根据各模型的表现、风险与因子信号动态分配组合权重，可用于调节策略仓位。</p>
+                            </div>
+                        </div>
+                        {% if result.model_weights.available %}
+                            <div class="panel-card">
+                                <table class="factor-table">
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">模型</th>
+                                            <th scope="col">建议权重</th>
+                                            <th scope="col">理由</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for item in result.model_weights.allocations %}
+                                            <tr>
+                                                <th scope="row">{{ item.name }}</th>
+                                                <td>{{ item.weight|floatformat:3 }}</td>
+                                                <td>{{ item.rationale }}</td>
+                                            </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        {% else %}
+                            <p class="text-muted small mb-0">{{ result.model_weights.message }}</p>
+                        {% endif %}
+                    </section>
+                {% endif %}
+
+                {% if result.knowledge_bundle %}
+                    <details class="analysis-fold knowledge-graph" id="knowledge-graph-title">
+                        <summary>知识图谱 · 关联洞察</summary>
+                        <p class="text-muted small mb-3">基于新闻共现、行业关系与成交动量的网络视角，识别潜在的联动风险与主题机会。</p>
+                        {% if result.knowledge_bundle.available %}
+                            <div class="knowledge-summary">
+                                <div class="panel-card">
+                                    <h4 class="panel-title">图谱规模</h4>
+                                    <dl class="advanced-metrics compact">
+                                        <div>
+                                            <dt>节点数</dt>
+                                            <dd>{{ result.knowledge_bundle.stats.nodes }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>边数</dt>
+                                            <dd>{{ result.knowledge_bundle.stats.edges }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>密度</dt>
+                                            <dd>{{ result.knowledge_bundle.stats.density }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>风险评分</dt>
+                                            <dd>{{ result.knowledge_bundle.risk_score }}</dd>
+                                        </div>
+                                    </dl>
+                                </div>
+                                {% if result.knowledge_bundle.highlights %}
+                                    <div class="panel-card">
+                                        <h4 class="panel-title">高关联节点</h4>
+                                        <ul class="panel-list muted">
+                                            {% for item in result.knowledge_bundle.highlights %}
+                                                <li>
+                                                    <span class="feature-chip ghost">{{ item.node }}</span>
+                                                    <span class="text-muted small">类型：{{ item.type }} · 中心度 {{ item.centrality }}</span>
+                                                </li>
+                                            {% endfor %}
+                                        </ul>
+                                    </div>
+                                {% endif %}
+                            </div>
+                            <p class="text-muted small mb-0">{{ result.knowledge_bundle.message }}</p>
+                        {% else %}
+                            <p class="text-muted small mb-0">{{ result.knowledge_bundle.message }}</p>
+                        {% endif %}
+                    </details>
+                {% endif %}
+
+                {% if result.macro_bundle %}
+                    <details class="analysis-fold macro-dashboard" id="macro-dashboard-title">
+                        <summary>宏观脉搏板</summary>
+                        <p class="text-muted small mb-3">跟踪波动率、利率与美元指数的短中期变化，评估市场环境对策略的影响。</p>
+                        <div class="macro-grid">
+                            {% for key, entry in result.macro_bundle.items %}
+                                <div class="panel-card macro-card">
+                                    <div class="macro-card-head">
+                                        <span class="panel-title">{{ entry.label }}</span>
+                                        <span class="macro-badge">{{ entry.short }}</span>
+                                    </div>
+                                    {% if entry.available %}
+                                        <dl class="advanced-metrics compact">
+                                            <div>
+                                                <dt>最新</dt>
+                                                <dd>{{ entry.latest }}</dd>
+                                            </div>
+                                            <div>
+                                                <dt>5日变化</dt>
+                                                <dd>
+                                                    {% if entry.change_5d is not None %}
+                                                        {{ entry.change_5d }}%
+                                                    {% else %}
+                                                        —
+                                                    {% endif %}
+                                                </dd>
+                                            </div>
+                                            <div>
+                                                <dt>21日变化</dt>
+                                                <dd>
+                                                    {% if entry.change_21d is not None %}
+                                                        {{ entry.change_21d }}%
+                                                    {% else %}
+                                                        —
+                                                    {% endif %}
+                                                </dd>
+                                            </div>
+                                        </dl>
+                                        <p class="text-muted small mb-0">趋势判断：{{ entry.trend }}</p>
+                                    {% else %}
+                                        <p class="text-muted small mb-0">{{ entry.message }}</p>
+                                    {% endif %}
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </details>
+                {% endif %}
+
+                {% if result.capital_flows %}
+                    <details class="analysis-fold capital-flow-board" id="capital-flow-title">
+                        <summary>资金流向雷达</summary>
+                        <p class="text-muted small mb-3">跟踪代表性 ETF 的 21 日动量与成交资金，评估风险偏好与流动性。</p>
+                        <div class="macro-grid">
+                            {% for key, entry in result.capital_flows.items %}
+                                {% if key != "_summary" %}
+                                <div class="panel-card macro-card">
+                                    <div class="macro-card-head">
+                                        <span class="panel-title">{{ entry.label }}</span>
+                                        <span class="macro-badge">{{ entry.group }}</span>
+                                    </div>
+                                    {% if entry.available %}
+                                        <dl class="advanced-metrics compact">
+                                            <div>
+                                                <dt>21日动量</dt>
+                                                <dd>{% if entry.momentum_21d is not None %}{{ entry.momentum_21d }}%{% else %}—{% endif %}</dd>
+                                            </div>
+                                            <div>
+                                                <dt>波动率</dt>
+                                                <dd>{% if entry.volatility is not None %}{{ entry.volatility }}{% else %}—{% endif %}</dd>
+                                            </div>
+                                            <div>
+                                                <dt>日均成交(百万)</dt>
+                                                <dd>{% if entry.avg_dollar_volume is not None %}{{ entry.avg_dollar_volume }}{% else %}—{% endif %}</dd>
+                                            </div>
+                                            <div>
+                                                <dt>流向信号</dt>
+                                                <dd>{% if entry.flow_signal is not None %}{{ entry.flow_signal }}%{% else %}—{% endif %}</dd>
+                                            </div>
+                                        </dl>
+                                    {% else %}
+                                        <p class="text-muted small mb-0">{{ entry.message }}</p>
+                                    {% endif %}
+                                </div>
+                                {% endif %}
+                            {% endfor %}
+                        </div>
+                        {% with summary=result.capital_flows_summary %}
+                            {% if summary %}
+                                <p class="text-muted small mt-2">
+                                    风险偏好：{{ summary.risk_appetite }} · 成长相对：{{ summary.growth_vs_value|floatformat:2 }}% ·
+                                    久期相对：{{ summary.duration_vs_equity|floatformat:2 }}%
+                                </p>
+                            {% endif %}
+                        {% endwith %}
+                    </details>
+                {% endif %}
+
+                {% if result.news_sentiment %}
+                    <details class="analysis-fold sentiment-board" id="sentiment-board-title">
+                        <summary>新闻情绪</summary>
+                        {% if result.news_sentiment.available %}
+                            <div class="panel-card">
+                                <p class="text-muted mb-1">情绪标签：<strong>{{ result.news_sentiment.label }}</strong> · 平均得分 {{ result.news_sentiment.avg_score }} · 样本 {{ result.news_sentiment.sample_size }} 篇</p>
+                                {% if result.news_sentiment.highlights %}
+                                    <ul class="panel-list muted">
+                                        {% for item in result.news_sentiment.highlights %}
+                                            <li>
+                                                {% if item.score > 0 %}
+                                                    <span class="feature-chip success">正向</span>
+                                                {% elif item.score < 0 %}
+                                                    <span class="feature-chip warn">负向</span>
+                                                {% else %}
+                                                    <span class="feature-chip ghost">中性</span>
+                                                {% endif %}
+                                                {% if item.url %}
+                                                    <a href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>
+                                                {% else %}
+                                                    {{ item.title }}
+                                                {% endif %}
+                                            </li>
+                                        {% endfor %}
+                                    </ul>
+                                {% endif %}
+                            </div>
+                        {% else %}
+                            <p class="text-muted small mb-0">{{ result.news_sentiment.message }}</p>
+                        {% endif %}
+                    </details>
+                {% endif %}
+
+                {% if result.options_metrics %}
+                    <details class="analysis-fold options-board" id="options-board-title">
+                        <summary>期权温度计</summary>
+                        {% if result.options_metrics.available %}
+                            <div class="panel-card option-card">
+                                <dl class="advanced-metrics compact">
+                                    <div>
+                                        <dt>到期</dt>
+                                        <dd>{{ result.options_metrics.expiry }}</dd>
+                                    </div>
+                                    <div>
+                                        <dt>Call IV</dt>
+                                        <dd>{{ result.options_metrics.call_iv }}%</dd>
+                                    </div>
+                                    <div>
+                                        <dt>Put IV</dt>
+                                        <dd>{{ result.options_metrics.put_iv }}%</dd>
+                                    </div>
+                                    <div>
+                                        <dt>Put/Call</dt>
+                                        <dd>{% if result.options_metrics.put_call_ratio %}{{ result.options_metrics.put_call_ratio }}{% else %}—{% endif %}</dd>
+                                    </div>
+                                    <div>
+                                        <dt>ATM Call Bid</dt>
+                                        <dd>{{ result.options_metrics.atm_call_bid|default:"—" }}</dd>
+                                    </div>
+                                    <div>
+                                        <dt>ATM Put Bid</dt>
+                                        <dd>{{ result.options_metrics.atm_put_bid|default:"—" }}</dd>
+                                    </div>
+                                </dl>
+                            </div>
+                        {% else %}
+                            <p class="text-muted small mb-0">{{ result.options_metrics.message }}</p>
+                        {% endif %}
+                    </details>
+                {% endif %}
+
+                {% if result.global_macro_context %}
+                    <details class="analysis-fold global-macro" id="global-macro-title">
+                        <summary>全球宏观速览</summary>
+                        {% if result.global_macro_context.available %}
+                            <div class="panel-card">
+                                <pre class="small mb-0">{{ result.global_macro_context.data|sanitize_fragment }}</pre>
+                            </div>
+                        {% else %}
+                            <p class="text-muted small mb-0">{{ result.global_macro_context.message|sanitize_fragment }}</p>
+                            {% if result.global_macro_context.summary %}
+                                <ul class="panel-list muted">
+                                    {% for key, value in result.global_macro_context.summary.items %}
+                                        <li>{{ key }}：{{ value|sanitize_fragment }}</li>
+                                    {% endfor %}
+                                </ul>
+                            {% endif %}
+                        {% endif %}
+                    </details>
+                {% endif %}
+
+                {% if result.event_bundle %}
+                    <details class="analysis-fold event-radar" id="event-radar-title">
+                        <summary>事件雷达</summary>
+                        <p class="text-muted small mb-3">自动识别最新资讯中的关键触发词，提供交易/风控提示。</p>
+                        <div class="panel-card">
+                            <ul class="panel-list muted">
+                                {% for event in result.event_bundle %}
+                                    <li>
+                                        <span class="event-tags">
+                                            {% for tag in event.types %}
+                                                <span class="feature-chip ghost">{{ tag }}</span>
+                                            {% endfor %}
+                                        </span>
+                                        {% if event.url %}
+                                            <a href="{{ event.url }}" target="_blank" rel="noopener">{{ event.title }}</a>
+                                        {% else %}
+                                            {{ event.title }}
+                                        {% endif %}
+                                        {% if event.published %}<span class="text-muted small">（{{ event.published }}）</span>{% endif %}
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                    </details>
+                {% endif %}
+
+                {% if result.factor_scorecard %}
+                    <details class="analysis-fold factor-scorecard" id="factor-scorecard-title">
+                        <summary>多因子评分卡</summary>
+                        <p class="text-muted small mb-3">动量、风险、盈利能力与估值信号统一归一化，辅助判断仓位与再平衡节奏。</p>
+                        {% if result.factor_scorecard.available %}
+                            <div class="panel-card">
+                                <table class="factor-table">
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">因子</th>
+                                            <th scope="col">原始值</th>
+                                            <th scope="col">标准分</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for row in result.factor_scorecard.scores %}
+                                            <tr>
+                                                <th scope="row">{{ row.factor }}</th>
+                                                <td>{{ row.raw }}</td>
+                                                <td>{{ row.score }}</td>
+                                            </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p class="text-muted small mb-0">{{ result.factor_scorecard.message }}</p>
+                        {% else %}
+                            <p class="text-muted small mb-0">{{ result.factor_scorecard.message }}</p>
+                        {% endif %}
+                    </details>
+                {% endif %}
+
+                {% if result.validation_report %}
+                    <details class="analysis-fold validation-report" id="validation-report-title">
+                        <summary>多切片验证</summary>
+                        <p class="text-muted small mb-3">滚动划分 {{ result.validation_report.slices|length }} 个样本窗，评估 out-of-sample 表现与持仓稳定性。</p>
+                        <div class="panel-card">
+                            <table class="factor-table">
+                                <thead>
+                                    <tr>
+                                        <th scope="col">区间</th>
+                                        <th scope="col">Sharpe</th>
+                                        <th scope="col">CAGR</th>
+                                        <th scope="col">MaxDD</th>
+                                        <th scope="col">胜率</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for slice in result.validation_report.slices %}
+                                        <tr>
+                                            <th scope="row">{{ slice.start }} ~ {{ slice.end }}</th>
+                                            <td>{{ slice.sharpe|floatformat:2 }}</td>
+                                            <td>{{ slice.cagr|floatformat:2 }}</td>
+                                            <td>{{ slice.max_drawdown|floatformat:2 }}</td>
+                                            <td>{{ slice.hit_ratio|floatformat:2 }}</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                            <p class="text-muted small mb-0">平均 Sharpe {{ result.validation_report.mean_sharpe|floatformat:2 }} · 平均 CAGR {{ result.validation_report.mean_cagr|floatformat:2 }} · 平均最大回撤 {{ result.validation_report.mean_max_drawdown|floatformat:2 }}</p>
+                        </div>
+                    </details>
+                {% endif %}
+
+                {% if result.factor_effectiveness %}
+                    <details class="analysis-fold factor-effectiveness" id="factor-effectiveness-title">
+                        <summary>因子有效性检验</summary>
+                        <p class="text-muted small mb-3">基于 IC 与长短组合收益评估因子信号强度，辅助选择核心驱动因子。</p>
+                        {% if result.factor_effectiveness.available %}
+                            <div class="panel-card">
+                                <table class="factor-table">
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">因子</th>
+                                            <th scope="col">IC</th>
+                                            <th scope="col">长-短组合(%)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for factor in result.factor_effectiveness.factors|slice:":12" %}
+                                            <tr>
+                                                <th scope="row">{{ factor.name }}</th>
+                                                <td>{{ factor.ic }}</td>
+                                                <td>{{ factor.long_short }}</td>
+                                            </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p class="text-muted small mb-0">{{ result.factor_effectiveness.message }}</p>
+                        {% else %}
+                            <p class="text-muted small mb-0">{{ result.factor_effectiveness.message }}</p>
+                        {% endif %}
+                    </details>
+                {% endif %}
+
+                {% if result.risk_dashboard %}
+                    <section class="risk-dashboard" aria-labelledby="risk-dashboard-title">
+                        <div class="risk-header">
+                            <div>
+                                <h3 id="risk-dashboard-title">风控雷达</h3>
+                                <p class="text-muted mb-0">核心风险指标与阈值，帮助评估策略承压能力。</p>
+                            </div>
+                            <span class="hero-chip ghost">风险等级：{{ result.risk_dashboard.risk_level }}</span>
+                        </div>
+                        <div class="panel-card">
+                            <ul class="panel-list muted">
+                                {% for metric in result.risk_dashboard.metrics %}
+                                    <li>
+                                        <strong>{{ metric.label }}：</strong>{{ metric.value }}
+                                        <span class="text-muted">— {{ metric.comment }}</span>
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                        <p class="text-muted small mb-0">{{ result.risk_dashboard.insight }}</p>
+                    </section>
+                {% endif %}
+
+                {% if result.mlops_report %}
+                    <section class="mlops-report" aria-labelledby="mlops-report-title">
+                        <div class="mlops-header">
+                            <div>
+                                <h3 id="mlops-report-title">MLOps 状态</h3>
+                                <p class="text-muted mb-0">训练窗口、验证窗口与自动化设置，提醒何时需要重新训练模型。</p>
+                            </div>
+                        </div>
+                        <div class="panel-card">
+                            <dl class="advanced-metrics compact">
+                                <div>
+                                    <dt>训练窗口</dt>
+                                    <dd>{{ result.mlops_report.train_window }} 天</dd>
+                                </div>
+                                <div>
+                                    <dt>验证窗口</dt>
+                                    <dd>{{ result.mlops_report.test_window }} 天</dd>
+                                </div>
+                                <div>
+                                    <dt>自动复训</dt>
+                                    <dd>{{ result.mlops_report.auto_retrain|yesno:"开启,关闭" }}</dd>
+                                </div>
+                                <div>
+                                    <dt>样本天数</dt>
+                                    <dd>{{ result.mlops_report.last_trading_days }}</dd>
+                                </div>
+                                <div>
+                                    <dt>近 60 日夏普</dt>
+                                    <dd>{{ result.mlops_report.recent_sharpe|default_if_none:"—"|floatformat:2 }}</dd>
+                                </div>
+                            </dl>
+                        </div>
+                        <p class="text-muted small mb-0">{{ result.mlops_report.notes }}</p>
+                    </section>
+                {% endif %}
+
+                {% if result.financial_snapshot %}
+                    <section class="financial-overview" aria-labelledby="financial-overview-title">
+                        <div class="financial-header">
+                            <div>
+                                <h3 id="financial-overview-title">财务摘要</h3>
+                                <p class="text-muted mb-0">快速浏览最新一期财务报表关键项目，了解基本面支撑与风险。</p>
+                            </div>
+                        </div>
+                        <div class="financial-grid">
+                            {% if result.financial_snapshot.income_statement %}
+                                <div class="panel-card">
+                                    <h4 class="panel-title">利润表</h4>
+                                    <ul class="panel-list muted">
+                                        {% for name, value in result.financial_snapshot.income_statement.items|slice:":6" %}
+                                            <li>{{ name }}：{{ value|floatformat:0 }}</li>
+                                        {% endfor %}
+                                    </ul>
+                                </div>
+                            {% endif %}
+                            {% if result.financial_snapshot.balance_sheet %}
+                                <div class="panel-card">
+                                    <h4 class="panel-title">资产负债表</h4>
+                                    <ul class="panel-list muted">
+                                        {% for name, value in result.financial_snapshot.balance_sheet.items|slice:":6" %}
+                                            <li>{{ name }}：{{ value|floatformat:0 }}</li>
+                                        {% endfor %}
+                                    </ul>
+                                </div>
+                            {% endif %}
+                            {% if result.financial_snapshot.cashflow %}
+                                <div class="panel-card">
+                                    <h4 class="panel-title">现金流量表</h4>
+                                    <ul class="panel-list muted">
+                                        {% for name, value in result.financial_snapshot.cashflow.items|slice:":6" %}
+                                            <li>{{ name }}：{{ value|floatformat:0 }}</li>
+                                        {% endfor %}
+                                    </ul>
+                                </div>
+                            {% endif %}
+                        </div>
+                    </section>
+                {% endif %}
+
+                {% if result.benchmark_metrics %}
+                    <div class="report-card subtle">
+                        <h3 class="panel-title">基准表现 · {{ result.benchmark_ticker }}</h3>
+                        <div class="metric-grid small">
+                            {% for metric in result.benchmark_metrics %}
+                                <div class="metric-card">
+                                    <div class="metric-label">{{ metric.label }}</div>
+                                    <div class="metric-value">{{ metric.value }}</div>
+                                    {% if metric.explain %}<div class="metric-desc">{{ metric.explain }}</div>{% endif %}
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                {% endif %}
+
+                {% if result.market_context %}
+                    <div class="report-card subtle">
+                        <h3 class="panel-title">市场背景与外部资讯</h3>
+                        <p class="text-muted mb-2">{{ result.market_context.message }}</p>
+                        {% if result.market_context.analysis %}
+                            <p class="text-muted small mb-2">{{ result.market_context.analysis }}</p>
+                        {% endif %}
+                        {% if result.market_context.news %}
+                            <ul class="panel-list">
+                                {% for item in result.market_context.news %}
+                                    <li><a href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a> — {{ item.snippet }}</li>
+                                {% endfor %}
+                            </ul>
+                        {% endif %}
+                    </div>
+                {% endif %}
+
+                {% if result.disclaimer %}
+                    <div class="report-card note">
+                        <strong>温馨提示：</strong>{{ result.disclaimer }}
+                    </div>
+                {% endif %}
+            </div>
+
+            

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% load django_bootstrap5 %}
+
+{% block title %}{% bilingual "Sign up - Quant Trading Simulator" "注册 - 量化交易模拟器" %}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6 col-lg-5">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h4 class="mb-3">{% bilingual "Create an account" "注册新账号" %}</h4>
+        <form method="post" novalidate>
+          {% csrf_token %}
+          {% bootstrap_form form %}
+          <div class="d-flex justify-content-end">
+            <button type="submit" class="btn btn-success">{% bilingual "Create account" "创建账号" %}</button>
+          </div>
+        </form>
+        <hr>
+        <p class="small mb-0">{% bilingual "Already have an account?" "已有账号？" %} <a href="{% url 'login' %}">{% bilingual "Sign in" "前往登录" %}</a></p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

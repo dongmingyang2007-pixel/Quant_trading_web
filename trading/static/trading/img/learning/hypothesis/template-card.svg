@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="tplBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e40af"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#tplBg)"/>
+  <rect x="160" y="70" width="320" height="220" rx="18" fill="rgba(248,250,252,0.12)" stroke="#38bdf8" stroke-width="3"/>
+  <line x1="190" y1="120" x2="450" y2="120" stroke="#38bdf8" stroke-width="2" stroke-dasharray="6 6"/>
+  <line x1="190" y1="170" x2="450" y2="170" stroke="#38bdf8" stroke-width="2" stroke-dasharray="6 6"/>
+  <line x1="190" y1="220" x2="450" y2="220" stroke="#38bdf8" stroke-width="2" stroke-dasharray="6 6"/>
+  <text x="180" y="105" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18" fill="#bae6fd">问题：</text>
+  <text x="180" y="155" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18" fill="#bae6fd">H₀：</text>
+  <text x="180" y="205" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18" fill="#bae6fd">H₁：</text>
+  <text x="180" y="255" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18" fill="#bae6fd">显著性 / 数据来源 / 行动</text>
+</svg>

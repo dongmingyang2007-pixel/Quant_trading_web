@@ -1,0 +1,545 @@
+{% load static django_bootstrap5 i18n %}
+<!DOCTYPE html>
+<html lang="{{ request.LANGUAGE_CODE|default:'zh-hans' }}">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}{% bilingual "Quant Trading Simulator" "量化交易模拟器" %}{% endblock %}</title>
+    {% bootstrap_css %}
+    {% bootstrap_javascript %}
+    <link rel="stylesheet" href="{% static 'trading/css/styles.css' %}">
+    <style nonce="{{ csp_nonce }}">
+        /* Ensure task dock looks consistent on every page even if cached CSS misses */
+        .task-dock {
+            position: fixed !important;
+            right: 18px !important;
+            bottom: 18px !important;
+            left: auto !important;
+            top: auto !important;
+            width: 360px;
+            max-height: 72vh;
+            background: linear-gradient(160deg, rgba(245, 249, 255, 0.96), rgba(234, 242, 255, 0.92));
+            border: 1px solid rgba(148, 163, 184, 0.5);
+            box-shadow: 0 22px 56px rgba(15, 23, 42, 0.18);
+            border-radius: 18px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            z-index: 9999;
+            backdrop-filter: blur(6px);
+            transition: opacity 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+        }
+        .task-dock.minimized {
+            width: auto;
+            min-width: 200px;
+            height: auto;
+            cursor: pointer;
+            padding: 10px 14px;
+            gap: 10px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: space-between;
+            border-radius: 16px;
+            box-shadow: 0 16px 32px rgba(15, 23, 42, 0.18);
+        }
+        .task-dock-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 14px 16px;
+            background: linear-gradient(120deg, rgba(59, 130, 246, 0.16), rgba(14, 165, 233, 0.12));
+            border-bottom: 1px solid rgba(148, 163, 184, 0.26);
+            font-weight: 700;
+            color: #0f172a;
+            user-select: none;
+            cursor: move;
+        }
+        .task-dock.minimized .task-dock-header {
+            border-bottom: none;
+            padding: 0;
+            background: transparent;
+            cursor: pointer;
+        }
+        .task-dock-body {
+            padding: 12px 14px;
+            overflow-y: auto;
+            display: grid;
+            gap: 10px;
+            background: #fff;
+        }
+        .task-dock-body::before {
+            content: "";
+            height: 1px;
+            margin: -12px -14px 12px -14px;
+            background: linear-gradient(90deg, rgba(148, 163, 184, 0.08), rgba(148, 163, 184, 0.25), rgba(148, 163, 184, 0.08));
+            display: block;
+        }
+        .task-pill {
+            padding: 10px 12px;
+            border-radius: 14px;
+            border: 1px solid rgba(148, 163, 184, 0.32);
+            background: rgba(248, 250, 252, 0.96);
+            box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+        }
+        .task-header-left {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .task-header-right {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .task-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #0f172a;
+        }
+        .task-dot {
+            display: inline-flex;
+            width: 14px;
+            height: 14px;
+            border-radius: 999px;
+            background: linear-gradient(135deg, #2563eb, #0ea5e9);
+            box-shadow: 0 0 0 6px rgba(37, 99, 235, 0.14);
+            flex-shrink: 0;
+        }
+        .task-pill h6 {
+            margin: 0 0 4px 0;
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .task-pill .task-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.82rem;
+            color: #475569;
+            flex-wrap: wrap;
+        }
+        .task-pill .status {
+            padding: 2px 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(148, 163, 184, 0.6);
+            background: rgba(226, 232, 240, 0.5);
+            font-size: 0.78rem;
+            font-weight: 600;
+        }
+        .task-pill .status.success {
+            color: #16a34a;
+            border-color: rgba(22, 163, 74, 0.4);
+            background: rgba(22, 163, 74, 0.08);
+        }
+        .task-pill .status.failure {
+            color: #dc2626;
+            border-color: rgba(220, 38, 38, 0.4);
+            background: rgba(220, 38, 38, 0.08);
+        }
+        .task-pill .status.pending {
+            color: #ca8a04;
+            border-color: rgba(202, 138, 4, 0.4);
+            background: rgba(202, 138, 4, 0.08);
+        }
+        .task-pill a {
+            color: #2563eb;
+            font-weight: 600;
+            font-size: 0.82rem;
+        }
+        .task-count {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 22px;
+            height: 22px;
+            padding: 0 8px;
+            border-radius: 999px;
+            background: linear-gradient(135deg, #2563eb, #0ea5e9);
+            color: #fff;
+            font-size: 0.9rem;
+            font-weight: 700;
+        }
+        .task-toggle {
+            border: none;
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            color: #fff;
+            font-size: 12px;
+            cursor: pointer;
+            width: 32px;
+            height: 32px;
+            border-radius: 999px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 10px 22px rgba(37, 99, 235, 0.28);
+            transition: transform 0.12s ease, box-shadow 0.12s ease;
+            -webkit-appearance: none;
+            appearance: none;
+            outline: none;
+        }
+        .task-toggle::after {
+            content: "▾";
+            line-height: 1;
+            font-size: 13px;
+        }
+        .task-toggle:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 12px 26px rgba(37, 99, 235, 0.35);
+        }
+        .task-dock.minimized .task-dock-body {
+            display: none;
+        }
+        .task-dock:hover {
+            box-shadow: 0 24px 62px rgba(15, 23, 42, 0.22);
+        }
+    </style>
+    {% block extra_head %}{% endblock %}
+</head>
+<body class="bg-light">
+    <nav class="navbar navbar-expand-lg navbar-dark om-nav shadow-sm mb-4">
+        <div class="container-xl">
+            <a class="navbar-brand fw-semibold" href="{% url 'trading:backtest' %}">{% bilingual "Quant Trading Simulator" "量化交易模拟器" %}</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav" aria-controls="mainNav" aria-expanded="false" aria-label="切换导航">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="mainNav">
+                <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                    <li class="nav-item">
+                        <a class="nav-link{% if request.resolver_match.url_name == 'backtest' %} active{% endif %}" href="{% url 'trading:backtest' %}">{% bilingual "Strategy Backtest" "策略回测" %}</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link{% if request.resolver_match.url_name == 'market_insights' %} active{% endif %}" href="{% url 'trading:market_insights' %}">{% bilingual "Market Insights" "股市信息" %}</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link{% if request.resolver_match.url_name == 'learning_center' %} active{% endif %}" href="{% url 'trading:learning_center' %}">{% bilingual "Learning Hub" "学习中心" %}</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link{% if request.resolver_match.url_name == 'community' %} active{% endif %}" href="{% url 'trading:community' %}">{% bilingual "Community" "社区广场" %}</a>
+                    </li>
+                    {% if user.is_authenticated %}
+                        <li class="nav-item">
+                            <a class="nav-link{% if request.resolver_match.url_name == 'account' %} active{% endif %}" href="{% url 'trading:account' %}">{% bilingual "Account" "账户中心" %}</a>
+                        </li>
+                    {% endif %}
+                </ul>
+                <div class="d-flex align-items-center gap-3 flex-wrap justify-content-end">
+                    <form action="{% url 'set_language' %}" method="post" class="language-switcher">
+                        {% csrf_token %}
+                        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                        <div class="btn-group btn-group-sm" role="group" aria-label="{% bilingual 'Language switch' '语言切换' %}">
+                            <button type="submit" name="language" value="zh-hans" class="btn btn-outline-light {% if request.LANGUAGE_CODE == 'zh-hans' %}active{% endif %}">
+                                {% bilingual "中文" "中文" %}
+                            </button>
+                            <button type="submit" name="language" value="en" class="btn btn-outline-light {% if request.LANGUAGE_CODE == 'en' %}active{% endif %}">
+                                {% bilingual "English" "English" %}
+                            </button>
+                        </div>
+                    </form>
+                    {% if user.is_authenticated %}
+                        <span class="navbar-text text-white-50 small d-none d-lg-inline">{% bilingual "Welcome," "欢迎，" %}{{ user.username }}</span>
+                        <a class="btn btn-sm btn-outline-light" href="{% url 'logout' %}">{% bilingual "Sign out" "退出登录" %}</a>
+                    {% else %}
+                        <a class="btn btn-sm btn-outline-light" href="{% url 'login' %}">{% bilingual "Sign in" "登录" %}</a>
+                        <a class="btn btn-sm btn-light" href="{% url 'trading:signup' %}">{% bilingual "Sign up" "注册" %}</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </nav>
+    <!-- 全局任务栏（固定在右下，不随页面切换消失） -->
+    <div id="task-dock" class="task-dock minimized shadow" aria-live="polite" aria-label="{% bilingual "Backtest tasks" "回测任务" %}">
+        <div id="task-dock-header" class="task-dock-header">
+            <div class="task-header-left">
+                <span class="task-dot"></span>
+                <span class="task-title">{% bilingual "Backtest Tasks" "回测任务" %}</span>
+            </div>
+            <div class="task-header-right">
+                <span id="task-count" class="task-count">0</span>
+                <button id="task-clear" class="task-toggle task-toggle-muted" aria-label="{% bilingual "Clear tasks" "清空任务" %}">🗑</button>
+                <button id="task-toggle" class="task-toggle" aria-label="{% bilingual "Toggle tasks" "展开/折叠任务" %}"></button>
+            </div>
+        </div>
+        <div id="task-dock-body" class="task-dock-body" hidden></div>
+    </div>
+
+    <main class="container-xl pb-5">
+        {% block content %}{% endblock %}
+    </main>
+    <script nonce="{{ csp_nonce }}">
+        (function () {
+            const STORAGE_KEY = "backtestTaskStore";
+            if (window.__globalTaskDockMounted) return;
+            window.__globalTaskDockMounted = true;
+            const langIsZh = (document.documentElement.lang || "").toLowerCase().startsWith("zh");
+            const statusTemplate = "{% url 'trading:api_v1_task_status' task_id='TASK_ID_PLACEHOLDER' %}";
+            const historyBase = "{% url 'trading:backtest' %}";
+            const pollInterval = 5000;
+
+            const loadStore = () => {
+                try {
+                    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+                    if (!parsed || !Array.isArray(parsed.tasks)) return { tasks: [] };
+                    return parsed;
+                } catch (e) {
+                    return { tasks: [] };
+                }
+            };
+
+            const saveStore = (tasks) => {
+                try {
+                    localStorage.setItem(
+                        STORAGE_KEY,
+                        JSON.stringify({
+                            statusTemplate,
+                            historyBaseUrl: historyBase,
+                            tasks,
+                        })
+                    );
+                } catch (e) {
+                    // ignore
+                }
+            };
+
+            const buildStatusUrl = (taskId) =>
+                statusTemplate ? statusTemplate.replace("TASK_ID_PLACEHOLDER", encodeURIComponent(taskId)) : "";
+
+            const dock =
+                document.getElementById("task-dock") ||
+                (function () {
+                    const node = document.createElement("div");
+                    node.id = "task-dock";
+                    node.className = "task-dock minimized";
+                    node.style.right = "16px";
+                    node.style.bottom = "16px";
+                    node.style.left = "auto";
+                    node.style.top = "auto";
+                    node.innerHTML = `
+                        <div id="task-dock-header" class="task-dock-header">
+                            <span>${langIsZh ? "回测任务" : "Backtest Tasks"}</span>
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <span id="task-count" class="task-count">0</span>
+                                <button id="task-toggle" class="task-toggle" aria-label="${langIsZh ? "展开/折叠任务" : "Toggle tasks"}">▾</button>
+                            </div>
+                        </div>
+                        <div id="task-dock-body" class="task-dock-body" hidden></div>
+                    `;
+                    document.body.appendChild(node);
+                    return node;
+                })();
+
+            const dockHeader = dock.querySelector("#task-dock-header");
+            const dockBody = dock.querySelector("#task-dock-body");
+            const dockToggle = dock.querySelector("#task-toggle");
+            const dockCount = dock.querySelector("#task-count");
+            let dockMinimized = true;
+            let dragState = null;
+
+            const tasks = new Map();
+
+            const renderTasks = () => {
+                dockBody.innerHTML = "";
+                if (tasks.size === 0) {
+                    const empty = document.createElement("div");
+                    empty.className = "task-pill";
+                    empty.innerHTML = `<div class="task-meta">${langIsZh ? "暂无任务" : "No tasks yet"}</div>`;
+                    dockBody.appendChild(empty);
+                }
+                tasks.forEach((task, id) => {
+                    const pill = document.createElement("div");
+                    pill.className = "task-pill";
+                    const label = task.ticker || "Task";
+                    const statusClass =
+                        task.status === "SUCCESS" ? "success" : task.status === "FAILURE" ? "failure" : "pending";
+                    pill.innerHTML = `
+                        <h6>${label} <span class="status ${statusClass}">${task.status || "PENDING"}</span></h6>
+                        <div class="task-meta">
+                            <span>${task.message || ""}</span>
+                            <span>${task.created || ""}</span>
+                            ${task.link ? `<a href="${task.link}">${langIsZh ? "查看报告" : "View report"}</a>` : ""}
+                        </div>
+                    `;
+                    dockBody.appendChild(pill);
+                });
+                dockCount.textContent = tasks.size;
+                dockBody.hidden = dockMinimized;
+                dock.classList.toggle("minimized", dockMinimized);
+            };
+
+            const updateTask = (taskId, data) => {
+                const existing = tasks.get(taskId) || {};
+                const prevSize = tasks.size;
+                tasks.set(taskId, { ...existing, ...data });
+                // 只保留最新 5 条
+                while (tasks.size > 5) {
+                    const oldestKey = tasks.keys().next().value;
+                    tasks.delete(oldestKey);
+                }
+                renderTasks();
+                if (tasks.size > prevSize) {
+                    dockMinimized = false;
+                    renderTasks();
+                }
+                const snapshot = Array.from(tasks.entries()).map(([id, val]) => ({ id, ...val }));
+                saveStore(snapshot);
+                window.dispatchEvent(
+                    new CustomEvent("taskdock:update", {
+                        detail: {
+                            id: taskId,
+                            task: tasks.get(taskId),
+                            tasks: snapshot,
+                        },
+                    })
+                );
+            };
+
+            const pollTask = (taskId) => {
+                const url = buildStatusUrl(taskId);
+                if (!url) return;
+                fetch(url, { headers: { "X-Requested-With": "XMLHttpRequest" } })
+                    .then((res) => res.json().catch(() => ({})))
+                    .then((data) => {
+                        const state = data.state || "";
+                        if (state === "SUCCESS") {
+                            const hid = data.result && data.result.history_id;
+                            updateTask(taskId, {
+                                status: "SUCCESS",
+                                message: langIsZh ? "任务完成，可查看报告。" : "Task complete.",
+                                link: hid ? `${historyBase}?history_id=${encodeURIComponent(hid)}` : null,
+                            });
+                            return;
+                        }
+                        if (state === "FAILURE" || state === "REVOKED") {
+                            updateTask(taskId, { status: "FAILURE", message: data.error || "Failed" });
+                            return;
+                        }
+                        updateTask(taskId, {
+                            status: state || "PENDING",
+                            message: state === "STARTED" ? (langIsZh ? "运行中…" : "Running…") : langIsZh ? "已排队…" : "Queued…",
+                        });
+                        window.setTimeout(() => pollTask(taskId), pollInterval);
+                    })
+                    .catch(() => {});
+            };
+
+            const syncFromStore = () => {
+                const store = loadStore();
+                if (!store.tasks.length) {
+                    tasks.clear();
+                    renderTasks();
+                    window.dispatchEvent(
+                        new CustomEvent("taskdock:update", {
+                            detail: { id: null, task: null, tasks: [] },
+                        })
+                    );
+                    return;
+                }
+                store.tasks.forEach((item) => {
+                    if (item && item.id) {
+                        tasks.set(item.id, item);
+                    }
+                });
+                renderTasks();
+                window.dispatchEvent(
+                    new CustomEvent("taskdock:update", {
+                        detail: { id: null, task: null, tasks: store.tasks },
+                    })
+                );
+                store.tasks.forEach((item) => {
+                    if (!item || !item.id) return;
+                    if (["PENDING", "STARTED", "RETRY", ""].includes(item.status || "")) {
+                        window.setTimeout(() => pollTask(item.id), 500);
+                    }
+                });
+            };
+
+            const flushSnapshot = () => Array.from(tasks.entries()).map(([id, val]) => ({ id, ...val }));
+
+            const handleDrag = (e) => {
+                if (!dragState) return;
+                const dx = e.clientX - dragState.startX;
+                const dy = e.clientY - dragState.startY;
+                dock.style.left = `${dragState.startLeft + dx}px`;
+                dock.style.top = `${dragState.startTop + dy}px`;
+            };
+            const stopDrag = () => {
+                dragState = null;
+                document.removeEventListener("mousemove", handleDrag);
+                document.removeEventListener("mouseup", stopDrag);
+            };
+
+            dockToggle.addEventListener("click", (e) => {
+                e.stopPropagation();
+                dockMinimized = !dockMinimized;
+                renderTasks();
+            });
+            const dockClear = dock.querySelector("#task-clear");
+            if (dockClear) {
+                dockClear.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    tasks.clear();
+                    renderTasks();
+                    const snapshot = [];
+                    saveStore(snapshot);
+                    window.dispatchEvent(new CustomEvent("taskdock:update", { detail: { id: null, task: null, tasks: snapshot } }));
+                });
+            }
+            dockHeader.addEventListener("mousedown", (e) => {
+                dragState = {
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    startLeft: dock.offsetLeft,
+                    startTop: dock.offsetTop,
+                };
+                document.addEventListener("mousemove", handleDrag);
+                document.addEventListener("mouseup", stopDrag);
+            });
+            dockHeader.addEventListener("click", (e) => {
+                // 防止拖拽后误触展开/收起
+                if (dragState) return;
+                dockMinimized = !dockMinimized;
+                renderTasks();
+            });
+
+            window.addEventListener("storage", (event) => {
+                if (event.key === STORAGE_KEY) {
+                    syncFromStore();
+                }
+            });
+
+            syncFromStore();
+
+            // Expose helper for other scripts (e.g., backtest submit JS)
+            window.taskDock = {
+                updateTask,
+                pollTask,
+                buildStatusUrl,
+                renderTasks,
+                removeTask: (taskId) => {
+                    if (!taskId || !tasks.has(taskId)) return;
+                    tasks.delete(taskId);
+                    const snapshot = flushSnapshot();
+                    saveStore(snapshot);
+                    renderTasks();
+                    window.dispatchEvent(new CustomEvent("taskdock:update", { detail: { id: taskId, task: null, tasks: snapshot } }));
+                },
+                get statusTemplate() {
+                    return statusTemplate;
+                },
+                get historyBase() {
+                    return historyBase;
+                },
+            };
+            window.dispatchEvent(new CustomEvent("taskdock:ready", { detail: window.taskDock }));
+        })();
+    </script>
+    {% block extra_scripts %}{% endblock %}
+    <footer class="bg-white border-top py-4">
+        <div class="container text-center text-muted small">
+            {% bilingual "Crafted by Mingyang Dong." "本工具由董铭瑒开发。" %}
+        </div>
+    </footer>
+</body>
+</html>

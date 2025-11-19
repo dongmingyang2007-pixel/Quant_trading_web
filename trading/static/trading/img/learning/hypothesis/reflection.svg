@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="refBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#4c1d95"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#refBg)"/>
+  <g transform="translate(160 80)">
+    <rect x="0" y="0" width="320" height="200" rx="18" fill="rgba(248,250,252,0.1)" stroke="#c084fc" stroke-width="3"/>
+    <text x="40" y="70" fill="#ede9fe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20">1. 假设写得清晰吗？</text>
+    <text x="40" y="115" fill="#ede9fe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20">2. 数据是否可靠？</text>
+    <text x="40" y="160" fill="#ede9fe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20">3. 行动计划是否明确？</text>
+  </g>
+  <text x="320" y="60" text-anchor="middle" fill="#e0f2fe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20">反思提问清单</text>
+</svg>

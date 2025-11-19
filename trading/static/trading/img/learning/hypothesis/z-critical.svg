@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="zCriticalGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0ea5e9"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#zCriticalGrad)"/>
+  <g fill="#f8fafc" font-family="'Segoe UI','PingFang SC','Helvetica Neue',Arial,sans-serif">
+    <text x="44" y="106" font-size="42" font-weight="700">Z 临界值与检验</text>
+    <text x="44" y="152" font-size="24">六步法：假设·统计量·决策</text>
+  </g>
+  <g transform="translate(80 210)" fill="none" stroke-width="3">
+    <path d="M0 60h480" stroke="#ecfeff"/>
+    <path d="M120 60c20-30 40-45 60-45s40 15 60 45 40 45 60 45 40-15 60-45 40-45 60-45 40 15 60 45" stroke="#fef3c7"/>
+    <line x1="120" y1="40" x2="120" y2="120" stroke="#f97316" stroke-width="4"/>
+    <line x1="360" y1="40" x2="360" y2="120" stroke="#f97316" stroke-width="4"/>
+    <text x="105" y="135" font-size="18" fill="#fef3c7">-zα</text>
+    <text x="350" y="135" font-size="18" fill="#fef3c7">+zα</text>
+  </g>
+</svg>

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480" viewBox="0 0 800 480">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="480" fill="url(#grad)" rx="24"/>
+  <g fill="#f8fafc" font-family="'Segoe UI', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif">
+    <text x="60" y="120" font-size="44" font-weight="600">执行与复盘</text>
+    <text x="60" y="180" font-size="26">把计划落实到每笔交易</text>
+    <text x="60" y="260" font-size="20">SOP · 行为偏差 · 证据链 · 复盘仪表板</text>
+  </g>
+</svg>

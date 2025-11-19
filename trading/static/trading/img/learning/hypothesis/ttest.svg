@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="ttestGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3730a3"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#ttestGrad)"/>
+  <g fill="#f8fafc" font-family="'Segoe UI','PingFang SC','Helvetica Neue',Arial,sans-serif">
+    <text x="44" y="110" font-size="44" font-weight="700">t 检验</text>
+    <text x="44" y="158" font-size="24">自由度决定尾部厚度</text>
+  </g>
+  <g transform="translate(80 210)" fill="none" stroke-width="3">
+    <path d="M0 60h480" stroke="#ddd6fe"/>
+    <path d="M60 60c40-80 80-120 120-120s80 40 120 120 80 120 120 120" stroke="#c4b5fd"/>
+    <path d="M60 60c40-50 80-75 120-75s80 25 120 75 80 75 120 75" stroke="#fef3ff" stroke-width="4" stroke-dasharray="8 8"/>
+    <text x="200" y="130" font-size="18" fill="#fef3ff">df ↑ → 更贴近正态</text>
+  </g>
+</svg>

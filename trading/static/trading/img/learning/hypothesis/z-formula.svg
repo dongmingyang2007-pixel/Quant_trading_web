@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="zBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#zBg)"/>
+  <text x="320" y="150" text-anchor="middle" font-family="'Segoe UI','Times New Roman',serif" font-size="36" fill="#f8fafc" font-weight="600">z = ( \u03bc̄ - \u03bc₀ ) / ( \u03c3 / √n )</text>
+  <text x="320" y="220" text-anchor="middle" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20" fill="#bfdbfe">样本均值与假设均值的差距，用标准误度量</text>
+</svg>

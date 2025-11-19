@@ -1,0 +1,61 @@
+
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}
+{% with lang_prefix=request.LANGUAGE_CODE|default:'zh-hans'|lower|slice:":2" %}
+{% if lang_prefix == 'zh' %}学习中心{% else %}Learning Hub{% endif %}
+{% endwith %}
+{% endblock %}
+
+{% block content %}
+{% with lang_prefix=request.LANGUAGE_CODE|default:'zh-hans'|lower|slice:":2" %}
+<div class="learning-page container-xl">
+    <header class="learning-hero">
+        <div class="hero-main">
+            <p class="learning-kicker">{% if lang_prefix == 'zh' %}学习计划{% else %}Learning plan{% endif %}</p>
+            <h1 class="learning-title">{% if lang_prefix == 'zh' %}学习中心{% else %}Learning Hub{% endif %}</h1>
+            <p class="learning-subtitle">
+                {% if lang_prefix == 'zh' %}
+                    这里提供一门面向实务的专题课程《假设检验：商业决策的统计支撑》。
+                {% else %}
+                    Explore the applied series "Hypothesis Testing: Statistical Backbone for Business Decisions."
+                {% endif %}
+            </p>
+            <div class="learning-actions">
+                <a class="hero-button solid" href="{% url 'trading:learning_detail' 'hypothesis-testing' %}">
+                    {% if lang_prefix == 'zh' %}开始学习{% else %}Start learning{% endif %}
+                </a>
+                <a class="hero-button ghost" href="#course-catalog">
+                    {% if lang_prefix == 'zh' %}查看目录{% else %}View syllabus{% endif %}
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <section class="learning-catalog" id="course-catalog">
+        <h2 class="section-heading">{% if lang_prefix == 'zh' %}课程目录{% else %}Course catalog{% endif %}</h2>
+        <div class="course-grid">
+            {% for track in tracks %}
+                <article class="course-card">
+                    <div class="course-meta">
+                        <span class="badge bg-primary-subtle text-primary-emphasis">{{ track.level }}</span>
+                        <span class="text-muted small">{{ track.duration }}</span>
+                    </div>
+                    <h3>{{ track.title }}</h3>
+                    <p class="text-muted">{{ track.summary }}</p>
+                    <ul>
+                        {% for obj in track.objectives|slice:':2' %}
+                            <li>{{ obj }}</li>
+                        {% endfor %}
+                    </ul>
+                    <a class="hero-button solid small" href="{% url 'trading:learning_detail' track.slug %}">
+                        {% if lang_prefix == 'zh' %}进入课程{% else %}Enter course{% endif %}
+                    </a>
+                </article>
+            {% endfor %}
+        </div>
+    </section>
+</div>
+{% endwith %}
+{% endblock %}

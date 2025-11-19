@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% load django_bootstrap5 %}
+
+{% block title %}{% bilingual "Resend activation email" "重发激活邮件" %}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6 col-lg-5">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h4 class="mb-3">{% bilingual "Resend activation email" "重发激活邮件" %}</h4>
+        {% if info %}<div class="alert alert-info">{{ info }}</div>{% endif %}
+        {% if error %}<div class="alert alert-warning">{{ error }}</div>{% endif %}
+        <form method="post" novalidate>
+          {% csrf_token %}
+          {% bootstrap_form form %}
+          <div class="d-flex justify-content-end">
+            <button type="submit" class="btn btn-primary">{% bilingual "Send email" "发送邮件" %}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

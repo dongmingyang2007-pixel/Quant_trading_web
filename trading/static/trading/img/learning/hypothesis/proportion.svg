@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="propGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="100%" stop-color="#14b8a6"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#propGrad)"/>
+  <g fill="#ecfeff" font-family="'Segoe UI','PingFang SC','Helvetica Neue',Arial,sans-serif">
+    <text x="44" y="110" font-size="44" font-weight="700">比例检验</text>
+    <text x="44" y="160" font-size="24">评估“成功率”是否达到目标</text>
+  </g>
+  <g transform="translate(80 210)">
+    <rect x="0" y="0" width="120" height="80" rx="16" fill="rgba(236,254,255,0.15)" stroke="#ecfeff" stroke-width="3"/>
+    <rect x="140" y="0" width="120" height="80" rx="16" fill="rgba(236,254,255,0.3)" stroke="#ecfeff" stroke-width="3"/>
+    <rect x="280" y="0" width="120" height="80" rx="16" fill="rgba(236,254,255,0.45)" stroke="#ecfeff" stroke-width="3"/>
+    <rect x="420" y="0" width="120" height="80" rx="16" fill="rgba(236,254,255,0.6)" stroke="#ecfeff" stroke-width="3"/>
+    <text x="48" y="120" font-size="18" fill="#ecfeff">样本</text>
+    <text x="180" y="120" font-size="18" fill="#ecfeff">分组</text>
+    <text x="318" y="120" font-size="18" fill="#ecfeff">比例</text>
+    <text x="450" y="120" font-size="18" fill="#ecfeff">检验</text>
+  </g>
+</svg>

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#334155"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#bg)"/>
+  <rect x="220" y="60" width="200" height="240" rx="28" fill="#111827" stroke="#475569" stroke-width="4"/>
+  <rect x="238" y="90" width="164" height="180" rx="18" fill="#1f2937"/>
+  <circle cx="320" cy="76" r="6" fill="#f8fafc" opacity="0.6"/>
+  <rect x="260" y="126" width="120" height="80" rx="12" fill="#22d3ee" opacity="0.85"/>
+  <text x="270" y="160" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20" fill="#082f49">499 元</text>
+  <text x="270" y="190" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="14" fill="#082f49">是否太贵？</text>
+  <text x="430" y="120" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18" fill="#bae6fd">H₀: p ≤ 0.5</text>
+  <text x="430" y="160" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18" fill="#bae6fd">H₁: p &gt; 0.5</text>
+  <text x="430" y="200" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="14" fill="#e2e8f0">统计问卷中“太贵”比例</text>
+</svg>

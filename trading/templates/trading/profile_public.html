@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}{{ public_user.display_name }} · 个人主页{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{% static 'trading/css/profile_public.css' %}">
+{% endblock %}
+
+{% block content %}
+<div class="profile-screen container-xl">
+    <header class="profile-showcase" style="--profile-cover: {% if feature_url %}url('{{ feature_url }}'){% else %}none{% endif %}; --profile-color: {{ profile.cover_color|default:'#116e5f' }}">
+        <div class="profile-showcase__glass">
+            <div class="profile-showcase__avatar">
+                {% if avatar_url %}
+                    <img src="{{ avatar_url }}" alt="{{ public_user.display_name }}" loading="lazy">
+                {% else %}
+                    {{ public_user.display_name|first|upper }}
+                {% endif %}
+            </div>
+            <div class="profile-showcase__text">
+<p class="showcase-eyebrow">{% bilingual "Investor · Public Profile" "投资者 · 公开主页" %}</p>
+                <h1>{{ public_user.display_name }}</h1>
+                <p>
+                    {% bilingual "Joined" "加入于" %} {{ public_user.date_joined|date:"Y年n月j日" }}
+                    {% if stats.post_count %}
+                        · {% bilingual "Posts" "已发布" %} {{ stats.post_count }} {% bilingual "community updates" "条社区动态" %}
+                    {% endif %}
+                </p>
+                <ul class="showcase-stats">
+                    <li>
+                        <span class="stat-label">{% bilingual "Username" "用户名" %}</span>
+                        <span class="stat-value">{{ public_user.username }}</span>
+                    </li>
+                    <li>
+                        <span class="stat-label">{% bilingual "Email" "邮箱状态" %}</span>
+                        <span class="stat-value">
+                            {% if public_user.email_bound %}
+                                {% bilingual "Bound" "已绑定" %}
+                            {% else %}
+                                {% bilingual "Hidden" "未公开" %}
+                            {% endif %}
+                        </span>
+                    </li>
+                </ul>
+                {% if is_self %}
+                    <a class="showcase-action" href="{% url 'trading:account' %}">{% bilingual "Manage my account" "管理我的账户" %} →</a>
+                {% endif %}
+            </div>
+        </div>
+    </header>
+
+    <div class="profile-columns">
+        <section class="profile-panel profile-panel--info">
+            <h2>{% bilingual "Profile summary" "基本信息" %}</h2>
+            <dl>
+                <div>
+                    <dt>{% bilingual "Username" "用户名" %}</dt>
+                    <dd>{{ public_user.username }}</dd>
+                </div>
+                <div>
+                    <dt>{% bilingual "Display name" "展示昵称" %}</dt>
+                    <dd>{{ public_user.display_name }}</dd>
+                </div>
+                <div>
+                    <dt>{% bilingual "Joined" "加入时间" %}</dt>
+                    <dd>{{ stats.joined|date:"Y年n月j日" }}</dd>
+                </div>
+                <div>
+                    <dt>{% bilingual "Email" "邮箱状态" %}</dt>
+                    <dd>{% if public_user.email_bound %}{% bilingual "Bound" "已绑定" %}{% else %}{% bilingual "Hidden" "未公开" %}{% endif %}</dd>
+                </div>
+            </dl>
+            <div class="profile-panel__bio">
+                <h3>{% bilingual "Bio" "个人简介" %}</h3>
+                <p>
+                    {% if profile.bio %}
+                        {{ profile.bio|linebreaksbr }}
+                    {% else %}
+                        <span class="text-muted">{% bilingual "This user hasn't written a bio yet." "这位用户还没有撰写简介。" %}</span>
+                    {% endif %}
+                </p>
+            </div>
+        </section>
+
+        <section class="profile-panel profile-panel--gallery">
+            <h2>{% bilingual "Gallery" "图集" %}</h2>
+            {% if gallery_media %}
+                <div class="profile-mosaic">
+                    {% for item in gallery_media %}
+                        <figure>
+                            <img src="{{ item.url }}" alt="展示照片 {{ forloop.counter }}" loading="lazy">
+                        </figure>
+                    {% endfor %}
+                </div>
+            {% elif feature_url %}
+                <div class="profile-mosaic">
+                    <figure>
+                        <img src="{{ feature_url }}" alt="展示照片" loading="lazy">
+                    </figure>
+                </div>
+            {% else %}
+                    <p class="text-muted mb-0">{% bilingual "No published photos yet." "暂无公开展示照片。" %}</p>
+                {% endif %}
+        </section>
+    </div>
+
+    <section class="profile-panel profile-panel--feed">
+        <div class="profile-panel__head">
+            <div>
+                <h2>{% bilingual "Public activity" "公开动态" %}</h2>
+                <p class="text-muted mb-0">{% bilingual "Latest community posts appear here." "最新的社区帖子与图片将展示于此。" %}</p>
+            </div>
+        </div>
+        {% if posts %}
+            <div class="profile-feed">
+                {% for post in posts %}
+                <article class="profile-feed-card">
+                    <header>
+                        <div class="feed-avatar">
+                            {% if avatar_url %}
+                                <img src="{{ avatar_url }}" alt="{{ public_user.display_name }}" loading="lazy">
+                            {% else %}
+                                {{ public_user.display_name|first|upper }}
+                            {% endif %}
+                        </div>
+                        <div>
+                            <p class="feed-author">{{ public_user.display_name }}</p>
+                            <p class="feed-time text-muted small">{{ post.created_at }}</p>
+                        </div>
+                    </header>
+                    <div class="feed-body">
+                        <p>{{ post.content|linebreaks }}</p>
+                        {% if post.image_url %}
+                            <figure>
+                                <img src="{{ post.image_url }}" alt="分享图片" loading="lazy">
+                            </figure>
+                        {% endif %}
+                    </div>
+                </article>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="profile-feed-empty">
+                <p class="mb-1">{% bilingual "No public activity yet." "暂无公开动态" %}</p>
+                <p class="text-muted mb-0">{% bilingual "This user hasn't posted or liked content publicly." "这位用户还未在社区发表帖子或点赞内容。" %}</p>
+            </div>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

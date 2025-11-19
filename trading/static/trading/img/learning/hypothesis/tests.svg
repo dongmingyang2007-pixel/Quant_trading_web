@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="testsGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#testsGrad)"/>
+  <g fill="#f8fafc" font-family="'Segoe UI','PingFang SC','Helvetica Neue',Arial,sans-serif">
+    <text x="44" y="110" font-size="44" font-weight="700">z 检验 / t 检验</text>
+    <text x="44" y="160" font-size="24">已知 σ 用 z，未知 σ 用 t</text>
+  </g>
+  <g opacity="0.8">
+    <path d="M180 270c0-64 46-120 120-120s120 56 120 120" fill="none" stroke="#bfdbfe" stroke-width="4"/>
+    <path d="M140 250c0-80 58-150 160-150s160 70 160 150" fill="none" stroke="#e0f2fe" stroke-width="3" stroke-dasharray="8 8"/>
+    <circle cx="260" cy="150" r="38" fill="rgba(248,250,252,0.2)" stroke="#f8fafc" stroke-width="3"/>
+    <text x="240" y="157" font-size="20" fill="#f8fafc">μ</text>
+  </g>
+</svg>

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="introGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4f46e5"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#introGrad)"/>
+  <g fill="#f8fafc" font-family="'Segoe UI', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif">
+    <text x="44" y="110" font-size="44" font-weight="700">假设检验起步</text>
+    <text x="44" y="160" font-size="28" font-weight="500">用数据验证商业直觉</text>
+    <text x="44" y="220" font-size="20">明确问题 · 收集样本 · 选择检验 · 解读结果</text>
+  </g>
+  <g fill="none" stroke="#e0f2fe" stroke-width="3" opacity="0.6">
+    <path d="M460 80c34 30 54 68 54 112s-20 82-54 112"/>
+    <path d="M500 60c40 36 62 80 62 132s-22 96-62 132"/>
+    <path d="M540 40c46 42 72 94 72 152s-26 110-72 152"/>
+  </g>
+</svg>

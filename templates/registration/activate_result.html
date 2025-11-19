@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}{% bilingual "Account activation" "账户激活" %}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6 col-lg-5">
+    {% if ok %}
+      <div class="alert alert-success">{% bilingual "Your account is now active. You can sign in to access every feature." "账户已成功激活，现在可以登录使用全部功能。" %}</div>
+      <div class="text-center"><a class="btn btn-primary" href="{% url 'login' %}">{% bilingual "Go to sign in" "前往登录" %}</a></div>
+    {% else %}
+      <div class="alert alert-warning">{% bilingual "The activation link is invalid or expired. Please register again or request another activation email." "激活链接无效或已过期，请重新注册或再次请求激活邮件。" %}</div>
+      <div class="text-center"><a class="btn btn-primary" href="{% url 'login' %}">{% bilingual "Back to sign in" "返回登录" %}</a></div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

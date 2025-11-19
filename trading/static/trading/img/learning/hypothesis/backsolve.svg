@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="solveBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#0ea5e9"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#solveBg)"/>
+  <path d="M140 200H300L260 160M300 200L260 240" stroke="#f97316" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="110" y="210" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20" fill="#fef08a">目标: z = 1.28</text>
+  <text x="340" y="180" font-family="'Segoe UI','Times New Roman',serif" font-size="32" fill="#f8fafc">x̄ = μ₀ + z·σ/√n</text>
+  <text x="340" y="230" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18" fill="#bfdbfe">代入 μ₀ = 10, σ = 1.6, n = 100 → x̄ = 10.2</text>
+</svg>

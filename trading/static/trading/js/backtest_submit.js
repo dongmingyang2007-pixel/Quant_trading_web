@@ -1,0 +1,283 @@
+(function () {
+    const form = document.getElementById('analysis-form');
+    if (!form) return;
+
+    const langIsZh = (form.dataset.lang || document.documentElement.lang || '').toLowerCase().startsWith('zh');
+
+    let activeDock = window.taskDock || null;
+    const pendingDockOps = [];
+    const withTaskDock = (fn) => {
+        if (activeDock) {
+            try {
+                fn(activeDock);
+            } catch (error) {
+                console.error('Task dock update error:', error);
+            }
+            return;
+        }
+        pendingDockOps.push(fn);
+    };
+    const setDock = (dock) => {
+        if (!dock) return;
+        activeDock = dock;
+        while (pendingDockOps.length) {
+            const op = pendingDockOps.shift();
+            try {
+                op(dock);
+            } catch (error) {
+                console.error('Task dock pending op error:', error);
+            }
+        }
+    };
+    if (activeDock) {
+        setDock(activeDock);
+    }
+    window.addEventListener('taskdock:ready', (event) => {
+        setDock(event.detail || window.taskDock || null);
+    });
+
+    const updateDockTask = (id, payload) =>
+        withTaskDock((dock) => {
+            if (typeof dock.updateTask === 'function') {
+                dock.updateTask(id, payload);
+            }
+        });
+    const removeDockTask = (id) =>
+        withTaskDock((dock) => {
+            if (typeof dock.removeTask === 'function') {
+                dock.removeTask(id);
+            }
+        });
+
+    const taskEndpoint = form.dataset.taskEndpoint || (typeof TASK_ENDPOINT !== 'undefined' ? TASK_ENDPOINT : '');
+    const statusTemplate =
+        form.dataset.taskStatusTemplate || (typeof TASK_STATUS_TEMPLATE !== 'undefined' ? TASK_STATUS_TEMPLATE : '');
+    const historyBase = form.dataset.historyBase || (typeof BACKTEST_PATH !== 'undefined' ? BACKTEST_PATH : '');
+    const csrfInput = form.querySelector('input[name=csrfmiddlewaretoken]');
+    const csrfToken = csrfInput ? csrfInput.value : '';
+    const TASK_POLL_INTERVAL_MS = 2500;
+    const asyncText = langIsZh
+        ? {
+              queue: '任务已排队，等待执行…',
+              running: '策略引擎运行中…',
+              retry: '任务重试中…',
+              success: '任务完成，可随时查看报告。',
+              failure: '任务执行失败，请重试。',
+              submitting: '正在提交回测…',
+              loadingBanner: '加载中：有任务执行中…',
+          }
+        : {
+              queue: 'Task queued and awaiting execution…',
+              running: 'Strategy engines are running…',
+              retry: 'Task is retrying…',
+              success: 'Task complete. You can view the report anytime.',
+              failure: 'Task failed. Please retry.',
+              submitting: 'Submitting backtest…',
+              loadingBanner: 'Loading: a task is still running…',
+          };
+
+    const buildStatusUrl = (taskId) =>
+        statusTemplate ? statusTemplate.replace('TASK_ID_PLACEHOLDER', encodeURIComponent(taskId)) : '';
+
+    const serializeFormParams = () => {
+        const data = new FormData(form);
+        const params = {};
+        data.forEach((value, key) => {
+            if (key === 'csrfmiddlewaretoken') return;
+            params[key] = value;
+        });
+        ['start_date', 'end_date'].forEach((k) => {
+            if (params[k]) params[k] = String(params[k]).replace(/\//g, '-');
+        });
+        const todayIso = new Date().toISOString().slice(0, 10);
+        if (!params.end_date) params.end_date = todayIso;
+        if (!params.start_date) params.start_date = todayIso;
+        return params;
+    };
+
+    const pollTask = (taskId, startedAt) => {
+        let handledByDock = false;
+        withTaskDock((dock) => {
+            if (typeof dock.pollTask === 'function') {
+                dock.pollTask(taskId, startedAt);
+                handledByDock = true;
+            }
+        });
+        if (handledByDock) {
+            return;
+        }
+        const statusUrl = buildStatusUrl(taskId);
+        if (!statusUrl) return;
+        fetch(statusUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+            .then((res) => res.json().catch(() => ({})))
+            .then((data) => {
+                const state = data.state || '';
+                if (state === 'SUCCESS') {
+                    const historyId = data.result && data.result.history_id;
+                    updateDockTask(taskId, {
+                        status: 'SUCCESS',
+                        message: asyncText.success,
+                        link: historyId ? `${historyBase}?history_id=${encodeURIComponent(historyId)}` : null,
+                    });
+                    return;
+                }
+                if (state === 'FAILURE' || state === 'REVOKED') {
+                    updateDockTask(taskId, { status: 'FAILURE', message: data.error || asyncText.failure });
+                    return;
+                }
+                const runningMsg = state === 'STARTED' ? asyncText.running : state === 'RETRY' ? asyncText.retry : asyncText.queue;
+                updateDockTask(taskId, { status: state || 'PENDING', message: runningMsg });
+                const elapsed = Date.now() - startedAt;
+                if (elapsed < 10 * 60 * 1000) {
+                    window.setTimeout(() => pollTask(taskId, startedAt), TASK_POLL_INTERVAL_MS);
+                }
+            })
+            .catch(() => {});
+    };
+
+    const renderPageBanner = (tasksSnapshot) => {
+        const bannerId = 'backtest-page-loading';
+        const container = document.getElementById('analysis-form-card') || form;
+        if (!container) return;
+        const hasRunning = (tasksSnapshot || []).some((t) =>
+            ['PENDING', 'STARTED', 'RETRY', 'SUBMIT', ''].includes((t.status || '').toUpperCase())
+        );
+        let banner = document.getElementById(bannerId);
+        if (!hasRunning) {
+            if (banner && banner.parentNode) banner.parentNode.removeChild(banner);
+            return;
+        }
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = bannerId;
+            banner.className = 'alert alert-info d-flex align-items-center gap-2 mb-3';
+            container.prepend(banner);
+        }
+        banner.textContent = asyncText.loadingBanner;
+    };
+
+    try {
+        const storeRaw = localStorage.getItem('backtestTaskStore');
+        if (storeRaw) {
+            const parsed = JSON.parse(storeRaw);
+            renderPageBanner(parsed.tasks || []);
+        }
+    } catch (_error) {
+        // ignore
+    }
+    window.addEventListener('taskdock:update', (event) => {
+        const tasksSnapshot = event.detail && event.detail.tasks ? event.detail.tasks : [];
+        renderPageBanner(tasksSnapshot);
+    });
+
+    const submitAsync = (params, placeholderId) => {
+        return fetch(taskEndpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken,
+            },
+            body: JSON.stringify(params),
+        })
+            .then((response) => {
+                return response
+                    .json()
+                    .catch(() => ({}))
+                    .then((data) => {
+                        if (!response.ok) {
+                            const firstError = (() => {
+                                if (!data || typeof data !== 'object') return null;
+                                if (data.error) return data.error;
+                                if (data.detail) return data.detail;
+                                const firstVal = Object.values(data)[0];
+                                if (Array.isArray(firstVal) && firstVal.length) return firstVal[0];
+                                return null;
+                            })();
+                            const msg =
+                                firstError ||
+                                (response.status === 400
+                                    ? langIsZh
+                                        ? '提交数据格式有误，请检查表单。'
+                                        : 'Validation failed. Please check the form.'
+                                    : `HTTP ${response.status}`);
+                            throw new Error(msg);
+                        }
+                        return data;
+                    });
+            })
+            .then((data) => {
+                const ticker = params.ticker || 'Task';
+                const created = new Date().toLocaleTimeString();
+                if (placeholderId) {
+                    removeDockTask(placeholderId);
+                }
+                const immediateHistory = data.history_id || (data.result && data.result.history_id);
+                if (immediateHistory) {
+                    const link = `${historyBase}?history_id=${encodeURIComponent(immediateHistory)}`;
+                    updateDockTask(`history-${immediateHistory}`, {
+                        status: 'SUCCESS',
+                        message: asyncText.success,
+                        ticker,
+                        created,
+                        link,
+                    });
+                    return;
+                }
+                if (data.task_id) {
+                    const taskId = data.task_id;
+                    updateDockTask(taskId, { status: 'PENDING', message: asyncText.queue, ticker, created });
+                    window.setTimeout(() => pollTask(taskId, Date.now()), TASK_POLL_INTERVAL_MS);
+                    return;
+                }
+                if (data.result) {
+                    updateDockTask(`sync-${Date.now()}`, {
+                        status: 'SUCCESS',
+                        message: asyncText.success,
+                        ticker,
+                        created,
+                        link: null,
+                    });
+                    return;
+                }
+                throw new Error('Task id missing from response.');
+            });
+    };
+
+    form.addEventListener('submit', (event) => {
+        if (!taskEndpoint) {
+            alert(langIsZh ? '未配置异步回测端点，将使用传统提交。' : 'Async endpoint missing, falling back to sync submit.');
+            return;
+        }
+        event.preventDefault();
+        const params = serializeFormParams();
+        const ticker = params.ticker || 'Task';
+        const created = new Date().toLocaleTimeString();
+        const placeholderId = `pending-${Date.now()}`;
+        updateDockTask(placeholderId, {
+            status: 'SUBMIT',
+            message: asyncText.submitting,
+            ticker,
+            created,
+        });
+        const submitBtn = form.querySelector('button[type="submit"]');
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.dataset.originalText = submitBtn.innerHTML;
+            submitBtn.innerHTML = langIsZh ? '正在提交…' : 'Submitting…';
+        }
+        submitAsync(params, placeholderId)
+            .catch((error) => {
+                updateDockTask(placeholderId, { status: 'FAILURE', message: error.message || asyncText.failure });
+                alert(error.message || (langIsZh ? '回测提交失败，已尝试回退传统方式。' : 'Backtest submit failed.'));
+                form.submit();
+            })
+            .finally(() => {
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    if (submitBtn.dataset.originalText) {
+                        submitBtn.innerHTML = submitBtn.dataset.originalText;
+                    }
+                }
+            });
+    });
+})();

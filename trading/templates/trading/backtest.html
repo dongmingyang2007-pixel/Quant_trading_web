@@ -1,0 +1,3241 @@
+{% extends "base.html" %}
+{% load django_bootstrap5 humanize i18n static %}
+
+{% block title %}{% trans "Flagship Strategy Backtest" %}{% endblock %}
+
+{% block extra_head %}
+{{ block.super }}
+<style>
+:root {
+    --tilt-base-bg: #fcf9f2;
+    --tilt-border: rgba(148, 133, 102, 0.18);
+    --tilt-shadow: rgba(50, 47, 39, 0.38);
+    --tilt-accent: rgba(196, 174, 120, 0.45);
+    --tilt-text-strong: #2a2419;
+    --tilt-text-muted: rgba(72, 63, 46, 0.82);
+}
+
+.backtest-hero-wrapper {
+    display: flex;
+    justify-content: center;
+    padding: 0 clamp(12px, 4vw, 32px);
+    margin-bottom: 24px;
+}
+
+.backtest-hero-wrapper .backtest-intro-card {
+    width: min(100%, 1120px);
+    border-radius: 48px !important;
+    overflow: hidden;
+    margin: 0;
+    background: radial-gradient(circle at 20% 20%, rgba(249, 245, 233, 0.94), rgba(241, 234, 214, 0.88));
+    border: 1px solid rgba(148, 133, 102, 0.22);
+    box-shadow: 0 32px 68px rgba(46, 40, 30, 0.35);
+}
+
+@supports (-webkit-clip-path: inset(0 round 48px)) or (clip-path: inset(0 round 48px)) {
+    .backtest-hero-wrapper .backtest-intro-card {
+        -webkit-clip-path: inset(0 round 48px);
+        clip-path: inset(0 round 48px);
+    }
+}
+
+.tilt-card {
+    position: relative;
+    background: var(--tilt-base-bg);
+    border: 1px solid var(--tilt-border);
+    border-radius: 32px;
+    box-shadow: 0 18px 48px var(--tilt-shadow);
+    color: var(--tilt-text-strong);
+    transition: box-shadow 0.2s ease;
+    overflow: hidden;
+}
+
+.tilt-card::before,
+.tilt-card::after {
+    display: none;
+}
+
+.tilt-card .js-tilt-glare,
+.tilt-card .js-tilt-shadow,
+.backtest-panels .js-tilt-glare,
+.backtest-panels .js-tilt-shadow {
+    display: none !important;
+}
+
+.tilt-card:hover,
+.tilt-card:focus-within {
+    transform: none;
+    box-shadow: 0 20px 52px rgba(47, 42, 31, 0.18);
+}
+
+.quick-glance {
+    display: grid;
+    gap: 18px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    margin-bottom: 24px;
+}
+
+.quick-card {
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(148, 133, 102, 0.22);
+    border-radius: 24px;
+    box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08);
+    padding: 18px 20px;
+}
+
+.quick-card-title {
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 10px;
+}
+
+.quick-card-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 6px;
+}
+
+.quick-card-list li {
+    font-size: 0.95rem;
+    color: rgba(72, 63, 46, 0.85);
+}
+
+.briefing-deck {
+    margin-top: 20px;
+}
+
+.briefing-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 36px;
+}
+
+.briefing-card {
+    background: rgba(255, 255, 255, 0.98);
+    border: 1px solid rgba(148, 163, 184, 0.26);
+    border-radius: 28px;
+    padding: 32px 36px;
+    box-shadow: 0 24px 48px rgba(15, 23, 42, 0.12);
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.briefing-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.briefing-title {
+    font-size: 1.28rem;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.briefing-status {
+    display: inline-flex;
+    align-items: center;
+    padding: 8px 18px;
+    border-radius: 999px;
+    background: rgba(37, 99, 235, 0.12);
+    color: #1d4ed8;
+    font-weight: 600;
+    font-size: 0.88rem;
+    white-space: nowrap;
+}
+
+.briefing-body {
+    font-size: 1.02rem;
+    color: rgba(15, 23, 42, 0.78);
+    line-height: 1.68;
+}
+
+.briefing-link {
+    align-self: flex-start;
+    font-size: 0.9rem;
+    color: #2563eb;
+    font-weight: 600;
+}
+
+.briefing-card .hero-chip {
+    background: rgba(37, 99, 235, 0.16);
+    border-color: rgba(37, 99, 235, 0.28);
+    color: #1d4ed8;
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #0f172a;
+    background: rgba(59, 130, 246, 0.15);
+}
+.task-pill.success .status { background: rgba(16, 185, 129, 0.18); color: #065f46; }
+.task-pill.error .status { background: rgba(239, 68, 68, 0.18); color: #991b1b; }
+.task-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+}
+.task-actions a,
+.task-actions button {
+    border: 1px solid rgba(148,163,184,0.5);
+    background: #fff;
+    padding: 6px 8px;
+    border-radius: 10px;
+    font-size: 0.82rem;
+    color: #0f172a;
+    cursor: pointer;
+}
+.task-toggle {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: #0f172a;
+}
+.task-count {
+    background: #2563eb;
+    color: #fff;
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+
+
+/* AI 研判模块（全新布局） */
+.ai-suite {
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+    width: 100%;
+}
+
+.ai-suite-card {
+    background: rgba(255, 255, 255, 0.98);
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 28px;
+    box-shadow: 0 28px 56px rgba(15, 23, 42, 0.12);
+    padding: 28px clamp(24px, 4vw, 38px);
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+}
+
+.ai-suite-header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 18px;
+}
+
+.ai-suite-title {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: min(100%, 620px);
+}
+
+.ai-suite-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px;
+    border-radius: 999px;
+    background: rgba(37, 99, 235, 0.14);
+    color: #1d4ed8;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.ai-suite-title h3 {
+    margin: 0;
+    font-size: 1.36rem;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.ai-suite-title p {
+    margin: 0;
+    font-size: 0.95rem;
+    color: rgba(15, 23, 42, 0.68);
+    line-height: 1.6;
+}
+
+.ai-suite-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.ai-suite-overview {
+    display: grid;
+    gap: 20px;
+}
+
+@media (min-width: 1200px) {
+    .ai-suite-overview {
+        grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr);
+        align-items: stretch;
+    }
+}
+
+.ai-suite-metrics-wrap,
+.ai-suite-board-wrap,
+.ai-suite-news {
+    background: rgba(248, 250, 252, 0.98);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 24px;
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.1);
+    padding: 22px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.ai-suite-metrics {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.ai-suite-empty {
+    padding: 10px 0;
+    color: rgba(15, 23, 42, 0.62);
+    font-size: 0.92rem;
+}
+
+.ai-metric-card {
+    border-radius: 18px;
+    padding: 18px 20px;
+    background: rgba(255, 255, 255, 0.98);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.ai-metric-card strong {
+    font-size: 1.45rem;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.ai-metric-card span {
+    font-size: 0.86rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: rgba(15, 23, 42, 0.58);
+}
+
+.ai-metric-card p {
+    margin: 0;
+    font-size: 0.85rem;
+    color: rgba(15, 23, 42, 0.62);
+    line-height: 1.5;
+}
+
+.ai-suite-board {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.ai-board-card {
+    background: rgba(255, 255, 255, 0.96);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 20px;
+    padding: 18px 20px;
+    box-shadow: 0 12px 26px rgba(15, 23, 42, 0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.ai-board-card h4 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.ai-board-card ul {
+    margin: 0;
+    padding-left: 18px;
+    color: rgba(15, 23, 42, 0.72);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 0.9rem;
+}
+
+.ai-board-card p {
+    margin: 0;
+    font-size: 0.88rem;
+    color: rgba(15, 23, 42, 0.68);
+}
+
+.ai-suite-body {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+}
+
+.ai-dialog,
+.ai-sidebar {
+    border-radius: 24px;
+    background: rgba(255, 255, 255, 0.98);
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    box-shadow: 0 18px 36px rgba(15, 23, 42, 0.08);
+}
+
+.ai-dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 22px 24px;
+    min-width: 0;
+}
+
+.ai-chat-log {
+    flex: 1 1 auto;
+    min-height: 240px;
+}
+
+.ai-thinking-panel {
+    border-radius: 16px;
+    border: 1px dashed rgba(148, 163, 184, 0.36);
+    padding: 16px 18px;
+    background: rgba(15, 23, 42, 0.04);
+}
+
+.ai-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding: 22px 24px;
+    min-width: 0;
+}
+
+.ai-sidebar-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.ai-sidebar-section h4 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.ai-sidebar-section p {
+    margin: 0;
+    font-size: 0.85rem;
+    color: rgba(15, 23, 42, 0.64);
+}
+
+.ai-sidebar .ai-preset-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.ai-preset {
+    white-space: nowrap;
+    writing-mode: horizontal-tb;
+}
+
+.ai-form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.ai-form .hero-button {
+    align-self: flex-end;
+}
+
+.ai-suite-news h3 {
+    margin: 0 0 12px;
+}
+
+@media (min-width: 1100px) {
+    .ai-suite-body {
+        flex-direction: row;
+        align-items: stretch;
+    }
+
+    .ai-dialog {
+        flex: 1 1 58%;
+    }
+
+    .ai-sidebar {
+        flex: 1 1 42%;
+    }
+}
+
+/* 更优的消息换行体验 */
+.ai-message-bubble {
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+#ai-panel .ai-message-bubble { display: block; }
+
+/* .ai-message-bubble word-break moved above for improved wrapping */
+
+.backtest-hero {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 32px clamp(24px, 6vw, 48px);
+    border-radius: 28px;
+    background: linear-gradient(135deg, rgba(252, 249, 242, 0.98), rgba(244, 237, 221, 0.92));
+    border: 1px solid rgba(148, 133, 102, 0.26);
+    box-shadow: 0 30px 60px rgba(47, 42, 31, 0.18);
+    color: var(--tilt-text-strong);
+}
+
+.backtest-kicker {
+    margin: 0;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    font-size: 0.78rem;
+    color: rgba(94, 84, 63, 0.72);
+}
+
+.backtest-title {
+    margin: 6px 0 10px;
+    font-size: clamp(2rem, 4vw, 2.4rem);
+    color: var(--tilt-text-strong);
+}
+
+.backtest-subtitle {
+    margin: 0;
+    max-width: 560px;
+    font-size: 1rem;
+    color: rgba(72, 63, 46, 0.8);
+}
+
+.hero-bullets {
+    margin: 6px 0 0;
+    padding-left: 1.1rem;
+    list-style: disc;
+    list-style-position: inside;
+    color: rgba(72, 63, 46, 0.78);
+    font-size: 0.95rem;
+    line-height: 1.55;
+}
+
+.hero-bullets li {
+    margin-bottom: 4px;
+}
+
+.hero-bullets strong {
+    color: var(--tilt-text-strong);
+}
+
+.core-metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+    margin: 24px 0 8px;
+}
+
+.core-metric-card {
+    padding: 18px;
+    border-radius: 20px;
+    background: linear-gradient(155deg, rgba(249, 244, 231, 0.92), rgba(242, 235, 218, 0.9));
+    border: 1px solid rgba(196, 174, 120, 0.22);
+    box-shadow: 0 18px 36px rgba(47, 42, 31, 0.15);
+}
+
+.core-metric-name {
+    font-size: 0.9rem;
+    color: rgba(72, 63, 46, 0.78);
+    margin-bottom: 6px;
+}
+
+.core-metric-value {
+    font-size: 1.6rem;
+    font-weight: 600;
+    color: var(--tilt-text-strong);
+    margin: 0;
+}
+
+.core-metric-footnote {
+    font-size: 0.82rem;
+    color: rgba(94, 84, 63, 0.72);
+    margin-top: 6px;
+}
+
+.notice-pro {
+    background: rgba(252, 249, 242, 0.76);
+    border: 1px dashed rgba(148, 133, 102, 0.45);
+}
+
+.notice-pro .panel-title {
+    margin-bottom: 6px;
+}
+
+.notice-pro .hero-button {
+    gap: 6px;
+}
+
+.backtest-tab.focus-ring {
+    outline: 2px solid rgba(196, 174, 120, 0.8);
+    outline-offset: 2px;
+}
+
+.news-ribbon-viewport {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+}
+
+.news-ribbon-viewport::-webkit-scrollbar {
+    display: none;
+}
+
+.news-ribbon-track {
+    display: flex;
+    gap: 24px;
+    perspective: 1100px;
+}
+
+.news-card {
+    position: relative;
+    border-radius: 24px;
+    background: linear-gradient(155deg, rgba(248, 244, 230, 0.95), rgba(240, 234, 216, 0.9));
+    border: 1px solid rgba(148, 133, 102, 0.22);
+    box-shadow: 0 18px 40px rgba(47, 42, 31, 0.24);
+    color: var(--tilt-text-strong);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.news-card[data-url] {
+    cursor: pointer;
+}
+
+.news-card-title {
+    color: var(--tilt-text-strong);
+}
+
+.news-card-snippet,
+.news-card-meta,
+.news-card-time,
+.news-card-heat {
+    color: var(--tilt-text-muted);
+}
+
+.news-card-hover,
+.news-card:hover {
+    border-color: rgba(169, 149, 108, 0.42);
+    box-shadow: 0 26px 48px rgba(47, 42, 31, 0.32);
+    transform: translateY(-8px);
+}
+
+.hero-text,
+.backtest-card {
+    color: var(--tilt-text-strong);
+}
+
+.hero-title,
+.summary-title,
+.backtest-hero-summary h2 {
+    color: var(--tilt-text-strong);
+}
+
+.hero-subtitle,
+.hero-update,
+.summary-tags .hero-chip,
+.backtest-subtitle,
+.backtest-hero-summary ul li,
+.backtest-panel p,
+.backtest-panel li,
+.backtest-panel span,
+.backtest-panel .text-muted {
+    color: var(--tilt-text-muted);
+}
+
+.hero-chip {
+    background: rgba(196, 174, 120, 0.18);
+    border: 1px solid rgba(196, 174, 120, 0.38);
+    box-shadow: inset 0 0 0 1px rgba(196, 174, 120, 0.2);
+    color: var(--tilt-text-strong);
+}
+
+@media (max-width: 991.98px) {
+    .backtest-hero-wrapper {
+        padding: 0 16px;
+    }
+
+    .backtest-hero-wrapper .backtest-intro-card {
+        border-radius: 36px !important;
+    }
+}
+</style>
+{% endblock %}
+
+{% block extra_scripts %}
+{{ block.super }}
+<script src="{% static 'trading/js/history_delete.js' %}"></script>
+<script src="{% static 'trading/js/backtest_submit.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
+{% endblock %}
+
+{% block content %}
+<div id="loading-overlay" class="loading-overlay overlay-hidden" aria-hidden="true">
+    <div class="loading-box loading-box--simple text-white" role="status" aria-live="polite">
+        <div class="simple-loader">
+            <div class="simple-spinner" aria-hidden="true"></div>
+            <p class="mb-1" id="overlay-status-text">{% bilingual "Running flagship analysis…" "正在加载中，请稍候…" %}</p>
+            <p class="mb-0 small text-white-50" id="overlay-sub-status"></p>
+        </div>
+    </div>
+</div>
+
+<div class="backtest-page container-xl">
+    <header class="backtest-hero">
+        <span class="backtest-kicker">Flagship Quant</span>
+        <h1 class="backtest-title">{% bilingual "Flagship Strategy Backtest Hub" "旗舰策略回测中心" %}</h1>
+        <p class="backtest-subtitle">
+            {% bilingual "Select the ticker and time horizon, then launch the flagship ML + risk stack to receive a deep-dive report plus execution guidance." "输入标的与时间区间，即可一键调用机器学习 + 风控组合的旗舰流程，生成深度报告与执行建议。" %}
+        </p>
+        {% if result and result.metrics %}
+            <ul class="hero-bullets hero-bullets--metrics">
+                {% for metric in result.metrics|slice:":3" %}
+                    <li><strong>{{ metric.label }}：</strong>{{ metric.value }}</li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <ul class="hero-bullets">
+                <li>{% bilingual "Automatically searches the optimal ML configuration and calibrates thresholds/probabilities." "自动搜索最佳机器学习参数并完成阈值优化与概率校准。" %}</li>
+                <li>{% bilingual "Loads risk controls and multi-dimensional risk metrics by default." "默认加载风控参数与多维度风险指标。" %}</li>
+                <li>{% bilingual "Download or revisit every report later in the account center." "回测完成后可在账户中心查看或导出报告。" %}</li>
+            </ul>
+        {% endif %}
+    </header>
+</div>
+
+{% if result and result.stats %}
+<div class="backtest-shell container-xl mb-4">
+    <div class="quick-glance">
+        <div class="quick-card">
+            <div class="quick-card-title">{% bilingual "Execution & Label Assumptions" "执行与标签口径" %}</div>
+            <ul class="quick-card-list">
+                <li>{% bilingual "Return path" "执行口径" %}：{{ result.stats.return_path|default:"N/A" }}</li>
+                <li>{% bilingual "Label path" "标签口径" %}：{{ result.stats.label_return_path|default:"N/A" }}</li>
+                {% if result.stats.execution_assumptions.description %}
+                <li>{{ result.stats.execution_assumptions.description }}</li>
+                {% endif %}
+            </ul>
+        </div>
+        <div class="quick-card">
+            <div class="quick-card-title">PFWS / OOS</div>
+            <ul class="quick-card-list">
+                <li>{% bilingual "PFWS policy" "PFWS 策略" %}：{{ result.stats.pfws_policy.status|default:"unknown" }}</li>
+                <li>{% bilingual "Train / Test" "训练 / 测试窗口" %}：{{ result.stats.pfws_train_window|default:"-" }} / {{ result.stats.pfws_test_window|default:"-" }}</li>
+                <li>{% bilingual "Embargo" "隔离期" %}：{{ result.stats.pfws_embargo|default:"-" }}</li>
+                <li class="text-muted small">{{ result.stats.pfws_policy.note|default:"" }}</li>
+            </ul>
+        </div>
+        <div class="quick-card">
+            <div class="quick-card-title">{% bilingual "OOS Stability" "样本外稳定性" %}</div>
+            <ul class="quick-card-list">
+                <li>Penalized Sharpe：{{ result.stats.validation_penalized_sharpe|default:"N/A" }}</li>
+                <li>{% bilingual "Sharpe mean ± std" "Sharpe 均值 ± 标准差" %}：{{ result.stats.validation_sharpe_mean|default:"-" }} ± {{ result.stats.validation_sharpe_std|default:"-" }}</li>
+                <li>{% bilingual "OOS folds" "样本外折数" %}：{{ result.stats.validation_oos_folds|default:"-" }}</li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="backtest-shell container-xl">
+    {% with stories=focus_feed|slice:":10" %}
+    {% if stories %}
+    <section class="news-ribbon" id="news-ribbon" aria-label="{% bilingual 'Market highlights' '市场焦点' %}" data-story-count="{{ stories|length }}">
+        <div class="news-ribbon-head">
+            <span class="news-ribbon-title">{% bilingual "Market Flash" "市场快讯" %}</span>
+            <span class="news-ribbon-meta">{% bilingual "Ranked by traction · auto-scroll (pause on hover) · swipe for more" "按热度筛选 · 自动滚动（悬停可暂停），滑动查看更多" %}</span>
+        </div>
+        <div class="news-ribbon-viewport">
+            <div class="news-ribbon-track">
+                {% for story in stories %}
+                {% with image=story.image|default:focus_placeholder %}
+                <article class="news-card tilt-card{% if not story.image %} news-card-fallback{% endif %}" data-tilt tabindex="0" data-base="1" role="article" {% if story.url %}data-url="{{ story.url }}"{% endif %}>
+                    <div class="news-card-media">
+                        <img src="{{ image }}" alt="{{ story.title|default:_('Market highlight') }}" loading="lazy">
+                    </div>
+                    <div class="news-card-body">
+                        <div class="news-card-meta">
+                            <span class="news-card-badge">
+                                {{ story.source|default:"Global Markets" }}
+                                {% if story.readers %}
+                                    <span class="news-card-heat">{% heat_display story.readers %}</span>
+                                {% endif %}
+                            </span>
+                            {% if story.published %}<span class="news-card-time">{{ story.published }}</span>{% endif %}
+                        </div>
+                        <h2 class="news-card-title">{{ story.title|default:_("Market update") }}</h2>
+                        <p class="news-card-snippet">
+                            {% if story.snippet %}
+                                {{ story.snippet|truncatechars:140 }}
+                            {% else %}
+                                {% bilingual "Tap to read the full brief and stay on top of the move." "点击查看详情，掌握最新市场动向。" %}
+                            {% endif %}
+                        </p>
+                    </div>
+                </article>
+                {% endwith %}
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+    {% else %}
+    <section class="news-ribbon news-ribbon-placeholder" aria-label="{% bilingual 'Market highlight placeholder' '市场焦点占位' %}">
+        <div class="news-placeholder-visual">
+            <span class="news-placeholder-title">{% bilingual "Market highlights" "市场焦点" %}</span>
+            <span class="news-placeholder-subtitle">{% bilingual "Stay tuned for curated headlines." "焦点资讯整理中，请稍候。" %}</span>
+        </div>
+        <div>
+            <h3>{% bilingual "Awaiting the latest highlight" "等待最新市场焦点" %}</h3>
+            <p>{% bilingual "Run a strategy or refresh the feed to see deal-relevant headlines and angles here." "运行一次策略或刷新资讯后，这里会展示与标的相关的最新消息与投资看点。" %}</p>
+        </div>
+    </section>
+    {% endif %}
+    {% endwith %}
+
+    <div class="backtest-workspace">
+
+
+        <div class="backtest-main">
+            <div class="backtest-hero-wrapper">
+                <section class="backtest-card tilt-card backtest-intro-card" data-tilt>
+                    <div class="hero-text">
+                        <span class="hero-eyebrow">Quant Studio</span>
+                        <h1 class="hero-title">{% bilingual "Quantitative Strategy Backtest" "量化投资回测" %}</h1>
+                        <p class="hero-subtitle">{% bilingual "A single canvas for data, models, and risk controls—delivering an execution-ready playbook." "汇聚数据、模型与风控，生成可立即执行的投资线路图。" %}</p>
+                        <div class="hero-chips">
+                            <span class="hero-chip">
+                                {% bilingual "Primary ticker:" "主要标的：" %}
+                                {% if result.ticker %}
+                                    {{ result.ticker }}
+                                {% else %}
+                                    {% bilingual "Pending" "等待输入" %}
+                                {% endif %}
+                            </span>
+                            <span class="hero-chip">
+                                {% bilingual "Risk profile:" "风险偏好：" %}
+                                {% if result.risk_profile %}
+                                    {{ result.risk_profile }}
+                                {% else %}
+                                    {% bilingual "Not set" "未指定" %}
+                                {% endif %}
+                            </span>
+                            <span class="hero-chip">
+                                {% bilingual "Engine:" "策略引擎：" %}
+                                {% if result.engine_label %}
+                                    {{ result.engine_label }}
+                                {% else %}
+                                    {% bilingual "Select a strategy" "选择策略" %}
+                                {% endif %}
+                            </span>
+                            {% if result and result.capital %}
+                                <span class="hero-chip">{% bilingual "Capital base:" "资金规模：" %} {{ result.capital|floatformat:0|intcomma }}</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="hero-actions-wrapper">
+                        <p class="hero-update">
+                            {% if result.quick_summary.0 %}
+                                {{ result.quick_summary.0 }}
+                            {% else %}
+                                {% bilingual "Complete the form to generate a bespoke backtest with risk-return guidance and pacing cues." "填写参数后即可生成带有风险-收益指引与节奏建议的专属回测。" %}
+                            {% endif %}
+                        </p>
+                        <div class="hero-actions">
+                            <a class="hero-button solid" href="#analysis-form" data-panel-target="config">{% bilingual "Configure Strategy" "开始配置" %}</a>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+{% if not result %}
+            <section class="backtest-card tilt-card backtest-form-card" data-tilt>
+                {% include "trading/includes/analysis_form.html" %}
+            </section>
+{% endif %}
+
+{% if result %}
+            <div class="quick-glance" id="quick-glance">
+                <div class="quick-card">
+                    <div class="quick-card-title">{% bilingual "Core Metrics" "核心指标" %}</div>
+                    <ul class="quick-card-list">
+                        {% for metric in result.metrics|slice:":3" %}
+                            <li><strong>{{ metric.label }}：</strong>{{ metric.value }}</li>
+                        {% empty %}
+                            <li class="text-muted">{% bilingual "Metrics will populate once the run completes." "等待生成核心指标。" %}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% with summary_card=result.executive_briefing|first %}
+                    {% if summary_card %}
+                        <div class="quick-card">
+                            <div class="quick-card-title">{{ summary_card.title }}</div>
+                            <p class="text-muted mb-2">{{ summary_card.body }}</p>
+                            {% if summary_card.status %}<p class="mb-0"><strong>{% bilingual "Consensus:" "共识：" %}</strong>{{ summary_card.status }}</p>{% endif %}
+                        </div>
+                    {% endif %}
+                {% endwith %}
+                {% if result.scenario_simulation and result.scenario_simulation.available %}
+                    <div class="quick-card">
+                        <div class="quick-card-title">{% bilingual "Scenario Glimpse" "情景速览" %}</div>
+                        <ul class="quick-card-list">
+                            {% for item in result.scenario_simulation.scenarios|slice:":2" %}
+                                <li>{{ item.label }}：{{ item.return }}</li>
+                            {% endfor %}
+                        </ul>
+                        {% if result.scenario_simulation.expected_return %}
+                            <p class="text-muted mb-0">{% bilingual "Avg" "均值" %} {{ result.scenario_simulation.expected_return }} · {% bilingual "Vol" "波动" %} {{ result.scenario_simulation.volatility }}</p>
+                        {% endif %}
+                    </div>
+                {% endif %}
+            </div>
+            <section class="backtest-card backtest-report">
+                <aside class="backtest-report-nav" aria-label="{% trans 'Analysis navigation' %}">
+                    <button type="button" class="backtest-tab active" data-panel="overview">{% bilingual "Executive Overview" "核心概览" %}</button>
+                    <button type="button" class="backtest-tab" data-panel="config">{% bilingual "Input Settings" "配置参数" %}</button>
+                    <button type="button" class="backtest-tab" data-panel="advisor">{% bilingual "Advisor Plan" "金融顾问方案" %}</button>
+                    <button type="button" class="backtest-tab" data-panel="charts">{% bilingual "Charts" "图表分析" %}</button>
+                    <button type="button" class="backtest-tab" data-panel="signals">{% bilingual "Signal History" "历史分析" %}</button>
+                    <button type="button" class="backtest-tab" data-panel="history">{% bilingual "Backtest Records" "历史回测" %}</button>
+                    <button type="button" class="backtest-tab" data-panel="expert">{% bilingual "Professional Data" "专业数据" %}</button>
+                    <button type="button" class="backtest-tab" data-panel="ai">{% bilingual "AI Insights" "AI 研判" %}</button>
+                </aside>
+
+                <div class="backtest-panels">
+                    <div class="backtest-panel active" data-panel="overview" id="overview-pane">
+                <div class="summary-header">
+                    <div>
+                        <h2 class="summary-title">{% blocktrans with ticker=result.ticker %}Performance Overview · {{ ticker }}{% endblocktrans %}</h2>
+                        <div class="summary-tags">
+                            {% if result.risk_profile %}
+                                <span class="hero-chip">{% trans "Risk profile:" %} {{ result.risk_profile }}</span>
+                            {% endif %}
+                            {% if result.capital %}
+                                <span class="hero-chip">{% trans "Capital:" %} {{ result.capital|floatformat:0|intcomma }}</span>
+                            {% endif %}
+                            {% if result.engine_label %}
+                                <span class="hero-chip">{% trans "Engine:" %} {{ result.engine_label }}</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <span class="summary-period">{% blocktrans with start=result.start_date end=result.end_date %}Window: {{ start }} → {{ end }}{% endblocktrans %}</span>
+                </div>
+
+                {% if result_warnings %}
+                    <div class="alert alert-warning">
+                        {% for warn in result_warnings %}<div>{{ warn }}</div>{% endfor %}
+                    </div>
+                {% endif %}
+
+                {% if result.metrics %}
+                    <div class="core-metric-grid">
+                        {% for metric in result.metrics|slice:":3" %}
+                            <article class="core-metric-card">
+                                <div class="core-metric-name">{{ metric.label }}</div>
+                                <p class="core-metric-value">{{ metric.value }}</p>
+                                {% if metric.explain %}<div class="core-metric-footnote">{{ metric.explain }}</div>{% endif %}
+                            </article>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+
+                {% if result.executive_briefing %}
+                    <section class="briefing-deck">
+                        <div class="briefing-grid">
+                            {% for card in result.executive_briefing %}
+                                <article class="briefing-card">
+                                    <div class="briefing-head">
+                                        <h3 class="briefing-title">{{ card.title }}</h3>
+                                        {% if card.status %}<span class="briefing-status">{{ card.status }}</span>{% endif %}
+                                    </div>
+                                    <p class="briefing-body">{{ card.body }}</p>
+                                    {% if card.cta_href %}
+                                        <a class="briefing-link" href="{{ card.cta_href }}" rel="noopener">{{ card.cta_label|default:"查看详情" }}</a>
+                                    {% endif %}
+                                </article>
+                            {% endfor %}
+                        </div>
+                    </section>
+                {% endif %}
+
+                {% if result.user_questions %}
+                    <div class="report-card">
+                        <h3 class="panel-title">关键问题解答</h3>
+                        <ul class="panel-list">
+                            {% for qa in result.user_questions %}
+                                <li><strong>{{ qa.question }} </strong>{{ qa.answer }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                {% endif %}
+
+                {% if result.advisor_playbook and result.advisor_playbook.available %}
+                    <div class="report-card playbook-summary">
+                        <h3 class="panel-title">AI 投顾摘要</h3>
+                        <div class="playbook-grid compact">
+                            {% for section in result.advisor_playbook.sections %}
+                                <div class="playbook-section">
+                                    <div class="playbook-head">
+                                        <span class="playbook-title">{{ section.title }}</span>
+                                        {% if section.tag %}<span class="playbook-tag">{{ section.tag }}</span>{% endif %}
+                                    </div>
+                                    <ul class="playbook-points">
+                                        {% for point in section.points|slice:":3" %}
+                                            <li>{{ point }}</li>
+                                        {% endfor %}
+                                    </ul>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                {% endif %}
+
+                {% if result.quick_summary %}
+                    <div class="report-card accent">
+                        <h3 class="panel-title">一眼看懂 · 核心亮点</h3>
+                        <ul class="panel-list">
+                            {% for item in result.quick_summary|slice:":4" %}<li>{{ item }}</li>{% endfor %}
+                        </ul>
+                    </div>
+                {% endif %}
+                {% if result.scenario_simulation and result.scenario_simulation.available %}
+                    <section class="scenario-board" id="scenario-board">
+                        <div class="scenario-head">
+                            <h3 class="panel-title">未来 {{ result.scenario_simulation.horizon_days }} 日情景模拟</h3>
+                            <span class="hero-chip ghost">波动率 {{ result.scenario_simulation.volatility }} · 最大回撤 {{ result.scenario_simulation.max_drawdown }}</span>
+                            {% if result.scenario_simulation.expected_return %}
+                                <span class="hero-chip ghost">均值 {{ result.scenario_simulation.expected_return }}</span>
+                            {% endif %}
+                        </div>
+                        <div class="scenario-grid">
+                            {% for item in result.scenario_simulation.scenarios %}
+                                <div class="scenario-card">
+                                    <h4>{{ item.label }}</h4>
+                                    <p class="scenario-return">{{ item.return }}</p>
+                                    <p class="text-muted small mb-2">{{ item.description }}</p>
+                                    <p class="text-muted small mb-0">{{ item.allocation_hint }}</p>
+                                </div>
+                            {% endfor %}
+                        </div>
+                        {% if result.scenario_simulation.insight %}
+                            <p class="text-muted small mb-2">{{ result.scenario_simulation.insight }}</p>
+                        {% endif %}
+                        <p class="text-muted small mb-0">{{ result.scenario_simulation.notes }}</p>
+                    </section>
+                {% endif %}
+
+                {% if result.rl_playbook and result.rl_playbook.available %}
+                    <section class="rl-playbook" id="rl-playbook">
+                        <div class="rl-head">
+                            <h3 class="panel-title mb-0">强化学习战术盘</h3>
+                            {% if result.rl_playbook.edge %}
+                                <span class="hero-chip ghost">代理期望日边际 {{ result.rl_playbook.edge }}</span>
+                            {% endif %}
+                        </div>
+                        <div class="rl-grid">
+                            {% for policy in result.rl_playbook.policies %}
+                                <article class="rl-card">
+                                    <span class="rl-state">{{ policy.state }}</span>
+                                    <span class="rl-action">{{ policy.action }}</span>
+                                    <p class="text-muted small mb-1">{{ policy.rationale }}</p>
+                                    <span class="rl-edge">{{ policy.edge }}</span>
+                                </article>
+                            {% endfor %}
+                        </div>
+                        {% if result.rl_playbook.insight %}
+                            <p class="text-muted small mb-0 mt-3">{{ result.rl_playbook.insight }}</p>
+                        {% endif %}
+                    </section>
+                {% endif %}
+
+                {% if result.opportunity_radar and result.opportunity_radar.available %}
+                    <section class="opportunity-radar" id="opportunity-radar">
+                        <div class="opportunity-head">
+                            <h3 class="panel-title">机会雷达</h3>
+                            <p class="text-muted mb-0">{{ result.opportunity_radar.summary }}</p>
+                        </div>
+                        <div class="opportunity-grid">
+                            <div>
+                                <h4>涨幅领先</h4>
+                                <ul class="panel-list muted">
+                                    {% for row in result.opportunity_radar.leaders %}
+                                        <li><strong>{{ row.ticker }}</strong> · {{ row.name }} → {{ row.change_pct|floatformat:2 }}%</li>
+                                    {% empty %}
+                                        <li class="text-muted">暂无数据</li>
+                                    {% endfor %}
+                                </ul>
+                            </div>
+                            <div>
+                                <h4>健康回调</h4>
+                                <ul class="panel-list muted">
+                                    {% for row in result.opportunity_radar.laggards %}
+                                        <li><strong>{{ row.ticker }}</strong> · {{ row.name }} → {{ row.change_pct|floatformat:2 }}%</li>
+                                    {% empty %}
+                                        <li class="text-muted">暂无数据</li>
+                                    {% endfor %}
+                                </ul>
+                            </div>
+                            <div>
+                                <h4>稳健观察</h4>
+                                <ul class="panel-list muted">
+                                    {% for row in result.opportunity_radar.steady %}
+                                        <li><strong>{{ row.ticker }}</strong> · {{ row.name }} → {{ row.change_pct|floatformat:2 }}%</li>
+                                    {% empty %}
+                                        <li class="text-muted">暂无数据</li>
+                                    {% endfor %}
+                                </ul>
+                            </div>
+                        </div>
+                        {% if result.opportunity_radar.insight %}
+                            <p class="text-muted small mt-3">{{ result.opportunity_radar.insight }}</p>
+                        {% endif %}
+                    </section>
+                {% endif %}
+
+                {% if result.action_plan %}
+                    <div class="report-card">
+                        <h3 class="panel-title">执行清单（面向 {{ result.experience_label }}）</h3>
+                        <div class="panel-list-group">
+                            {% for step in result.action_plan %}
+                                <div class="panel-step">
+                                    <div class="panel-step-head">
+                                        <span class="panel-step-title">{{ step.title }}</span>
+                                        <span class="panel-step-tag">{{ step.priority }}优先</span>
+                                    </div>
+                                    <p class="text-muted mb-0">{{ step.detail }}</p>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                {% endif %}
+
+                {% if result.risk_alerts %}
+                    <div class="report-card warn">
+                        <h3 class="panel-title">风险提醒</h3>
+                        <ul class="panel-list">
+                            {% for alert in result.risk_alerts %}<li>{{ alert }}</li>{% endfor %}
+                        </ul>
+                    </div>
+                {% endif %}
+
+                {% if result.hyperopt_report %}
+                    <div class="report-card accent hyperopt-card">
+                        <h3 class="panel-title">自动调参结果</h3>
+                        <p class="text-muted mb-1">
+                            模型：{{ result.hyperopt_report.engine|upper }} · trials {{ result.hyperopt_report.trials_ran }} · score {{ result.hyperopt_report.best_score|floatformat:2 }}
+                        </p>
+                        <p class="text-muted mb-2">
+                            最佳阈值：入场 {{ result.hyperopt_report.entry_threshold|floatformat:2 }} / 出场 {{ result.hyperopt_report.exit_threshold|floatformat:2 }}
+                        </p>
+                        {% if result.hyperopt_report.ml_params %}
+                            <ul class="panel-list">
+                                {% for key, value in result.hyperopt_report.ml_params|dictsort:"key"|slice:":4" %}
+                                    <li>{{ key }} → {{ value }}</li>
+                                {% endfor %}
+                            </ul>
+                        {% endif %}
+                        {% if result.hyperopt_report.fold_metrics %}
+                            <p class="text-muted small mb-0">验证集表现：Sharpe {{ result.hyperopt_report.fold_metrics.sharpe|floatformat:2 }} · 命中率 {{ result.hyperopt_report.fold_metrics.hit_ratio|floatformat:2 }}</p>
+                        {% endif %}
+                    </div>
+                {% endif %}
+
+                                {% if result.education_tips %}
+                    <div class="report-card subtle">
+                        <h3 class="panel-title">补充知识</h3>
+                        <ul class="panel-list">
+                            {% for tip in result.education_tips %}<li>{{ tip }}</li>{% endfor %}
+                        </ul>
+                    </div>
+                {% endif %}
+
+                <div class="report-card subtle notice-pro">
+                    <h3 class="panel-title">想看更详细的数据？</h3>
+                    <p class="text-muted mb-2">专业投资人可切换到“专业数据”面板，查看完整回测指标、风险报表与模型细节。</p>
+                    <button type="button" class="hero-button ghost xsmall js-open-expert">打开专业数据</button>
+                </div>
+            </div>
+
+            <div class="backtest-panel" data-panel="config" id="config-pane">
+                {% include "trading/includes/analysis_form.html" %}
+            </div>
+            <div class="backtest-panel" data-panel="advisor" id="advisor-pane">
+                            <div class="report-card subtle mb-3">
+                                <h3 class="panel-title">多模型顾问说明</h3>
+                                <p class="text-muted mb-1">
+                                    顾问方案结合机器学习主策略、深度信号与因子权重，输出可执行的配置建议。模型权重和风险雷达结果已同步纳入方案。
+                                </p>
+                                {% if result.model_weights and result.model_weights.available %}
+                                    <p class="text-muted mb-0">
+                                        当前权重推荐：{% for item in result.model_weights.allocations|slice:":3" %}{{ item.name }} {{ item.weight|floatformat:2 }}{% if not forloop.last %} · {% endif %}{% endfor %}。
+                                    </p>
+                                {% endif %}
+                            </div>
+                            {% if result.advisor_playbook and result.advisor_playbook.available %}
+                                <section class="advisor-playbook">
+                                    <div class="advisor-playbook-head">
+                                        <h3 class="panel-title mb-1">一页投资剧本</h3>
+                                        <p class="text-muted mb-0">将盈利预期、执行步骤、风险防守与市场机会串联成可执行流程。</p>
+                                    </div>
+                                    <div class="playbook-grid">
+                                        {% for section in result.advisor_playbook.sections %}
+                                            <article class="playbook-section">
+                                                <div class="playbook-head">
+                                                    <span class="playbook-title">{{ section.title }}</span>
+                                                    {% if section.tag %}<span class="playbook-tag">{{ section.tag }}</span>{% endif %}
+                                                </div>
+                                                <ul class="playbook-points">
+                                                    {% for point in section.points %}
+                                                        <li>{{ point }}</li>
+                                                    {% endfor %}
+                                                </ul>
+                                            </article>
+                                        {% endfor %}
+                                    </div>
+                                </section>
+                            {% endif %}
+                            {% if result.recommendations %}
+                                <div class="advisor-grid">
+                                    {% for plan in result.recommendations %}
+                                        <div class="advisor-card">
+                                            <div class="advisor-head">
+                                                <span class="advisor-title">{{ plan.title }}</span>
+                                                <span class="advisor-subtitle">{{ plan.subtitle }}</span>
+                                            </div>
+                                            <ul class="panel-list">
+                                                {% for item in plan.allocation %}<li>{{ item }}</li>{% endfor %}
+                                            </ul>
+                                            {% if plan.projection %}<p class="text-muted small mb-2">{{ plan.projection }}</p>{% endif %}
+                                            {% if plan.success_probability %}
+                                                <p class="text-muted small mb-2">正收益概率估计：{{ plan.success_probability|floatformat:1 }}%</p>
+                                            {% endif %}
+                                            <p class="text-muted small mb-3">{{ plan.actions }}</p>
+                                            {% if plan.breakdown %}
+                                                <div class="table-responsive">
+                                                    <table class="table table-sm table-borderless align-middle caption-top mb-3">
+                                                        <caption class="small text-muted">资金分配建议</caption>
+                                                        <thead class="small text-muted">
+                                                            <tr>
+                                                                <th scope="col">资产/策略</th>
+                                                                <th scope="col" class="text-end">占比</th>
+                                                                <th scope="col" class="text-end">金额</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody class="small">
+                                                            {% for row in plan.breakdown %}
+                                                                <tr>
+                                                                    <td>{{ row.label }}</td>
+                                                                    <td class="text-end">{{ row.percent }}</td>
+                                                                    <td class="text-end">{{ row.amount }}</td>
+                                                                </tr>
+                                                            {% endfor %}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            {% endif %}
+                                            {% if plan.timeline %}
+                                                <div class="timeline-list">
+                                                    {% for phase in plan.timeline %}
+                                                        <div class="timeline-step">
+                                                            <strong>{{ phase.phase }}</strong>
+                                                            <p class="mb-1 text-muted">基准情形：{{ phase.base }}</p>
+                                                            <p class="mb-1 text-muted">最佳情形：{{ phase.best }}</p>
+                                                            <p class="mb-0 text-muted">最差情形：{{ phase.worst }}</p>
+                                                        </div>
+                                                    {% endfor %}
+                                                </div>
+                                            {% endif %}
+                                        </div>
+                                    {% endfor %}
+                                </div>
+                            {% else %}
+                                <p class="text-muted mb-0">尚未生成顾问方案，请先运行回测。</p>
+                            {% endif %}
+                        </div>
+
+                        <div class="backtest-panel" data-panel="charts" id="charts-pane">
+                            <p class="text-muted mb-3">
+                                图表依据 PDF 中的多周期统计与情景分析框架绘制，包括累计收益、风险对比及未来情景预测，可与“知识图谱”“宏观脉搏”折叠卡配合查看。
+                            </p>
+                            {% if result.charts %}
+                            <div class="chart-grid">
+                                {% for chart in result.charts %}
+                                <figure class="chart-card">
+                                    <img src="data:image/png;base64,{{ chart.img }}" alt="{{ chart.title }}" class="chart-img">
+                                    <figcaption class="chart-caption">{{ chart.title }}</figcaption>
+                                </figure>
+                                {% endfor %}
+                            </div>
+                            {% else %}
+                            <p class="text-muted mb-0">图表模块已关闭，可在参数区勾选“生成图表”。</p>
+                            {% endif %}
+                        </div>
+
+                        <div class="backtest-panel" data-panel="signals" id="signals-pane">
+                            <p class="text-muted mb-3">
+                                历史明细表结合了特征信号、概率与持仓变动，可对照“因子有效性”折叠卡验证信号质量。如需快速查看，可使用下方按钮折叠表格。
+                            </p>
+                            <button class="hero-button ghost small mb-3" id="toggle-signals">隐藏历史明细</button>
+                            <div class="table-responsive" id="signals-table">
+                                <table class="table table-sm align-middle">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th scope="col">日期</th>
+                                            <th scope="col">信号</th>
+                                            <th scope="col">持仓</th>
+                                            <th scope="col">收盘价</th>
+                                            <th scope="col">短均线</th>
+                                            <th scope="col">长均线</th>
+                                            <th scope="col">RSI</th>
+                                            <th scope="col">模型概率</th>
+                                            <th scope="col">日收益率</th>
+                                            <th scope="col">单日成本</th>
+                                            <th scope="col">杠杆</th>
+                                            <th scope="col">策略净值</th>
+                                            <th scope="col">买入持有净值</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for row in result.recent_rows %}
+                                        <tr>
+                                            <td>{{ row.date }}</td>
+                                            <td>{{ row.signal }}</td>
+                                            <td>{{ row.position }}</td>
+                                            <td>{{ row.adj_close }}</td>
+                                            <td>{{ row.sma_short }}</td>
+                                            <td>{{ row.sma_long }}</td>
+                                            <td>{{ row.rsi }}</td>
+                                            <td>{% if row.probability is not None %}{{ row.probability|floatformat:3 }}{% else %}—{% endif %}</td>
+                                            <td>{{ row.daily_return }}</td>
+                                            <td>{% if row.transaction_cost is not None %}{{ row.transaction_cost|floatformat:5 }}{% else %}—{% endif %}</td>
+                                            <td>{{ row.leverage }}</td>
+                                            <td>{{ row.cum_strategy }}</td>
+                                            <td>{{ row.cum_buy_hold }}</td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+            {% with delete_template=history_delete_template|default:'' %}
+            {% if not delete_template %}
+            {% url 'trading:delete_history' record_id='placeholder' as delete_template %}
+            {% endif %}
+            {% with load_base=history_load_url|default:request.path %}
+                        <div class="backtest-panel" data-panel="history" id="history-pane">
+                            {% include "trading/includes/history_panel.html" with history_runs=history_runs history_message=history_message history_error=history_error accordion_id="history-accordion" empty_id="history-empty" delete_url_template=delete_template load_url=load_base %}
+                        </div>
+            {% endwith %}
+            {% endwith %}
+
+                        <div class="backtest-panel" data-panel="expert" id="expert-pane">
+                            {% include "trading/includes/backtest_expert_panel.html" %}
+                        </div>
+
+
+                        <div class="backtest-panel" data-panel="ai" id="ai-panel">
+                            <div class="ai-suite">
+                                <div class="ai-suite-card">
+                                    <header class="ai-suite-top">
+                                        <div class="ai-suite-title">
+                                            <span class="ai-suite-badge">AI 研判</span>
+                                            <h3>智能投研中枢</h3>
+                                            <p>AI 基于最新回测数据给出要点解读，支持快速追问或输入自定义问题。</p>
+                                        </div>
+                                    </header>
+
+                                    <section class="ai-chat-surface">
+                                        <div id="ai-status" class="ai-status-chip ai-status-info">AI 正在准备分析，请稍候…</div>
+                                        <div id="ai-messages" class="ai-chat-log"></div>
+                                        <div id="ai-thinking" class="accordion ai-thinking-panel d-none"></div>
+                                    </section>
+
+                                    <section class="ai-actions">
+                                        <form id="ai-chat-form" class="ai-action-block ai-form">
+                                            <div class="ai-form-toolbar">
+                                                <h4 class="ai-form-title">自定义问题</h4>
+                                                <div class="ai-toolbar-controls">
+                                                    <label for="ai-model-input" class="ai-model-label">模型</label>
+                                                    <input id="ai-model-input" class="ai-model-input" type="text" autocomplete="off" placeholder="如 llama3.2" list="ai-model-options">
+                                                    <datalist id="ai-model-options"></datalist>
+                                                    <button type="button" class="hero-button ghost xsmall" id="ai-toggle-web" aria-pressed="false" title="开启/关闭：联网搜索">🌐 联网：关</button>
+                                                    <button type="button" class="hero-button ghost xsmall" id="ai-clear-history" title="清空本页 AI 对话记录">🗑 清空记录</button>
+                                                </div>
+                                                <p class="ai-toggle-hint">默认关闭联网，若需要实时资讯可手动开启上方按钮。</p>
+                                            </div>
+                                            <textarea id="ai-input" class="form-control" rows="3" placeholder="写下你的问题，例如：我现在应当怎么分批建仓？" required></textarea>
+                                            <div class="ai-form-actions">
+                                                <button type="submit" class="hero-button solid small">发送问题</button>
+                                            </div>
+                                        </form>
+                                    </section>
+                                </div>
+                            </div>
+                        </div>
+
+            
+        </div>
+    </section>
+    {% endif %}
+
+
+
+<script nonce="{{ csp_nonce }}">
+document.addEventListener('DOMContentLoaded', () => {
+    const ribbon = document.getElementById('news-ribbon');
+    if (!ribbon) return;
+
+    const viewport = ribbon.querySelector('.news-ribbon-viewport');
+    const track = ribbon.querySelector('.news-ribbon-track');
+    if (!viewport || !track || !track.children.length) return;
+
+    const cards = Array.from(track.children).filter((node) => node.classList && node.classList.contains('news-card'));
+    if (!cards.length) return;
+
+    const cardMarkup = cards.map((card) => card.cloneNode(true));
+    const prefersReduce = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+    let reducedMotion = prefersReduce ? prefersReduce.matches : false;
+    const baseSpeed = parseInt(ribbon.dataset.storyCount || cards.length, 10) >= 5 ? 90 : 70;
+    let pxPerSecond = reducedMotion ? baseSpeed * 0.5 : baseSpeed;
+
+    let laneWidth = 0;
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartScroll = 0;
+    let hoverPause = false;
+    let wheelPause = false;
+    let pauseTimer = null;
+    let rafLastTs = 0;
+
+    const setScrollInstant = (value) => {
+        viewport.scrollTo({ left: value, behavior: 'auto' });
+    };
+
+    const rebuild = () => {
+        const fragment = document.createDocumentFragment();
+        cardMarkup.forEach((node) => {
+            const clone = node.cloneNode(true);
+            clone.removeAttribute('aria-hidden');
+            clone.tabIndex = node.tabIndex >= 0 ? node.tabIndex : 0;
+            fragment.appendChild(clone);
+        });
+        cardMarkup.forEach((node) => {
+            const clone = node.cloneNode(true);
+            clone.setAttribute('aria-hidden', 'true');
+            clone.tabIndex = -1;
+            fragment.appendChild(clone);
+        });
+        track.innerHTML = '';
+        track.appendChild(fragment);
+        laneWidth = Math.max(1, Math.round(track.scrollWidth / 2));
+        setScrollInstant(0);
+    };
+
+    rebuild();
+
+    const normalize = () => {
+        if (!laneWidth) return;
+        if (viewport.scrollLeft >= laneWidth) {
+            setScrollInstant(viewport.scrollLeft - laneWidth);
+        } else if (viewport.scrollLeft < 0) {
+            setScrollInstant(viewport.scrollLeft + laneWidth);
+        }
+    };
+
+    const shouldRun = () => !reducedMotion && !hoverPause && !wheelPause && !isDragging;
+
+    const ticker = (ts) => {
+        if (!rafLastTs) rafLastTs = ts;
+        const delta = ts - rafLastTs;
+        rafLastTs = ts;
+        if (shouldRun() && laneWidth > 1) {
+            viewport.scrollLeft += (delta / 1000) * pxPerSecond;
+            normalize();
+        }
+        window.requestAnimationFrame(ticker);
+    };
+    window.requestAnimationFrame(ticker);
+
+    const scheduleWheelResume = (delay = 900) => {
+        window.clearTimeout(pauseTimer);
+        pauseTimer = window.setTimeout(() => {
+            wheelPause = false;
+        }, delay);
+    };
+
+    viewport.addEventListener('pointerdown', (event) => {
+        isDragging = true;
+        dragStartX = event.clientX;
+        dragStartScroll = viewport.scrollLeft;
+        viewport.setPointerCapture(event.pointerId);
+    });
+    viewport.addEventListener('pointermove', (event) => {
+        if (!isDragging) return;
+        const delta = event.clientX - dragStartX;
+        setScrollInstant(dragStartScroll - delta);
+        normalize();
+        if (event.cancelable) event.preventDefault();
+    });
+    const finishDrag = (event) => {
+        if (!isDragging) return;
+        isDragging = false;
+        if (event.pointerId) viewport.releasePointerCapture(event.pointerId);
+    };
+    viewport.addEventListener('pointerup', finishDrag);
+    viewport.addEventListener('pointercancel', finishDrag);
+
+    viewport.addEventListener(
+        'wheel',
+        (event) => {
+            event.preventDefault();
+            const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+            setScrollInstant(viewport.scrollLeft + delta);
+            normalize();
+            wheelPause = true;
+            scheduleWheelResume(delta > 40 ? 1600 : 900);
+        },
+        { passive: false },
+    );
+
+    viewport.addEventListener('mouseenter', () => {
+        hoverPause = true;
+    });
+    viewport.addEventListener('mouseleave', () => {
+        hoverPause = false;
+    });
+
+    track.addEventListener('mouseover', (event) => {
+        const card = event.target.closest('.news-card');
+        if (!card) return;
+        if (event.relatedTarget && card.contains(event.relatedTarget)) return;
+        hoverPause = true;
+        card.classList.add('news-card-hover');
+    });
+    track.addEventListener('mouseout', (event) => {
+        const card = event.target.closest('.news-card');
+        if (!card) return;
+        if (event.relatedTarget && card.contains(event.relatedTarget)) return;
+        hoverPause = false;
+        card.classList.remove('news-card-hover');
+    });
+
+    track.addEventListener('focusin', (event) => {
+        if (!event.target.classList.contains('news-card')) return;
+        hoverPause = true;
+        event.target.classList.add('news-card-hover');
+    });
+    track.addEventListener('focusout', (event) => {
+        if (!event.target.classList.contains('news-card')) return;
+        hoverPause = false;
+        event.target.classList.remove('news-card-hover');
+    });
+
+    const openCard = (card) => {
+        if (!card) return;
+        const url = card.getAttribute('data-url');
+        if (url) window.open(url, '_blank', 'noopener');
+    };
+    track.addEventListener('click', (event) => {
+        if (isDragging) return;
+        const card = event.target.closest('.news-card[data-url]');
+        openCard(card);
+    });
+    track.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        const card = event.target.closest('.news-card[data-url]');
+        if (!card) return;
+        event.preventDefault();
+        openCard(card);
+    });
+
+    const refresh = () => {
+        const snapshot = laneWidth ? viewport.scrollLeft % laneWidth : 0;
+        rebuild();
+        if (snapshot) {
+            setScrollInstant(snapshot);
+        }
+    };
+
+    let resizeTimer = null;
+    window.addEventListener('resize', () => {
+        if (resizeTimer) window.clearTimeout(resizeTimer);
+        resizeTimer = window.setTimeout(refresh, 220);
+    });
+    window.setTimeout(refresh, 400);
+
+    document.addEventListener('visibilitychange', () => {
+        hoverPause = document.hidden;
+    });
+
+    if (prefersReduce) {
+        const handleMotion = (event) => {
+            reducedMotion = !!event.matches;
+            pxPerSecond = reducedMotion ? baseSpeed * 0.5 : baseSpeed;
+        };
+        if (typeof prefersReduce.addEventListener === 'function') {
+            prefersReduce.addEventListener('change', handleMotion);
+        } else if (typeof prefersReduce.addListener === 'function') {
+            prefersReduce.addListener(handleMotion);
+        }
+    }
+});
+</script>
+
+<script nonce="{{ csp_nonce }}">
+const reportContext = {% if result %}JSON.parse('{{ result_json|escapejs }}'){% else %}{}{% endif %};
+const AI_FETCH_TIMEOUT_MS = {{ ai_fetch_timeout_ms|default:120000 }};
+if (!reportContext.chat_history) {
+    reportContext.chat_history = [];
+}
+let chatHistory = reportContext.chat_history.slice();
+let lastAiAnswer = (reportContext.last_ai_answer || '').trim();
+const fromHistory = !!reportContext.from_history;
+const docLang = (document.documentElement.getAttribute('lang') || navigator.language || '').toLowerCase();
+const langIsZh = docLang.startsWith('zh');
+const TASK_ENDPOINT = "{% url 'trading:api_v1_backtest_tasks' %}";
+const TASK_STATUS_TEMPLATE = "{% url 'trading:api_v1_task_status' task_id='TASK_ID_PLACEHOLDER' %}";
+const HISTORY_LOAD_BASE = "{{ history_load_url|default:''|escapejs }}";
+const BACKTEST_PATH = "{% url 'trading:backtest' %}";
+const overlayDefaultText = langIsZh ? "正在加载中，请稍候…" : "Running flagship analysis…";
+const overlayDefaultSubText = langIsZh
+    ? "请保持页面打开，任务完成后会自动跳转。"
+    : "Keep this page open; you'll be redirected once the report is ready.";
+const csrfInput =
+    document.querySelector('#analysis-form input[name=csrfmiddlewaretoken]') ||
+    document.querySelector('input[name=csrfmiddlewaretoken]');
+const csrfToken = csrfInput ? csrfInput.value : '';
+const TASK_POLL_INTERVAL_MS = 2500;
+const TASK_MAX_WAIT_MS = 10 * 60 * 1000; // 10 分钟
+const TASK_REFRESH_INTERVAL = 2500;
+const aiText = langIsZh
+    ? {
+          hideSignals: '隐藏历史明细',
+          showSignals: '显示历史明细',
+          webOn: '🌐 联网：开',
+          webOff: '🌐 联网：关',
+          calloutRealtime: '实时资讯引用',
+          calloutQuick: '快速解读',
+          calloutNotice: '注意',
+          thinkingPlaceholder: 'AI 正在分析',
+          webResultDefault: '实时资讯',
+          webResultHeading: '联网参考',
+          assistantRole: 'AI 投研',
+          userRole: '你的提问',
+          badgeOnline: '联网分析',
+          badgeOffline: '回测解读',
+          badgeUser: '自定义提问',
+          reasoningDefault: '推演',
+          reasoningWeb: '联网检索',
+          reasoningReview: '复核推演',
+          stepStatusWarn: '需关注',
+          stepStatusOk: '推演',
+          statusReadyHistory: 'AI 助手已准备就绪，可继续提问。',
+          statusReadyFresh: 'AI 助手已准备就绪，可直接输入问题。',
+          confirmClear: '确定要清空本页的 AI 对话记录吗？',
+          statusHistoryCleared: 'AI 历史已清空，可重新发起分析或提问。',
+          promptEnableWeb: '需要联网搜索前，请先点击上方的“🌐 联网”按钮以启用实时检索。',
+          statusWebOff: '联网已关闭，请先启用再重试。',
+          statusFetching: 'AI 正在联网检索，请稍候…',
+          statusAnalyzing: 'AI 正在分析，请稍候…',
+          statusComplete: 'AI 分析完成，可继续提问。',
+          statusTimeout: 'AI 分析超过 2 分钟已自动取消，请稍后重试。',
+          statusUnavailable: 'AI 服务暂时不可用，请稍后重试。',
+          apology: '抱歉，暂时无法获取新的投资建议。',
+          statusSynthesizing: 'AI 正在生成整体解读…',
+          statusSummaryMissing: 'AI 总结暂未生成，可稍后手动提问。',
+      }
+    : {
+          hideSignals: 'Hide signal details',
+          showSignals: 'Show signal details',
+          webOn: '🌐 Web: On',
+          webOff: '🌐 Web: Off',
+          calloutRealtime: 'Live market cite',
+          calloutQuick: 'Quick brief',
+          calloutNotice: 'Notice',
+          thinkingPlaceholder: 'AI is analyzing',
+          webResultDefault: 'Market update',
+          webResultHeading: 'Web references',
+          assistantRole: 'AI Research',
+          userRole: 'Your question',
+          badgeOnline: 'Live search',
+          badgeOffline: 'Backtest brief',
+          badgeUser: 'Custom prompt',
+          reasoningDefault: 'Reasoning',
+          reasoningWeb: 'Web lookup',
+          reasoningReview: 'Secondary review',
+          stepStatusWarn: 'Needs attention',
+          stepStatusOk: 'Insight',
+          statusReadyHistory: 'AI assistant is ready—feel free to ask follow-ups.',
+          statusReadyFresh: 'AI assistant is ready—ask away.',
+          confirmClear: 'Clear the AI conversation on this page?',
+          statusHistoryCleared: 'Conversation cleared. Start a fresh analysis anytime.',
+          promptEnableWeb: 'Toggle “🌐 Web” above before requesting live search.',
+          statusWebOff: 'Live search is off. Turn it on and try again.',
+          statusFetching: 'AI is querying live sources…',
+          statusAnalyzing: 'AI is analyzing—please hold…',
+          statusComplete: 'Analysis complete—feel free to ask more.',
+          statusTimeout: 'Analysis took over two minutes and was cancelled. Please retry.',
+          statusUnavailable: 'AI service is unavailable right now. Please try again.',
+          apology: 'Sorry, we can’t provide fresh guidance right now.',
+          statusSynthesizing: 'AI is compiling the overall brief…',
+          statusSummaryMissing: 'Summary is not available yet. Please ask manually later.',
+      };
+
+document.addEventListener('DOMContentLoaded', () => {
+    const form = document.getElementById('analysis-form');
+    const taskEndpoint = TASK_ENDPOINT || '';
+    const statusTemplate = TASK_STATUS_TEMPLATE || '';
+    const historyBaseUrl = (HISTORY_LOAD_BASE || '').trim();
+    let asyncBacktestEnabled = true;
+    const TASK_STORAGE_KEY = "backtestTaskStore";
+
+    // 任务浮窗管理
+    const dock =
+        document.getElementById('task-dock') ||
+        (function () {
+            const node = document.createElement('div');
+            node.id = 'task-dock';
+            node.className = 'task-dock minimized';
+            node.innerHTML = `
+                <div id="task-dock-header" class="task-dock-header">
+                    <span>${langIsZh ? '回测任务' : 'Backtest Tasks'}</span>
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <span id="task-count" class="task-count">0</span>
+                        <button id="task-toggle" class="task-toggle" aria-label="${langIsZh ? '展开/折叠任务' : 'Toggle tasks'}">▾</button>
+                    </div>
+                </div>
+                <div id="task-dock-body" class="task-dock-body" hidden></div>
+            `;
+            document.body.appendChild(node);
+            return node;
+        })();
+    const dockHeader = dock.querySelector('#task-dock-header');
+    const dockBody = dock.querySelector('#task-dock-body');
+    const dockToggle = dock.querySelector('#task-toggle');
+    const dockCount = dock.querySelector('#task-count');
+    let dockMinimized = true;
+    let dragState = null;
+
+    const tasks = new Map(); // taskId -> {status, ticker, created, link}
+
+    const persistTasks = () => {
+        try {
+            const payload = {
+                statusTemplate,
+                historyBaseUrl,
+                tasks: Array.from(tasks.entries()).map(([id, data]) => ({ id, ...data })),
+            };
+            window.localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify(payload));
+        } catch (error) {
+            console.warn("Persist task dock failed:", error);
+        }
+    };
+
+    const hydrateTasks = () => {
+        let payload = null;
+        try {
+            payload = JSON.parse(window.localStorage.getItem(TASK_STORAGE_KEY) || "null");
+        } catch (error) {
+            payload = null;
+        }
+        if (!payload || !Array.isArray(payload.tasks)) {
+            return;
+        }
+        payload.tasks.forEach((entry) => {
+            if (!entry || !entry.id) return;
+            tasks.set(entry.id, entry);
+        });
+        renderTasks();
+        updateCount();
+        // 重新轮询未完成的任务
+        payload.tasks.forEach((entry) => {
+            if (!entry || !entry.id) return;
+            if (["PENDING", "STARTED", "RETRY", ""].includes(entry.status || "")) {
+                window.setTimeout(() => pollTask(entry.id, Date.now()), 500);
+            }
+        });
+    };
+
+    const updateCount = () => {
+        dockCount.textContent = tasks.size;
+        if (tasks.size === 0) {
+            dock.classList.add('minimized');
+            dockBody.hidden = true;
+            dockMinimized = true;
+        }
+    };
+
+    const renderTasks = () => {
+        if (!dockBody) return;
+        dockBody.innerHTML = '';
+        tasks.forEach((task, id) => {
+            const pill = document.createElement('div');
+            pill.className = 'task-pill' + (task.status === 'SUCCESS' ? ' success' : task.status === 'FAILURE' ? ' error' : '');
+            pill.innerHTML = `
+                <h6>${task.ticker || 'Task'}<span class="status">${task.status}</span></h6>
+                <div class="task-meta">
+                    <span>${task.created || ''}</span>
+                    ${task.message ? `<span>${task.message}</span>` : ''}
+                </div>
+            `;
+            const actions = document.createElement('div');
+            actions.className = 'task-actions';
+            if (task.link) {
+                const btn = document.createElement('a');
+                btn.href = task.link;
+                btn.textContent = langIsZh ? '查看报告' : 'View report';
+                actions.appendChild(btn);
+            }
+            const dismiss = document.createElement('button');
+            dismiss.textContent = langIsZh ? '移除' : 'Dismiss';
+            dismiss.addEventListener('click', () => {
+                tasks.delete(id);
+                renderTasks();
+                updateCount();
+            });
+            actions.appendChild(dismiss);
+            pill.appendChild(actions);
+            dockBody.appendChild(pill);
+        });
+    };
+
+    const toggleDock = () => {
+        dockMinimized = !dockMinimized;
+        if (dockMinimized) {
+            dock.classList.add('minimized');
+            dockBody.hidden = true;
+            dock.style.transform = 'translateY(0)';
+        } else {
+            dock.classList.remove('minimized');
+            dockBody.hidden = false;
+        }
+    };
+
+    dockToggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleDock();
+    });
+    dockHeader.addEventListener('dblclick', toggleDock);
+    dock.addEventListener('click', () => {
+        if (dockMinimized) toggleDock();
+    });
+
+    // 简易拖拽
+    dockHeader.addEventListener('mousedown', (e) => {
+        dragState = {
+            startX: e.clientX,
+            startY: e.clientY,
+            startLeft: dock.offsetLeft,
+            startTop: dock.offsetTop,
+        };
+        dock.style.right = 'auto';
+        dock.style.bottom = 'auto';
+        document.addEventListener('mousemove', handleDrag);
+        document.addEventListener('mouseup', stopDrag);
+    });
+    const handleDrag = (e) => {
+        if (!dragState) return;
+        const dx = e.clientX - dragState.startX;
+        const dy = e.clientY - dragState.startY;
+        dock.style.left = `${dragState.startLeft + dx}px`;
+        dock.style.top = `${dragState.startTop + dy}px`;
+    };
+    const stopDrag = () => {
+        dragState = null;
+        document.removeEventListener('mousemove', handleDrag);
+        document.removeEventListener('mouseup', stopDrag);
+    };
+
+    const buildStatusUrl = (taskId) =>
+        statusTemplate ? statusTemplate.replace('TASK_ID_PLACEHOLDER', encodeURIComponent(taskId)) : '';
+
+    const serializeFormParams = () => {
+        if (!form) return null;
+        const data = new FormData(form);
+        const params = {};
+        data.forEach((value, key) => {
+            if (key === 'csrfmiddlewaretoken') {
+                return;
+            }
+            params[key] = value;
+        });
+        // 规范化日期格式，后端 DateField 期望 YYYY-MM-DD；缺失时对 end_date 兜底为今天
+        ['start_date', 'end_date'].forEach((k) => {
+            if (params[k]) {
+                params[k] = String(params[k]).replace(/\//g, '-');
+            }
+        });
+        const todayIso = new Date().toISOString().slice(0, 10);
+        if (!params.end_date) {
+            params.end_date = todayIso;
+            const endInput = form.querySelector('[name="end_date"]');
+            if (endInput) endInput.value = todayIso;
+        }
+        if (!params.start_date) {
+            params.start_date = todayIso;
+            const startInput = form.querySelector('[name="start_date"]');
+            if (startInput) startInput.value = todayIso;
+        }
+        return params;
+    };
+
+    const redirectToHistory = (historyId) => {
+        const fallbackBase = historyBaseUrl || `${window.location.origin}${BACKTEST_PATH}`;
+        try {
+            const target = new URL(fallbackBase);
+            target.searchParams.set('history_id', historyId);
+            window.location.assign(target.toString());
+        } catch (error) {
+            const separator = fallbackBase.includes('?') ? '&' : '?';
+            window.location.assign(`${fallbackBase}${separator}history_id=${encodeURIComponent(historyId)}`);
+        }
+    };
+
+    const asyncText = langIsZh
+        ? {
+              queue: '任务已排队，等待执行…',
+              running: '策略引擎运行中…',
+              retry: '任务重试中…',
+              success: '任务完成，可随时查看报告。',
+              failure: '任务执行失败，请重试。',
+              timeout: '等待超时，请重试或检查网络。',
+          }
+        : {
+              queue: 'Task queued and awaiting execution…',
+              running: 'Strategy engines are running…',
+              retry: 'Task is retrying…',
+              success: 'Task complete. You can view the report anytime.',
+              failure: 'Task failed. Please retry.',
+              timeout: 'Polling timed out. Please retry or check connectivity.',
+          };
+
+    // no-op overlay helpers保持兼容
+    const setOverlayStatus = () => {};
+    const hideOverlay = () => {};
+    const showOverlay = () => {};
+
+    const updateTask = (taskId, payload) => {
+        const existing = tasks.get(taskId) || {};
+        const prevSize = tasks.size;
+        tasks.set(taskId, { ...existing, ...payload });
+        renderTasks();
+        updateCount();
+        if (tasks.size > prevSize) {
+            dockMinimized = false;
+            dockBody.hidden = false;
+            dock.classList.remove('minimized');
+        }
+        persistTasks();
+    };
+
+    const pollTask = (taskId, startedAt) => {
+        const statusUrl = buildStatusUrl(taskId);
+        if (!statusUrl) {
+            updateTask(taskId, { status: 'FAILURE', message: 'status URL missing' });
+            return;
+        }
+        fetch(statusUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+            .then((response) => {
+                if (!response.ok) {
+                    return response
+                        .json()
+                        .catch(() => ({}))
+                        .then((data) => {
+                            throw new Error((data && data.error) || `HTTP ${response.status}`);
+                        });
+                }
+                return response.json();
+            })
+            .then((data) => {
+                const state = (data && data.state) || '';
+                if (state === 'SUCCESS') {
+                    const historyId = data.result && data.result.history_id;
+                    updateTask(taskId, {
+                        status: 'SUCCESS',
+                        message: asyncText.success,
+                        link: historyId ? `${historyBaseUrl || BACKTEST_PATH}?history_id=${encodeURIComponent(historyId)}` : null,
+                    });
+                    return;
+                }
+                if (state === 'FAILURE' || state === 'REVOKED') {
+                    updateTask(taskId, { status: 'FAILURE', message: data.error || asyncText.failure });
+                    return;
+                }
+                const elapsed = Date.now() - startedAt;
+                if (elapsed > TASK_MAX_WAIT_MS) {
+                    updateTask(taskId, { status: 'FAILURE', message: asyncText.timeout });
+                    return;
+                }
+                const runningMsg = state === 'STARTED' ? asyncText.running : state === 'RETRY' ? asyncText.retry : asyncText.queue;
+                updateTask(taskId, { status: state || 'PENDING', message: runningMsg });
+                window.setTimeout(() => pollTask(taskId, startedAt), TASK_POLL_INTERVAL_MS);
+            })
+            .catch((error) => {
+                updateTask(taskId, { status: 'FAILURE', message: error.message || asyncText.failure });
+            });
+    };
+
+    const triggerAsyncBacktest = () => {
+        const params = serializeFormParams();
+        if (!params) {
+            return Promise.reject(new Error('Form data missing.'));
+        }
+        return fetch(taskEndpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken,
+            },
+            // DRF v1 接口期望字段平铺在请求体
+            body: JSON.stringify(params),
+        })
+            .then((response) => {
+                const safeJson = () =>
+                    response
+                        .json()
+                        .catch(() => ({}))
+                        .then((data) => data || {});
+                if (!response.ok) {
+                    return safeJson().then((data) => {
+                        // 将后端校验错误透出，便于回退或提示
+                        const firstError = (() => {
+                            if (!data || typeof data !== 'object') return null;
+                            if (data.error) return data.error;
+                            if (data.detail) return data.detail;
+                            const firstVal = Object.values(data)[0];
+                            if (Array.isArray(firstVal) && firstVal.length) return firstVal[0];
+                            return null;
+                        })();
+                        const message =
+                            firstError ||
+                            (data && (data.error || data.detail || data.message)) ||
+                            (response.status === 400
+                                ? langIsZh
+                                    ? '提交数据格式有误，请检查表单。'
+                                    : 'Validation failed. Please check the form.'
+                                : `HTTP ${response.status}`);
+                        const error = new Error(message);
+                        error.payload = data;
+                        error.status = response.status;
+                        throw error;
+                    });
+                }
+                return safeJson();
+            })
+            .then((data) => {
+                const ticker = params.ticker || 'Task';
+                const created = new Date().toLocaleTimeString();
+                const immediateHistory = data.history_id || (data.result && data.result.history_id);
+                if (immediateHistory) {
+                    const link = `${historyBaseUrl || BACKTEST_PATH}?history_id=${encodeURIComponent(immediateHistory)}`;
+                    updateTask(`history-${immediateHistory}`, {
+                        status: 'SUCCESS',
+                        message: asyncText.success,
+                        ticker,
+                        created,
+                        link,
+                    });
+                    return;
+                }
+                if (data.task_id) {
+                    const taskId = data.task_id;
+                    updateTask(taskId, { status: 'PENDING', message: asyncText.queue, ticker, created });
+                    window.setTimeout(() => pollTask(taskId, Date.now()), TASK_REFRESH_INTERVAL);
+                    return;
+                }
+                // 同步但无 history_id 时，返回成功状态以免用户无感知
+                if (data.result) {
+                    updateTask(`sync-${Date.now()}`, {
+                        status: 'SUCCESS',
+                        message: asyncText.success,
+                        ticker,
+                        created,
+                        link: null,
+                    });
+                    return;
+                }
+                throw new Error('Task id missing from response.');
+            });
+    };
+
+    if (form) {
+        form.addEventListener('submit', (event) => {
+            if (!asyncBacktestEnabled || !taskEndpoint) {
+                // 无异步端点时回退传统表单提交
+                return;
+            }
+            event.preventDefault();
+            triggerAsyncBacktest().catch((error) => {
+                console.error('Async backtest error:', error);
+                alert(
+                    error.message ||
+                        (langIsZh ? '回测提交失败，已尝试回退传统方式。' : 'Backtest submit failed; falling back.')
+                );
+                // 失败时回退传统同步流程，保证用户仍能同步触发
+                form.submit();
+            });
+        });
+    }
+
+    hydrateTasks();
+
+    const navItems = Array.from(document.querySelectorAll('.backtest-tab'));
+    const panels = Array.from(document.querySelectorAll('.backtest-panel'));
+
+    function activatePanel(name) {
+        let targetPanel = null;
+        panels.forEach((panel) => {
+            const hit = panel.dataset.panel === name;
+            panel.classList.toggle('active', hit);
+            if (hit) targetPanel = panel;
+        });
+        navItems.forEach((tab, index) => {
+            const hit = tab.dataset.panel === name;
+            tab.classList.toggle('active', hit);
+            if (!targetPanel && index === 0) {
+                tab.classList.add('active');
+            }
+        });
+        if (!targetPanel && panels.length) {
+            targetPanel = panels[0];
+            targetPanel.classList.add('active');
+        }
+        return targetPanel;
+    }
+
+    window.backtestActivatePanel = activatePanel;
+
+    let defaultPanel = fromHistory ? 'history' : 'overview';
+    if (!panels.some((panel) => panel.dataset.panel === defaultPanel)) {
+        defaultPanel = panels[0]?.dataset.panel;
+    }
+    const initialPanel = defaultPanel ? activatePanel(defaultPanel) : null;
+    if (initialPanel) {
+        initialPanel.scrollIntoView({ behavior: 'auto', block: 'start' });
+    }
+    navItems.forEach((tab) => {
+        tab.addEventListener('click', (event) => {
+            event.preventDefault();
+            const target = tab.dataset.panel;
+            if (!target) return;
+            const panelEl = activatePanel(target);
+            if (panelEl) {
+                panelEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            } else {
+                document.querySelector('.backtest-panels')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        });
+    });
+
+    const anchorPanelMap = {
+        '#advisor-pane': 'advisor',
+        '#analysis-form': 'config',
+        '#model-weights-title': 'expert',
+        '#risk-dashboard-title': 'expert',
+        '#knowledge-graph-title': 'expert',
+        '#factor-effectiveness-title': 'expert',
+        '#macro-dashboard-title': 'expert',
+        '#ai-panel': 'ai',
+        '#opportunity-radar': 'overview',
+        '#scenario-board': 'overview',
+        '#quick-glance': 'overview'
+    };
+
+    document.querySelectorAll('.briefing-back-link, .briefing-link').forEach((link) => {
+
+
+        link.addEventListener('click', (event) => {
+            const target = link.getAttribute('href');
+            if (!target || !target.startsWith('#')) return;
+            event.preventDefault();
+            let panel = anchorPanelMap[target];
+            if (!panel) {
+                const ownerPanel = document.querySelector(target)?.closest('.backtest-panel');
+                panel = ownerPanel?.dataset.panel;
+            }
+            let panelEl = null;
+            if (panel) {
+                panelEl = activatePanel(panel);
+            }
+            const node = document.querySelector(target);
+            if (node) {
+                if (node.tagName === 'DETAILS' && !node.open) {
+                    node.open = true;
+                }
+                window.requestAnimationFrame(() => {
+                    node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                });
+            } else if (panelEl) {
+                panelEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+            window.location.hash = target;
+        });
+    });
+
+    document.querySelectorAll('[data-panel-target]').forEach((link) => {
+        link.addEventListener('click', (event) => {
+            const panelName = link.dataset.panelTarget;
+            if (!panelName) return;
+            const href = link.getAttribute('href') || '';
+            const isHashLink = href.startsWith('#');
+            if (isHashLink) {
+                event.preventDefault();
+            }
+            const panelEl = activatePanel(panelName);
+            const targetNode = isHashLink ? document.querySelector(href) : null;
+            if (targetNode) {
+                if (targetNode.tagName === 'DETAILS' && !targetNode.open) {
+                    targetNode.open = true;
+                }
+                window.requestAnimationFrame(() => {
+                    targetNode.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                });
+            } else if (panelEl) {
+                panelEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+            if (isHashLink) {
+                window.history.replaceState(null, '', href);
+            }
+        });
+    });
+
+    document.querySelectorAll('.backtest-sidebar-btn[data-target-panel]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const target = btn.dataset.targetPanel;
+            if (!target) return;
+            const panelEl = activatePanel(target);
+            if (panelEl) {
+                panelEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            } else if (target === 'config') {
+                document.getElementById('analysis-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            } else {
+                document.querySelector(`[data-panel=\"${target}\"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        });
+    });
+
+    if (fromHistory) {
+        document.querySelector('[data-panel="history"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    const toggleButton = document.getElementById('toggle-signals');
+    const signalsTable = document.getElementById('signals-table');
+    if (toggleButton && signalsTable) {
+        let visible = true;
+        const updateSignalToggle = () => {
+            toggleButton.textContent = visible ? aiText.hideSignals : aiText.showSignals;
+        };
+        updateSignalToggle();
+        toggleButton.addEventListener('click', () => {
+            visible = !visible;
+            signalsTable.classList.toggle('d-none', !visible);
+            updateSignalToggle();
+        });
+    }
+
+    document.querySelectorAll('.js-open-expert').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const expertPanel = activatePanel('expert');
+            (expertPanel || document.querySelector('.backtest-panels'))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            const expertTab = document.querySelector('.backtest-tab[data-panel="expert"]');
+            if (expertTab) {
+                expertTab.focus();
+                expertTab.classList.add('focus-ring');
+                window.setTimeout(() => expertTab.classList.remove('focus-ring'), 600);
+            }
+        });
+    });
+
+    const HISTORY_WINDOW = 8;
+    const aiStatus = document.getElementById('ai-status');
+    const aiMessages = document.getElementById('ai-messages');
+    const aiThinking = document.getElementById('ai-thinking');
+    const aiForm = document.getElementById('ai-chat-form');
+    const aiInput = document.getElementById('ai-input');
+    const aiEndpoint = "{% url 'trading:ai_chat' %}";
+    const aiStreamEndpoint = "{% url 'trading:ai_chat_stream' %}";
+    const aiStreamSupported = typeof ReadableStream !== 'undefined' && typeof TextDecoder !== 'undefined';
+
+    let activeAiController = null;
+
+    function beginAiFetch(endpoint, payload) {
+        if (activeAiController) {
+            try {
+                activeAiController.abort();
+            } catch (error) {
+                // ignore abort errors
+            }
+        }
+        const controller = new AbortController();
+        activeAiController = controller;
+        const timer = window.setTimeout(() => controller.abort(), AI_FETCH_TIMEOUT_MS);
+        const fetchPromise = fetch(endpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken,
+            },
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+        }).finally(() => {
+            window.clearTimeout(timer);
+            if (activeAiController === controller) {
+                activeAiController = null;
+            }
+        });
+        return { controller, fetchPromise };
+    }
+
+    function readAiResponse(response) {
+        if (!response.ok) {
+            return response
+                .json()
+                .catch(() => ({}))
+                .then((data) => {
+                    const message = (data && data.error) || `AI 接口返回 ${response.status}`;
+                    throw new Error(message);
+                });
+        }
+        return response.json();
+    }
+
+    function legacyAiRequest(payload) {
+        const { fetchPromise } = beginAiFetch(aiEndpoint, payload);
+        return fetchPromise.then(readAiResponse);
+    }
+
+    function sendAiStreamRequest(payload, options = {}) {
+        if (!aiStreamSupported || !aiStreamEndpoint) {
+            return legacyAiRequest(payload);
+        }
+        const { fetchPromise } = beginAiFetch(aiStreamEndpoint, payload);
+        return fetchPromise.then((response) => {
+            if (!response.ok) {
+                return readAiResponse(response);
+            }
+            if (!response.body || !response.body.getReader) {
+                return response.json();
+            }
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let finalPayload = null;
+            return new Promise((resolve, reject) => {
+                const handleEvent = (eventType, payload) => {
+                    if (eventType === 'progress') {
+                        if (options.onProgress && payload) {
+                            options.onProgress(payload);
+                        }
+                    } else if (eventType === 'message') {
+                        finalPayload = payload || finalPayload;
+                    } else if (eventType === 'error') {
+                        const message = (payload && payload.error) || aiText.statusUnavailable;
+                        reject(new Error(message));
+                    } else if (eventType === 'end') {
+                        resolve(finalPayload || payload || {});
+                    }
+                };
+
+                const parseBuffer = () => {
+                    let boundary = buffer.indexOf('\n\n');
+                    while (boundary >= 0) {
+                        const rawEvent = buffer.slice(0, boundary).trim();
+                        buffer = buffer.slice(boundary + 2);
+                        if (rawEvent) {
+                            const lines = rawEvent.split(/\r?\n/);
+                            let eventType = 'message';
+                            const dataLines = [];
+                            lines.forEach((line) => {
+                                if (line.startsWith('event:')) {
+                                    eventType = line.slice(6).trim();
+                                } else if (line.startsWith('data:')) {
+                                    dataLines.push(line.slice(5).trim());
+                                }
+                            });
+                            let payload = null;
+                            if (dataLines.length) {
+                                const joined = dataLines.join('\n');
+                                try {
+                                    payload = joined ? JSON.parse(joined) : null;
+                                } catch (error) {
+                                    console.warn('无法解析 AI 流事件', joined, error);
+                                }
+                            }
+                            handleEvent(eventType, payload);
+                        }
+                        boundary = buffer.indexOf('\n\n');
+                    }
+                };
+
+                const pump = () => {
+                    reader
+                        .read()
+                        .then(({ done, value }) => {
+                            if (done) {
+                                handleEvent('end', finalPayload);
+                                return;
+                            }
+                            buffer += decoder.decode(value, { stream: true });
+                            parseBuffer();
+                            pump();
+                        })
+                        .catch((error) => reject(error));
+                };
+                pump();
+            });
+        });
+    }
+
+    function requestAi(payload, options = {}) {
+        return sendAiStreamRequest(payload, options);
+    }
+
+    // 🌐 Web Search toggle (globe button)
+    const aiToggle = document.getElementById('ai-toggle-web');
+    const aiClearBtn = document.getElementById('ai-clear-history');
+    let webEnabled;
+    if (reportContext && typeof reportContext.enable_web === 'boolean') {
+        webEnabled = !!reportContext.enable_web;
+    } else {
+        webEnabled = false;
+        if (reportContext) {
+            reportContext.enable_web = false;
+        }
+    }
+    const MODEL_STORAGE_KEY = 'quant-ai-preferred-model';
+    const HARDCODED_DEFAULT_MODEL = 'deepseek-r1:8b';
+    const modelInput = document.getElementById('ai-model-input');
+    const modelOptions = document.getElementById('ai-model-options');
+    let availableModels = Array.isArray(reportContext.ai_model_choices)
+        ? reportContext.ai_model_choices.filter((item, index, arr) => item && arr.indexOf(item) === index)
+        : [];
+    let preferredModel = (reportContext.ai_model || '').trim() || HARDCODED_DEFAULT_MODEL;
+    try {
+        const stored = window.sessionStorage.getItem(MODEL_STORAGE_KEY);
+        if (stored && stored.trim()) {
+            preferredModel = stored.trim();
+        }
+    } catch (error) {
+        // ignore storage errors (private mode etc.)
+    }
+    if (preferredModel && !availableModels.includes(preferredModel)) {
+        availableModels.unshift(preferredModel);
+    }
+
+    function buildAutoPrompt(ctx) {
+        if (!ctx) return langIsZh ? '请基于最新回测输出要点。' : 'Please summarize the latest backtest.';
+        const safeText = (value) => {
+            if (value === undefined || value === null) return '';
+            return toPlainText(String(value)).replace(/\s+/g, ' ').trim();
+        };
+        const params = (ctx && typeof ctx.params === 'object' && ctx.params) || {};
+        const stats = (ctx && typeof ctx.stats === 'object' && ctx.stats) || {};
+        const ticker = safeText(
+            ctx.ticker ||
+                (ctx.snapshot && ctx.snapshot.ticker) ||
+                params.ticker ||
+                params.symbol ||
+                ''
+        );
+        const benchmark = safeText(
+            ctx.benchmark ||
+                stats.benchmark ||
+                params.benchmark_ticker ||
+                ''
+        );
+        let windowLabel = '';
+        if (ctx.start_date && ctx.end_date) {
+            windowLabel = `${safeText(ctx.start_date)} → ${safeText(ctx.end_date)}`;
+        } else if (params.start_date && params.end_date) {
+            windowLabel = `${safeText(params.start_date)} → ${safeText(params.end_date)}`;
+        }
+        const metricLines = (Array.isArray(ctx.metrics) ? ctx.metrics : [])
+            .slice(0, 4)
+            .map((item) => {
+                if (!item || !item.label) return '';
+                const label = safeText(item.label);
+                const value = safeText(item.value !== undefined ? item.value : '');
+                return label && value ? `${label}: ${value}` : label || value;
+            })
+            .filter(Boolean);
+        if (!metricLines.length) {
+            ['total_return', 'cagr', 'sharpe', 'max_drawdown'].forEach((key) => {
+                if (stats[key] !== undefined && stats[key] !== null) {
+                    const labelMap = {
+                        total_return: langIsZh ? '累计收益' : 'Total return',
+                        cagr: 'CAGR',
+                        sharpe: 'Sharpe',
+                        max_drawdown: langIsZh ? '最大回撤' : 'Max drawdown',
+                    };
+                    metricLines.push(`${labelMap[key] || key}: ${safeText(stats[key])}`);
+                }
+            });
+        }
+        const quickPoints = (Array.isArray(ctx.quick_summary) ? ctx.quick_summary : [])
+            .map(safeText)
+            .filter(Boolean)
+            .slice(0, 3);
+        const riskPoints = (Array.isArray(ctx.risk_alerts) ? ctx.risk_alerts : [])
+            .map(safeText)
+            .filter(Boolean)
+            .slice(0, 2);
+        const sections = [];
+        if (langIsZh) {
+            sections.push(
+                `请扮演资深投顾，基于最新回测结果，向用户主动汇报 ${ticker || '该标的'} 的核心表现。`
+            );
+            if (windowLabel) {
+                sections.push(`回测区间：${windowLabel}${benchmark ? `，对比 ${benchmark}` : ''}。`);
+            }
+            if (metricLines.length) {
+                sections.push(`关键指标：${metricLines.join('；')}。`);
+            }
+            if (quickPoints.length) {
+                sections.push(`亮点：${quickPoints.join('；')}`);
+            }
+            if (riskPoints.length) {
+                sections.push(`风险提示：${riskPoints.join('；')}`);
+            }
+            sections.push('请用条理清晰的 3-4 段文字输出要点，并给出下一步建议。');
+        } else {
+            sections.push(
+                `You are a senior investment analyst. Proactively brief the user on the newest backtest for ${ticker || 'the instrument'}.`
+            );
+            if (windowLabel) {
+                sections.push(
+                    `Window: ${windowLabel}${benchmark ? `, benchmark ${benchmark}` : ''}.`
+                );
+            }
+            if (metricLines.length) {
+                sections.push(`Key metrics: ${metricLines.join('; ')}.`);
+            }
+            if (quickPoints.length) {
+                sections.push(`Highlights: ${quickPoints.join('; ')}`);
+            }
+            if (riskPoints.length) {
+                sections.push(`Risks: ${riskPoints.join('; ')}`);
+            }
+            sections.push(
+                'Respond in 3-4 concise paragraphs including next-step guidance tailored to the user profile.'
+            );
+        }
+        return sections.join(' ');
+    }
+    if (availableModels.length === 0 && preferredModel) {
+        availableModels.push(preferredModel);
+    }
+    const defaultModel = preferredModel || (availableModels[0] || HARDCODED_DEFAULT_MODEL);
+    reportContext.ai_model = defaultModel;
+    function ensureModelOption(value) {
+        if (!modelOptions || !value) return;
+        const existing = Array.from(modelOptions.options || []).some((option) => option.value === value);
+        if (!existing) {
+            const option = document.createElement('option');
+            option.value = value;
+            modelOptions.appendChild(option);
+        }
+    }
+    if (modelOptions) {
+        modelOptions.innerHTML = '';
+        availableModels.forEach((model) => {
+            ensureModelOption(model);
+        });
+    }
+    if (modelInput) {
+        if (defaultModel) {
+            modelInput.value = defaultModel;
+        }
+        const handleModelInput = () => {
+            const value = modelInput.value.trim();
+            reportContext.ai_model = value;
+            ensureModelOption(value);
+            try {
+                if (value) {
+                    window.sessionStorage.setItem(MODEL_STORAGE_KEY, value);
+                } else {
+                    window.sessionStorage.removeItem(MODEL_STORAGE_KEY);
+                }
+            } catch (error) {
+                // ignore storage errors
+            }
+        };
+        modelInput.addEventListener('change', handleModelInput);
+        modelInput.addEventListener('input', handleModelInput);
+    }
+
+    function setWebToggleUi() {
+        if (!aiToggle) return;
+        aiToggle.setAttribute('aria-pressed', webEnabled ? 'true' : 'false');
+        aiToggle.textContent = webEnabled ? aiText.webOn : aiText.webOff;
+        aiToggle.classList.toggle('solid', webEnabled);
+        aiToggle.classList.toggle('ghost', !webEnabled);
+    }
+
+    if (aiToggle) {
+        setWebToggleUi();
+        aiToggle.addEventListener('click', () => {
+            webEnabled = !webEnabled;
+            if (reportContext) reportContext.enable_web = webEnabled; // 记录到上下文
+            setWebToggleUi();
+        });
+    }
+
+    function setAiStatus(kind, message) {
+        if (!aiStatus) return;
+        aiStatus.textContent = message || '';
+        const variant = kind ? ` ai-status-${kind}` : '';
+        aiStatus.className = `ai-status-chip${variant}`;
+    }
+
+    function syncHistory() {
+        if (reportContext) {
+            reportContext.chat_history = chatHistory.slice();
+        }
+    }
+
+    function escapeHtml(text) {
+        if (!text) return '';
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function toPlainText(text) {
+        if (!text) return '';
+        let output = String(text);
+        output = output.replace(/```[\s\S]*?```/g, '');
+        output = output.replace(/###\s*/g, '');
+        output = output.replace(/^- /gm, '• ');
+        output = output.replace(/\r/g, '');
+        return output.replace(/\n{3,}/g, '\n\n').trim();
+    }
+
+    function formatAiAnswer(text) {
+        if (!text) return '';
+        const renderInline = (input) => {
+            let safe = escapeHtml(input || '');
+            safe = safe.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            safe = safe.replace(/\*(.+?)\*/g, '<em>$1</em>');
+            safe = safe.replace(/`([^`]+)`/g, '<code>$1</code>');
+            safe = safe.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label, url) => {
+                const cleanUrl = url.replace(/"/g, '&quot;');
+                return `<a href="${cleanUrl}" target="_blank" rel="noopener">${label}</a>`;
+            });
+            return safe;
+        };
+
+        const lines = text.split(/\n+/);
+        let html = '';
+        let listType = null;
+        let tableRows = [];
+
+        const closeList = () => {
+            if (listType === 'ul') {
+                html += '</ul>';
+            } else if (listType === 'ol') {
+                html += '</ol>';
+            }
+            listType = null;
+        };
+
+        const flushTable = () => {
+            if (!tableRows.length) return;
+            const rows = [...tableRows];
+            tableRows = [];
+            const parseRow = (row) =>
+                row
+                    .split('|')
+                    .slice(1, -1)
+                    .map((cell) => renderInline(cell.trim()));
+            const hasDivider = rows.length > 1 && /^[-:\\s|]+$/.test(rows[1]);
+            let tableHtml = '<table class="ai-table">';
+            if (hasDivider) {
+                const headerCells = parseRow(rows.shift());
+                rows.shift();
+                tableHtml += '<thead><tr>';
+                headerCells.forEach((cell) => {
+                    tableHtml += `<th>${cell || '&nbsp;'}</th>`;
+                });
+                tableHtml += '</tr></thead>';
+            }
+            tableHtml += '<tbody>';
+            rows.forEach((row) => {
+                const cells = parseRow(row);
+                if (!cells.length) return;
+                tableHtml += '<tr>';
+                cells.forEach((cell) => {
+                    tableHtml += `<td>${cell || '&nbsp;'}</td>`;
+                });
+                tableHtml += '</tr>';
+            });
+            tableHtml += '</tbody></table>';
+            html += tableHtml;
+        };
+
+        const calloutRules = [
+            { keyword: aiText.calloutRealtime, icon: '🌐', tone: 'info' },
+            { keyword: aiText.calloutQuick, icon: '🧭', tone: 'highlight' },
+            { keyword: aiText.calloutNotice, icon: '⚠️', tone: 'warn' },
+        ];
+
+        const tryCallout = (raw) => {
+            const match = calloutRules.find((rule) => raw.startsWith(rule.keyword));
+            if (!match) return false;
+            closeList();
+            flushTable();
+            html += `<div class="ai-callout ai-callout-${match.tone}"><div class="ai-callout-title">${match.icon} ${renderInline(raw)}</div></div>`;
+            return true;
+        };
+
+        lines.forEach((line) => {
+            const trimmed = line.trim();
+            if (!trimmed) return;
+            if (tryCallout(trimmed)) return;
+            if (/^\|.+\|$/.test(trimmed)) {
+                closeList();
+                tableRows.push(trimmed);
+                return;
+            } else if (tableRows.length) {
+                flushTable();
+            }
+            if (trimmed.startsWith('### ')) {
+                closeList();
+                flushTable();
+                html += `<h6 class="ai-section-title">${renderInline(trimmed.slice(4))}</h6>`;
+            } else if (trimmed.startsWith('- ')) {
+                if (listType !== 'ul') {
+                    closeList();
+                    html += '<ul class="ai-section-list">';
+                    listType = 'ul';
+                }
+                html += `<li>${renderInline(trimmed.slice(2))}</li>`;
+            } else if (/^\\d+\\./.test(trimmed)) {
+                if (listType !== 'ol') {
+                    closeList();
+                    html += '<ol class="ai-section-ol">';
+                    listType = 'ol';
+                }
+                html += `<li>${renderInline(trimmed.replace(/^\\d+\\.\\s*/, ''))}</li>`;
+            } else if (trimmed.startsWith('> ')) {
+                closeList();
+                flushTable();
+                html += `<div class="ai-callout ai-callout-neutral">${renderInline(trimmed.slice(1).trim())}</div>`;
+            } else {
+                closeList();
+                flushTable();
+                html += `<p>${renderInline(trimmed)}</p>`;
+            }
+        });
+
+        closeList();
+        flushTable();
+        return html;
+    }
+
+    function animateTypewriter(node, sourceText, finalHtml, options = {}) {
+        if (!node) return;
+        const plain = toPlainText(sourceText);
+        if (!plain) {
+            if (finalHtml) {
+                node.innerHTML = finalHtml;
+            } else {
+                node.textContent = '';
+            }
+            if (node.classList) node.classList.remove('typing');
+            if (typeof options.onComplete === 'function') {
+                options.onComplete();
+            }
+            return;
+        }
+        const speed = options.speed || (plain.length > 800 ? 4 : plain.length > 400 ? 8 : 14);
+        const step = Math.max(1, options.step || (plain.length > 400 ? 2 : 1));
+        let index = 0;
+        const total = plain.length;
+        if (node.classList) node.classList.add('typing');
+
+        const writeChunk = () => {
+            index += step;
+            node.textContent = plain.slice(0, index);
+            if (index < total) {
+                node.__typingTimer = window.setTimeout(writeChunk, speed);
+            } else {
+                if (finalHtml) {
+                    node.innerHTML = finalHtml;
+                } else {
+                    node.textContent = plain;
+                }
+                if (node.classList) node.classList.remove('typing');
+                if (typeof options.onComplete === 'function') {
+                    options.onComplete();
+                }
+                node.__typingTimer = null;
+                node.__typingDelay = null;
+            }
+        };
+
+        const start = () => {
+            if (node.__typingTimer) {
+                window.clearTimeout(node.__typingTimer);
+            }
+            if (node.__typingDelay) {
+                window.clearTimeout(node.__typingDelay);
+                node.__typingDelay = null;
+            }
+            writeChunk();
+        };
+
+        if (options.delay) {
+            node.__typingDelay = window.setTimeout(start, options.delay);
+        } else {
+            start();
+        }
+    }
+
+    let thinkingPlaceholderTimer = null;
+    function startThinkingAnimation() {
+        if (!aiThinking) return;
+        stopThinkingAnimation();
+        aiThinking.classList.remove('d-none');
+        aiThinking.innerHTML = `<div class="ai-thinking-placeholder"><span class="ai-thinking-text">${aiText.thinkingPlaceholder}</span><span class="ai-thinking-dots">...</span></div>`;
+        const dotNode = aiThinking.querySelector('.ai-thinking-dots');
+        let dots = 1;
+        thinkingPlaceholderTimer = window.setInterval(() => {
+            dots = (dots + 1) % 4;
+            if (dotNode) {
+                dotNode.textContent = '.'.repeat(dots);
+            }
+        }, 420);
+    }
+
+    function stopThinkingAnimation() {
+        if (thinkingPlaceholderTimer) {
+            window.clearInterval(thinkingPlaceholderTimer);
+            thinkingPlaceholderTimer = null;
+        }
+    }
+
+    function renderWebResults(list) {
+        if (!Array.isArray(list) || list.length === 0) return '';
+        const items = list
+            .map((item) => {
+                const title = escapeHtml(item.title || item.heading || aiText.webResultDefault);
+                const url = item.url || item.href || '#';
+                const source = escapeHtml(item.source || item.publisher || item.host || '');
+                const retrieved = item.retrieved_at ? escapeHtml(item.retrieved_at) : '';
+                const snippet = escapeHtml(item.snippet || '');
+                const metaParts = [];
+                if (source) metaParts.push(source);
+                if (retrieved) metaParts.push(retrieved);
+                return `<li>
+                    <span class="ai-web-icon">🔗</span>
+                    <div class="ai-web-block">
+                        <a href="${url}" target="_blank" rel="noopener">${title}</a>
+                        ${metaParts.length ? `<span class="ai-web-source">${metaParts.join(' · ')}</span>` : ''}
+                        ${snippet ? `<p class="ai-web-snippet">${snippet}</p>` : ''}
+                    </div>
+                </li>`;
+            })
+            .join('');
+        return `
+            <div class="ai-web-results">
+                <div class="ai-web-title">${aiText.webResultHeading}</div>
+                <ul>${items}</ul>
+            </div>`;
+    }
+
+    function appendMessage(role, content, options = {}) {
+        if (!aiMessages || !content) return;
+        const wrapper = document.createElement('article');
+        wrapper.className = `ai-message ai-message-${role}`;
+        const card = document.createElement('div');
+        card.className = 'ai-message-card';
+        const head = document.createElement('header');
+        head.className = 'ai-message-head';
+        const label = document.createElement('span');
+        label.className = 'ai-message-role';
+        label.textContent = role === 'assistant' ? aiText.assistantRole : aiText.userRole;
+        const badge = document.createElement('span');
+        badge.className = 'ai-message-tag';
+        if (role === 'assistant') {
+            const online = options.webUsed !== undefined ? !!options.webUsed : webEnabled;
+            badge.textContent = online ? aiText.badgeOnline : aiText.badgeOffline;
+            badge.classList.add(online ? 'tag-online' : 'tag-offline');
+        } else {
+            badge.textContent = aiText.badgeUser;
+            badge.classList.add('tag-user');
+        }
+        head.appendChild(label);
+        head.appendChild(badge);
+
+        const body = document.createElement('div');
+        body.className = 'ai-message-bubble';
+        const shouldAnimate = role === 'assistant' && options.animate !== false;
+        if (role === 'assistant') {
+            if (shouldAnimate) {
+                animateTypewriter(body, content, formatAiAnswer(content));
+            } else {
+                body.innerHTML = formatAiAnswer(content);
+            }
+        } else {
+            body.textContent = content;
+        }
+
+        card.appendChild(head);
+        card.appendChild(body);
+        if (options.webResults && options.webResults.length && role === 'assistant') {
+            const webBlock = document.createElement('div');
+            webBlock.innerHTML = renderWebResults(options.webResults);
+            card.appendChild(webBlock);
+        }
+        wrapper.appendChild(card);
+        aiMessages.appendChild(wrapper);
+        aiMessages.scrollTop = aiMessages.scrollHeight;
+    }
+
+    function renderHistory(animate = true) {
+        if (!aiMessages) return;
+        stopThinkingAnimation();
+        aiMessages.innerHTML = '';
+        chatHistory.forEach((entry) => {
+            appendMessage(
+                entry.role === 'user' ? 'user' : 'assistant',
+                entry.content || '',
+                {
+                    animate: animate && entry.role !== 'user',
+                    webUsed: entry.web_used,
+                    webResults: entry.web_results,
+                }
+            );
+        });
+    }
+
+    function renderThinking(thoughts, animate = true) {
+        if (!aiThinking) return;
+        stopThinkingAnimation();
+        aiThinking.innerHTML = '';
+        const normalized = [];
+        (thoughts || []).forEach((item) => {
+            if (!item) return;
+            if (typeof item === 'string') {
+                normalized.push({ title: aiText.reasoningDefault, status: 'ok', body: item });
+                return;
+            }
+            if (Array.isArray(item.thoughts) && item.thoughts.length) {
+                normalized.push({
+                    title: item.model || aiText.reasoningDefault,
+                    status: (item.status || 'ok').toLowerCase().includes('error') ? 'warn' : 'ok',
+                    body: item.thoughts.join('\n'),
+                });
+                return;
+            }
+            if (typeof item === 'object') {
+                const body = item.detail || item.answer || item.content || '';
+                if (!body) return;
+                normalized.push({
+                    title: item.title || item.model || aiText.reasoningDefault,
+                    status: (item.status || 'ok').toLowerCase().includes('error') ? 'warn' : 'ok',
+                    body,
+                });
+            }
+        });
+        if (!normalized.length) {
+            aiThinking.classList.add('d-none');
+            return;
+        }
+        aiThinking.classList.remove('d-none');
+        const timeline = document.createElement('div');
+        timeline.className = 'ai-thinking-timeline';
+        const resolveMeta = (entry) => {
+            const model = (entry.title || '').toLowerCase();
+            if (model.includes('web')) {
+                return { icon: '🔍', label: aiText.reasoningWeb };
+            }
+            if (model.includes('secondary') || model.includes('qwen')) {
+                return { icon: '🧠', label: entry.title || aiText.reasoningReview };
+            }
+            return { icon: '🤖', label: entry.title || aiText.reasoningDefault };
+        };
+        normalized.forEach((entry, idx) => {
+            const step = document.createElement('div');
+            const warn = entry.status === 'warn';
+            step.className = `ai-thinking-step${warn ? ' ai-thinking-warn' : ''}`;
+            const meta = resolveMeta(entry);
+            step.innerHTML = `
+                <span class="ai-step-index">${meta.icon || String(idx + 1).padStart(2, '0')}</span>
+                <div class="ai-step-body">
+                    <div class="ai-step-head">
+                        <span class="ai-step-model">${meta.label}</span>
+                <span class="ai-step-status">${warn ? aiText.stepStatusWarn : aiText.stepStatusOk}</span>
+                    </div>
+                    <div class="ai-step-text"></div>
+                </div>`;
+            const textNode = step.querySelector('.ai-step-text');
+            if (animate && textNode) {
+                animateTypewriter(textNode, entry.body, formatAiAnswer(entry.body), {
+                    delay: idx * 320,
+                    speed: 12,
+                });
+            } else if (textNode) {
+                textNode.innerHTML = formatAiAnswer(entry.body);
+            }
+            timeline.appendChild(step);
+        });
+        const accordion = document.createElement('div');
+        accordion.className = 'ai-thinking-accordion';
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'ai-thinking-toggle';
+        toggle.setAttribute('aria-expanded', 'false');
+        const toggleLabel = (collapsed) =>
+            langIsZh
+                ? `${collapsed ? '展开' : '收起'} AI 推理（${normalized.length} 步）`
+                : `${collapsed ? 'Expand' : 'Collapse'} AI reasoning (${normalized.length} steps)`;
+        toggle.textContent = toggleLabel(true);
+        const body = document.createElement('div');
+        body.className = 'ai-thinking-body collapsed';
+        body.appendChild(timeline);
+        toggle.addEventListener('click', () => {
+            const collapsed = body.classList.toggle('collapsed');
+            toggle.setAttribute('aria-expanded', (!collapsed).toString());
+            toggle.textContent = toggleLabel(collapsed);
+        });
+        accordion.appendChild(toggle);
+        accordion.appendChild(body);
+        aiThinking.appendChild(accordion);
+    }
+
+    if (chatHistory.length) {
+        renderHistory(false);
+        setAiStatus('info', aiText.statusReadyHistory);
+    } else {
+        setAiStatus('info', aiText.statusReadyFresh);
+        if (lastAiAnswer) {
+            appendMessage('assistant', lastAiAnswer, { animate: false, webUsed: reportContext && reportContext.enable_web });
+        }
+    }
+
+    if (Array.isArray(reportContext.ai_thinking) && reportContext.ai_thinking.length) {
+        renderThinking(reportContext.ai_thinking, false);
+    }
+    function handleAiProgress(payload) {
+        if (!payload) return;
+        if (payload.error) {
+            setAiStatus('warn', payload.error);
+            return;
+        }
+        if (payload.message) {
+            setAiStatus('info', payload.message);
+        }
+    }
+
+    function applyAiResponse(data) {
+        stopThinkingAnimation();
+        let historySupplied = false;
+        if (Array.isArray(data.history) && data.history.length) {
+            chatHistory = data.history;
+            syncHistory();
+            renderHistory(false);
+            historySupplied = true;
+        }
+        const answer = data.answer || data.response || data.message;
+        const webUsed = !!data.web_used;
+        if (answer) {
+            lastAiAnswer = answer;
+            if (!historySupplied) {
+                chatHistory.push({ role: 'assistant', content: answer, web_used: webUsed, web_results: data.web_results });
+                syncHistory();
+                appendMessage('assistant', answer, { webUsed, webResults: data.web_results });
+            }
+        }
+        if (Array.isArray(data.thinking)) {
+            renderThinking(data.thinking);
+            if (reportContext) {
+                reportContext.ai_thinking = data.thinking;
+            }
+        } else if (reportContext) {
+            reportContext.ai_thinking = [];
+        }
+        const statusText = data.summary || aiText.statusComplete;
+        const note = data.web_note ? ` ${data.web_note}` : '';
+        setAiStatus('success', statusText + note);
+        const modelUsed =
+            (Array.isArray(data.models) && data.models.length && data.models[0].name) ||
+            data.selected_model ||
+            reportContext.ai_model ||
+            '';
+        if (modelUsed) {
+            reportContext.ai_model = modelUsed;
+            if (modelInput) {
+                modelInput.value = modelUsed;
+            }
+            ensureModelOption(modelUsed);
+            try {
+                window.sessionStorage.setItem(MODEL_STORAGE_KEY, modelUsed);
+            } catch (error) {
+                // ignore storage errors
+            }
+        }
+    }
+
+    document.querySelectorAll('.ai-preset').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            if (!aiInput) return;
+            aiInput.value = btn.dataset.question || btn.textContent || '';
+            aiInput.focus();
+        });
+    });
+
+    if (aiClearBtn) {
+        aiClearBtn.addEventListener('click', () => {
+            if (!window.confirm(aiText.confirmClear)) return;
+            chatHistory = [];
+            lastAiAnswer = '';
+            syncHistory();
+            if (reportContext) {
+                reportContext.ai_thinking = [];
+            }
+            if (aiMessages) aiMessages.innerHTML = '';
+            if (aiThinking) {
+                aiThinking.classList.add('d-none');
+                aiThinking.innerHTML = '';
+            }
+            setAiStatus('info', aiText.statusHistoryCleared);
+        });
+    }
+
+    if (aiForm && aiInput) {
+        aiForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+            const message = aiInput.value.trim();
+            if (!message) return;
+
+            appendMessage('user', message);
+            chatHistory.push({ role: 'user', content: message });
+            syncHistory();
+            aiInput.value = '';
+            const keywordRegex = /联网|上网|搜索|查网|找新闻|实时|news|资讯|internet|web|look up|fetch/gi;
+            const shouldUseWeb = webEnabled || keywordRegex.test(message);
+            if (!webEnabled && keywordRegex.test(message)) {
+                appendMessage('assistant', aiText.promptEnableWeb);
+                setAiStatus('warn', aiText.statusWebOff);
+                stopThinkingAnimation();
+                if (aiThinking) {
+                    aiThinking.classList.add('d-none');
+                    aiThinking.innerHTML = '';
+                }
+                return;
+            }
+            setAiStatus('info', shouldUseWeb ? aiText.statusFetching : aiText.statusAnalyzing);
+            startThinkingAnimation();
+            if (modelInput) {
+                reportContext.ai_model = modelInput.value.trim();
+            }
+            const payloadHistory = chatHistory.slice(-HISTORY_WINDOW);
+
+            requestAi(
+                {
+                    context: reportContext,
+                    message,
+                    history: payloadHistory,
+                    show_thoughts: true,
+                    enable_web: webEnabled,
+                    model: reportContext.ai_model || '',
+                },
+                { onProgress: handleAiProgress }
+            )
+                .then((data) => {
+                    applyAiResponse(data);
+                })
+                .catch((error) => {
+                    console.error(error);
+                    if (error.name === 'AbortError') {
+                        setAiStatus('warn', aiText.statusTimeout);
+                    } else {
+                        setAiStatus('warn', aiText.statusUnavailable);
+                    }
+                    stopThinkingAnimation();
+                    appendMessage('assistant', aiText.apology, { animate: false });
+                    if (aiThinking) {
+                        aiThinking.classList.add('d-none');
+                        aiThinking.innerHTML = '';
+                    }
+                });
+        });
+    }
+
+    let autoAiRequested = false;
+    function triggerInitialAiAnalysis() {
+        if (autoAiRequested || !reportContext.include_ai || !aiEndpoint) return;
+        autoAiRequested = true;
+        setAiStatus('info', aiText.statusSynthesizing);
+        startThinkingAnimation();
+        if (modelInput) {
+            reportContext.ai_model = modelInput.value.trim();
+        }
+        const payloadHistory = chatHistory.slice(-HISTORY_WINDOW);
+        const autoPrompt = buildAutoPrompt(reportContext);
+        reportContext.ai_auto_prompt = autoPrompt;
+        requestAi(
+            {
+                context: reportContext,
+                message: autoPrompt,
+                history: payloadHistory,
+                show_thoughts: reportContext.show_ai_thoughts !== false,
+                enable_web: webEnabled,
+                model: reportContext.ai_model || '',
+            },
+            { onProgress: handleAiProgress }
+        )
+            .then((data) => {
+                applyAiResponse(data);
+            })
+            .catch((error) => {
+                console.error(error);
+                if (error.name === 'AbortError') {
+                    setAiStatus('warn', aiText.statusTimeout);
+                } else {
+                    setAiStatus('warn', aiText.statusSummaryMissing);
+                }
+                stopThinkingAnimation();
+                if (aiThinking) {
+                    aiThinking.classList.add('d-none');
+                    aiThinking.innerHTML = '';
+                }
+            });
+    }
+
+    if (!chatHistory.length && reportContext.include_ai) {
+        window.setTimeout(triggerInitialAiAnalysis, 500);
+    }
+});
+</script>
+{% endblock %}

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480" viewBox="0 0 800 480">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0ea5e9"/>
+      <stop offset="100%" stop-color="#22c55e"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="480" fill="url(#grad)" rx="24"/>
+  <g fill="#f8fafc" font-family="'Segoe UI', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif">
+    <text x="60" y="120" font-size="44" font-weight="600">基础认知</text>
+    <text x="60" y="180" font-size="26">收益结构与风险承受力</text>
+    <text x="60" y="260" font-size="20">整理资产负债表 · 设置风险温度计 · 建立现金流底盘</text>
+  </g>
+</svg>

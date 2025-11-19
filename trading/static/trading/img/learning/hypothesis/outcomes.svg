@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="outcomesGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0ea5e9"/>
+      <stop offset="100%" stop-color="#14b8a6"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#outcomesGrad)"/>
+  <g fill="#f8fafc" font-family="'Segoe UI', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif">
+    <text x="48" y="104" font-size="42" font-weight="700">你将收获什么？</text>
+    <text x="48" y="154" font-size="24">理解假设检验 · 设定显著性 α</text>
+    <text x="48" y="194" font-size="24">掌握均值与比例检验 · 报告精确 p 值</text>
+  </g>
+  <g stroke="#ecfeff" stroke-width="3" fill="none" opacity="0.65">
+    <polyline points="120 250 200 210 280 240 360 200 440 230 520 190"/>
+    <circle cx="120" cy="250" r="6" fill="#ecfeff"/>
+    <circle cx="200" cy="210" r="6" fill="#ecfeff"/>
+    <circle cx="280" cy="240" r="6" fill="#ecfeff"/>
+    <circle cx="360" cy="200" r="6" fill="#ecfeff"/>
+    <circle cx="440" cy="230" r="6" fill="#ecfeff"/>
+    <circle cx="520" cy="190" r="6" fill="#ecfeff"/>
+  </g>
+</svg>

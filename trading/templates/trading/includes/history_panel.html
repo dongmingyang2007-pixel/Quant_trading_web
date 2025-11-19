@@ -1,0 +1,109 @@
+{% if history_message %}
+    <div class="alert alert-info">{{ history_message }}</div>
+{% endif %}
+{% if history_error %}
+    <div class="alert alert-danger">{{ history_error }}</div>
+{% endif %}
+{% with accordion_id=accordion_id|default:"history-accordion" empty_id=empty_id|default:"history-empty" delete_url_base=delete_url_base|default:'' delete_url_template=delete_url_template|default:'' load_url=load_url|default:'' %}
+{% if history_runs %}
+    <div class="history-accordion"
+         id="{{ accordion_id }}"
+         data-empty-id="{{ empty_id }}"
+         data-delete-url-base="{{ delete_url_base }}"
+         data-delete-url-template="{{ delete_url_template }}"
+         data-confirm-delete="{% bilingual 'Are you sure you want to delete this backtest? This action cannot be undone.' '确定删除该历史回测记录吗？此操作不可撤销。' %}"
+         data-delete-failed="{% bilingual 'Delete failed. Please try again later.' '删除失败，请稍后重试。' %}"
+         data-delete-network="{% bilingual 'A network error occurred while deleting. Please try again.' '删除时发生网络错误，请稍后再试。' %}">
+        {% for history in history_runs %}
+            <details class="history-item history-details">
+                <summary>
+                    <div class="history-meta">
+                        <span class="history-ticker">{{ history.ticker }}</span>
+                        <span class="history-engine">{{ history.engine }}</span>
+                        <span class="history-period">{{ history.start_date }} → {{ history.end_date }}</span>
+                        <span class="history-chevron" aria-hidden="true"></span>
+                    </div>
+                </summary>
+                <div class="history-body">
+                    <div class="history-actions">
+                        <a href="{% if load_url %}{{ load_url }}?history_id={{ history.record_id }}{% else %}?history_id={{ history.record_id }}{% endif %}#history-pane"
+                           class="hero-button ghost small history-view"
+                           data-id="{{ history.record_id }}">{% bilingual "Load run" "载入回测" %}</a>
+                        <button type="button" class="hero-button danger small history-delete" data-id="{{ history.record_id }}">{% bilingual "Delete" "删除" %}</button>
+                    </div>
+                    <div class="history-grid">
+                        <div>
+                            <p class="text-muted mb-1"><strong>{% bilingual "Key facts" "关键信息" %}</strong></p>
+                            <ul class="panel-list">
+                                {% with total=history.stats.total_return %}<li>{% bilingual "Return:" "收益率：" %}{% if total is not None %}{{ total|floatformat:3 }}{% else %}-{% endif %}</li>{% endwith %}
+                                {% with sharpe=history.stats.sharpe %}<li>{% bilingual "Sharpe:" "夏普比：" %}{% if sharpe is not None %}{{ sharpe|floatformat:2 }}{% else %}-{% endif %}</li>{% endwith %}
+                                {% with mdd=history.stats.max_drawdown %}<li>{% bilingual "Max drawdown:" "最大回撤：" %}{% if mdd is not None %}{{ mdd|floatformat:3 }}{% else %}-{% endif %}</li>{% endwith %}
+                                {% with vol=history.stats.volatility %}<li>{% bilingual "Volatility:" "波动率：" %}{% if vol is not None %}{{ vol|floatformat:3 }}{% else %}-{% endif %}</li>{% endwith %}
+                            </ul>
+                        </div>
+                        <div>
+                            <p class="text-muted mb-1"><strong>{% bilingual "Parameter snapshot" "参数快照" %}</strong></p>
+                            <ul class="panel-list">
+                                {% for key, value in history.params.items %}
+                                    <li>{{ key }}: {{ value }}</li>
+                                {% empty %}
+                                    <li>{% bilingual "No parameter archive yet." "暂无参数存档。" %}</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                    </div>
+                    {% if history.metrics %}
+                        <div class="history-table">
+                            <table class="table table-sm align-middle">
+                                <thead>
+                                    <tr>
+                                        <th scope="col">{% bilingual "Metric" "指标" %}</th>
+                                        <th scope="col">{% bilingual "Value" "数值" %}</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for metric in history.metrics|slice:":6" %}
+                                    <tr>
+                                        <td>{{ metric.label }}</td>
+                                        <td>{{ metric.value }}</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% endif %}
+                    {% with display_history_warnings=history.warnings_localized|default:history.warnings %}
+                    {% if display_history_warnings %}
+                        <div class="panel-card warn mt-3">
+                            <h4 class="panel-title">{% bilingual "Warnings" "警告" %}</h4>
+                            <ul class="panel-list">
+                                {% for warn in display_history_warnings %}<li>{{ warn }}</li>{% endfor %}
+                            </ul>
+                        </div>
+                    {% endif %}
+                    {% endwith %}
+                    <details class="mt-3">
+                        <summary class="small text-muted">{% bilingual "View raw JSON" "查看原始 JSON" %}</summary>
+                        <pre class="small bg-light p-2 rounded mt-2 text-wrap">{{ history.json_payload }}</pre>
+                    </details>
+                    {% if history.top_runs %}
+                        <div class="panel-card subtle mt-3">
+                            <h4 class="panel-title">{% bilingual "Top historical runs" "历史最佳表现" %}</h4>
+                            <ul class="panel-list muted">
+                                {% for run in history.top_runs %}
+                                    <li>{{ run.timestamp }} · Sharpe {{ run.sharpe|floatformat:2 }} · {% bilingual "Return" "收益" %} {{ run.total_return|floatformat:3 }}</li>
+                                {% empty %}
+                                    <li>{% bilingual "No standout records yet." "暂无最佳记录。" %}</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                    {% endif %}
+                </div>
+            </details>
+        {% endfor %}
+    </div>
+    <p class="text-muted mb-0 d-none" id="{{ empty_id }}">{% bilingual "No backtest history yet." "暂无历史回测记录。" %}</p>
+{% else %}
+    <p class="text-muted mb-0" id="{{ empty_id }}">{% bilingual "No backtest history yet." "暂无历史回测记录。" %}</p>
+{% endif %}
+{% endwith %}

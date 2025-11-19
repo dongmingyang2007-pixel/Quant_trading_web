@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="propExBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#0f766e"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#propExBg)"/>
+  <rect x="150" y="120" width="80" height="160" fill="#34d399"/>
+  <rect x="250" y="80" width="80" height="200" fill="#22c55e"/>
+  <rect x="350" y="110" width="80" height="170" fill="#16a34a"/>
+  <rect x="450" y="60" width="80" height="220" fill="#15803d"/>
+  <text x="190" y="300" text-anchor="middle" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="16" fill="#bbf7d0">样本 A</text>
+  <text x="290" y="300" text-anchor="middle" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="16" fill="#bbf7d0">样本 B</text>
+  <text x="390" y="300" text-anchor="middle" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="16" fill="#bbf7d0">样本 C</text>
+  <text x="490" y="300" text-anchor="middle" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="16" fill="#bbf7d0">样本 D</text>
+  <text x="320" y="70" text-anchor="middle" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20" fill="#e0f2fe">大客户占比</text>
+</svg>

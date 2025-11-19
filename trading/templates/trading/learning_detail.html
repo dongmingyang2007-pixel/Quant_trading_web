@@ -1,0 +1,314 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}{{ module.title }} · 学习课程{% endblock %}
+
+{% block extra_head %}
+{{ block.super }}
+<script nonce="{{ csp_nonce }}">
+window.MathJax = {
+    tex: {
+        inlineMath: [['\\(', '\\)']],
+        displayMath: [['$$', '$$']]
+    },
+    svg: { fontCache: 'global' }
+};
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="learning-detail-page">
+    <nav class="breadcrumb-bar">
+        <a href="{% url 'trading:learning_center' %}" class="breadcrumb-link">学习中心</a>
+        <span class="breadcrumb-sep">/</span>
+        <span class="breadcrumb-current">{{ module.title }}</span>
+    </nav>
+
+    <header class="detail-hero">
+        <div class="detail-hero-media">
+            {% if module.cover_image %}
+                <img src="{% static module.cover_image %}" alt="{{ module.title }} 封面">
+            {% endif %}
+        </div>
+        <div class="detail-hero-body">
+            <p class="detail-kicker">{{ module.level }} · {{ module.duration }}</p>
+            <h1 class="detail-title">{{ module.title }}</h1>
+            <p class="detail-summary">{{ module.summary }}</p>
+            <div class="detail-hero-meta">
+                <div>
+                    <h2>课程初衷</h2>
+                    <ul>
+                        {% for objective in module.objectives %}
+                            <li>{{ objective }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="detail-hero-actions">
+                    <a class="hero-button solid" href="{% url 'trading:learning_center' %}">返回课程目录</a>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="detail-layout">
+        <aside class="detail-outline" aria-label="课程目录">
+            <div class="outline-head">
+                <span>课程目录</span>
+            </div>
+            <ul class="outline-list">
+                {% for section in module.sections %}
+                    {% with anchor=section.anchor|default:section.title|slugify %}
+                        {% with first=section.title|first %}
+                        <li class="outline-item"
+                            data-outline-level="{% if section.title|slice:':1' == '第' %}chapter{% elif first in '0123456789' %}{% if '.' in section.title %}sub{% else %}chapter{% endif %}{% else %}intro{% endif %}">
+                            <a href="#{{ anchor }}" class="outline-link" data-outline-target="{{ anchor }}">
+                                {{ section.title }}
+                            </a>
+                        </li>
+                        {% endwith %}
+                    {% endwith %}
+                {% endfor %}
+            </ul>
+        </aside>
+
+        <article class="detail-content">
+            {% if module.milestones %}
+            <section class="detail-section">
+                <h2 id="learning-roadmap">学习路标</h2>
+                <div class="milestone-grid">
+                    {% for milestone in module.milestones %}
+                        <article class="milestone-card">
+                            <h3>{{ milestone.title }}</h3>
+                            <p>{{ milestone.detail }}</p>
+                        </article>
+                    {% endfor %}
+                </div>
+            </section>
+            {% endif %}
+
+            {% for section in module.sections %}
+                {% with anchor=section.anchor|default:section.title|slugify %}
+                <section id="{{ anchor }}" class="course-block" data-outline-section="{{ anchor }}">
+                    <header class="course-block-head">
+                        <h2>{{ section.title }}</h2>
+                        {% if section.summary %}
+                            <p class="course-block-summary">{{ section.summary }}</p>
+                        {% endif %}
+                    </header>
+                    {% if section.image %}
+                        <figure class="course-block-figure">
+                            <img src="{% static section.image %}" alt="{{ section.title }} 配图">
+                            {% if section.image_caption %}
+                                <figcaption>{{ section.image_caption }}</figcaption>
+                            {% endif %}
+                        </figure>
+                    {% endif %}
+                    <div class="course-block-body">
+                        {% for paragraph in section.body %}
+                            <p>{{ paragraph }}</p>
+                        {% endfor %}
+                        {% if section.topics %}
+                            <ul>
+                                {% for topic in section.topics %}
+                                    <li>{{ topic }}</li>
+                                {% endfor %}
+                            </ul>
+                        {% endif %}
+                    </div>
+                </section>
+                {% endwith %}
+            {% endfor %}
+
+            <nav class="detail-pagination" data-pagination>
+                <button type="button" class="pagination-btn prev" data-nav="prev" disabled>
+                    <span aria-hidden="true">‹</span>
+                    <span>Previous</span>
+                </button>
+                <button type="button" class="pagination-btn next" data-nav="next">
+                    <span>Next</span>
+                    <span aria-hidden="true">›</span>
+                </button>
+            </nav>
+        </article>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+{{ block.super }}
+<script nonce="{{ csp_nonce }}">
+(() => {
+    const outlineList = document.querySelector('.outline-list');
+    const sections = Array.from(document.querySelectorAll('[data-outline-section]'));
+    if (!outlineList || !sections.length) return;
+
+    const setGroupOpen = (group, open) => {
+        group.li.classList.toggle('is-open', open);
+        group.toggle.setAttribute('aria-expanded', String(open));
+        if (group.sublist) {
+            group.sublist.hidden = !open;
+            group.sublist.style.display = open ? '' : 'none';
+        }
+    };
+
+    const rawItems = Array.from(outlineList.querySelectorAll('.outline-item'));
+    outlineList.innerHTML = '';
+
+    const groups = [];
+    let currentGroup = null;
+
+    rawItems.forEach(item => {
+        const level = item.dataset.outlineLevel || 'intro';
+        const link = item.querySelector('.outline-link');
+        if (!link) {
+            return;
+        }
+
+        if (level === 'intro') {
+            const li = document.createElement('li');
+            li.className = 'outline-intro';
+            li.appendChild(link);
+            outlineList.appendChild(li);
+            currentGroup = null;
+            return;
+        }
+
+        if (level === 'chapter') {
+            const li = document.createElement('li');
+            li.className = 'outline-group';
+
+            const header = document.createElement('div');
+            header.className = 'outline-group-header';
+
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'outline-toggle';
+            toggle.setAttribute('aria-expanded', 'false');
+            toggle.setAttribute('aria-label', '展开或收起章节');
+
+            const icon = document.createElement('span');
+            icon.className = 'outline-toggle-icon';
+            toggle.appendChild(icon);
+
+            header.appendChild(toggle);
+            header.appendChild(link);
+            li.appendChild(header);
+
+            const sublist = document.createElement('ul');
+            sublist.className = 'outline-sublist';
+            li.appendChild(sublist);
+
+            outlineList.appendChild(li);
+
+            const group = { li, toggle, sublist };
+            groups.push(group);
+            currentGroup = group;
+
+            toggle.addEventListener('click', () => {
+                const open = !li.classList.contains('is-open');
+                setGroupOpen(group, open);
+            });
+
+            setGroupOpen(group, false);
+            return;
+        }
+
+        if (level === 'sub' && currentGroup) {
+            const subItem = document.createElement('li');
+            subItem.appendChild(link);
+            currentGroup.sublist.appendChild(subItem);
+            return;
+        }
+
+        const fallback = document.createElement('li');
+        fallback.className = 'outline-intro';
+        fallback.appendChild(link);
+        outlineList.appendChild(fallback);
+    });
+
+    groups.forEach(group => {
+        if (!group.sublist.children.length) {
+            group.toggle.classList.add('outline-toggle--hidden');
+            group.toggle.setAttribute('aria-hidden', 'true');
+            setGroupOpen(group, true);
+        }
+    });
+
+    const outlineLinks = Array.from(outlineList.querySelectorAll('.outline-link'));
+
+    const activateLink = (id) => {
+        outlineLinks.forEach(link => {
+            const isActive = link.dataset.outlineTarget === id;
+            link.classList.toggle('is-active', isActive);
+            if (isActive) {
+                const groupEl = link.closest('.outline-group');
+                if (groupEl) {
+                    const group = groups.find(g => g.li === groupEl);
+                    if (group) {
+                        setGroupOpen(group, true);
+                    }
+                }
+            }
+        });
+    };
+
+    const pagination = document.querySelector('[data-pagination]');
+    const prevBtn = pagination?.querySelector('[data-nav="prev"]');
+    const nextBtn = pagination?.querySelector('[data-nav="next"]');
+
+    let currentIndex = 0;
+
+    const totalSections = sections.length;
+
+    const updatePaginationState = () => {
+        if (!pagination) return;
+        if (prevBtn) prevBtn.disabled = currentIndex === 0;
+        if (nextBtn) nextBtn.disabled = currentIndex === totalSections - 1;
+    };
+
+    const showSection = (index, options = {}) => {
+        const { scroll = true } = options;
+        sections.forEach((section, idx) => {
+            section.hidden = idx !== index;
+        });
+        currentIndex = index;
+        activateLink(sections[index].dataset.outlineSection);
+        updatePaginationState();
+        if (window.MathJax && window.MathJax.typesetPromise) {
+            window.MathJax.typesetPromise();
+        }
+        if (scroll) {
+            const top = sections[index].getBoundingClientRect().top + window.scrollY - 140;
+            window.scrollTo({ top, behavior: 'smooth' });
+        }
+    };
+
+    if (sections.length) {
+        showSection(0, { scroll: false });
+    }
+
+    outlineLinks.forEach((link, idx) => {
+        link.addEventListener('click', (event) => {
+            const targetId = link.dataset.outlineTarget;
+            const sectionIndex = sections.findIndex(section => section.id === targetId);
+            if (sectionIndex === -1) return;
+            event.preventDefault();
+            showSection(sectionIndex);
+        });
+    });
+
+    prevBtn?.addEventListener('click', () => {
+        if (currentIndex > 0) {
+            showSection(currentIndex - 1);
+        }
+    });
+
+    nextBtn?.addEventListener('click', () => {
+        if (currentIndex < totalSections - 1) {
+            showSection(currentIndex + 1);
+        }
+    });
+})();
+</script>
+{% endblock %}

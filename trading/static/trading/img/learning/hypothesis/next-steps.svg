@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="nextBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#111827"/>
+      <stop offset="100%" stop-color="#0ea5e9"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#nextBg)"/>
+  <path d="M160 240 C220 150 340 150 400 240" fill="none" stroke="#38bdf8" stroke-width="6"/>
+  <polygon points="400,240 420,200 440,240" fill="#38bdf8"/>
+  <text x="180" y="120" fill="#bfdbfe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18">下一步</text>
+  <text x="200" y="160" fill="#e0f2fe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="16">● 两样本检验</text>
+  <text x="200" y="190" fill="#e0f2fe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="16">● ANOVA</text>
+  <text x="200" y="220" fill="#e0f2fe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="16">● 回归模型</text>
+</svg>

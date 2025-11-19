@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="pvBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#111827"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#pvBg)"/>
+  <path d="M80 290 C160 80 320 80 400 220" fill="none" stroke="#60a5fa" stroke-width="6"/>
+  <path d="M400 220 C440 260 500 280 560 285" fill="none" stroke="#f97316" stroke-width="6"/>
+  <polygon points="400,220 400,290 560,290 560,285" fill="rgba(249,115,22,0.35)"/>
+  <text x="360" y="150" fill="#bfdbfe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20">p-value = P(Z ≥ z)</text>
+  <text x="470" y="250" fill="#fef3c7" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18">拒绝域</text>
+</svg>

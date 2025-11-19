@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480" viewBox="0 0 800 480">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#334155"/>
+      <stop offset="100%" stop-color="#0ea5e9"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="480" fill="url(#grad)" rx="24"/>
+  <g fill="#f0f9ff" font-family="'Segoe UI', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif">
+    <text x="60" y="120" font-size="44" font-weight="600">数据治理</text>
+    <text x="60" y="180" font-size="26">研究报告与流程体系</text>
+    <text x="60" y="260" font-size="20">数据目录 · 特征快照 · 实验记录 · 标准化研报</text>
+  </g>
+</svg>

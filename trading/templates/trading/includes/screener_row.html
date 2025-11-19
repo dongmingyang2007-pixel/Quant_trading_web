@@ -1,0 +1,32 @@
+{% with sector_slug=row.sector|slugify %}
+<tr>
+    <td class="col-symbol">
+        <div class="symbol-main">
+            <strong>{{ row.ticker }}</strong>
+            <span class="symbol-name text-muted">{{ row.name }}</span>
+        </div>
+    </td>
+    <td class="col-price text-end">{{ row.price_display }}</td>
+    <td class="col-change text-end {% if row.change_pct and row.change_pct > 0 %}is-up{% elif row.change_pct and row.change_pct < 0 %}is-down{% endif %}">
+        {{ row.change_pct_display }}
+    </td>
+    <td class="col-change text-end">{{ row.change_value_display }}</td>
+    <td class="col-volume text-end">{{ row.volume_display }}</td>
+    <td class="col-mcap text-end">{{ row.market_cap_display }}</td>
+    <td class="col-pe text-end">{{ row.pe_display }}</td>
+    <td class="col-div text-end">{{ row.dividend_yield_display }}</td>
+    <td class="col-sector">
+        {% if row.sector and row.sector != "--" %}
+            <div class="sector-stack">
+                <a class="tv-sector-link" href="{% url 'trading:sector_detail' sector_slug %}">{{ row.sector }}</a>
+                {% if row.industry and row.industry != "--" %}
+                    <a class="tv-industry-link" href="{% url 'trading:sector_detail' sector_slug %}?industry={{ row.industry|urlencode }}">{{ row.industry }}</a>
+                {% endif %}
+            </div>
+        {% else %}
+            {{ row.sector|default:"--" }}
+        {% endif %}
+    </td>
+    <td class="col-rating">{{ row.analyst_rating }}</td>
+</tr>
+{% endwith %}

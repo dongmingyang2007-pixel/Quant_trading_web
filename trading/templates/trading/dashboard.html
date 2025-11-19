@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% load static humanize %}
+
+{% block title %}仪表盘{% endblock %}
+
+{% block content %}
+<div class="dashboard-page container-xl">
+    <header class="dashboard-hero dashboard-hero--compact">
+        <div class="dashboard-hero-text">
+            <p class="dashboard-kicker">Quant Studio</p>
+            <h1 class="dashboard-title">我的量化仪表盘</h1>
+            <p class="dashboard-subtitle">
+                用少量关键指标掌握当前进度，随时启动下一步行动。
+            </p>
+            <div class="dashboard-actions">
+                <a class="hero-button solid" href="{% url 'trading:backtest' %}">开始回测</a>
+                <a class="hero-button ghost" href="{% url 'trading:learning_center' %}">继续学习</a>
+            </div>
+        </div>
+        <div class="dashboard-highlight">
+            <h3>资料完成度</h3>
+            <span class="highlight-score">{{ profile_progress.score }}%</span>
+            <p class="text-muted mb-0">
+                {% if profile_progress.missing %}
+                    待补充：{{ profile_progress.missing|join:"、" }}
+                {% else %}
+                    信息完整，建议保持定期复盘。
+                {% endif %}
+            </p>
+        </div>
+    </header>
+
+    {% if summary_cards %}
+    <section class="summary-section summary-section--compact">
+        <div class="summary-grid">
+            {% for card in summary_cards %}
+                <article class="summary-card">
+                    <div class="summary-icon">{{ card.icon }}</div>
+                    <div class="summary-body">
+                        <h3>{{ card.title }}</h3>
+                        <p class="summary-value">{{ card.value }}</p>
+                        <p class="summary-hint text-muted">{{ card.hint }}</p>
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    {% if quick_actions %}
+    <section class="dashboard-card">
+        <header class="section-head">
+            <div>
+                <h2>快捷操作</h2>
+                <p class="text-muted mb-0">从这里直接进入常用功能，保持执行节奏。</p>
+            </div>
+        </header>
+        <ul class="quick-actions simple">
+            {% for item in quick_actions %}
+                <li>
+                    <a href="{{ item.href }}">
+                        <strong>{{ item.title }}</strong>
+                        <span>{{ item.description }}</span>
+                    </a>
+                </li>
+            {% endfor %}
+        </ul>
+    </section>
+    {% endif %}
+
+    {% if module_links %}
+    <section class="dashboard-card module-board module-board--compact">
+        <header class="section-head">
+            <div>
+                <h2>常用入口</h2>
+                <p class="text-muted mb-0">分析、学习、记录三步走，持续复盘。</p>
+            </div>
+        </header>
+        <div class="module-grid">
+            {% for link in module_links %}
+                <a class="module-tile" href="{% url link.href_name %}">
+                    <span class="module-title">{{ link.title }}</span>
+                    <span class="module-desc text-muted">{{ link.description }}</span>
+                </a>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    {% if usage_notes %}
+    <section class="dashboard-card usage-card">
+        <header class="section-head">
+            <div>
+                <h2>今日提示</h2>
+                <p class="text-muted mb-0">按提示完成细节，确保计划稳步推进。</p>
+            </div>
+        </header>
+        <ul class="usage-notes-list">
+            {% for note in usage_notes %}
+                <li>{{ note }}</li>
+            {% endfor %}
+        </ul>
+    </section>
+    {% endif %}
+</div>
+{% endblock %}

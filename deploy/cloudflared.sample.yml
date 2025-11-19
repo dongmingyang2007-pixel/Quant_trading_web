@@ -1,0 +1,14 @@
+# Cloudflare Tunnel sample config
+# Copy this file to: ~/.cloudflared/config.yml (or keep path and pass via --config)
+# Replace <TUNNEL_NAME> and <TUNNEL_UUID>, and set your domain below.
+
+tunnel: <TUNNEL_NAME>
+credentials-file: /home/<USER>/.cloudflared/<TUNNEL_UUID>.json
+
+ingress:
+  - hostname: app.yourdomain.com
+    service: http://localhost:8000
+    originRequest:
+      httpHostHeader: app.yourdomain.com
+  - service: http_status:404
+

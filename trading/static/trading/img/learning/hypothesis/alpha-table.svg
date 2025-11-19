@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="alphaBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e3a8a"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#alphaBg)"/>
+  <rect x="120" y="90" width="400" height="200" rx="18" fill="rgba(15,23,42,0.65)" stroke="#1d4ed8" stroke-width="3"/>
+  <line x1="120" y1="150" x2="520" y2="150" stroke="#1d4ed8" stroke-width="2"/>
+  <line x1="120" y1="210" x2="520" y2="210" stroke="#1d4ed8" stroke-width="2"/>
+  <line x1="280" y1="90" x2="280" y2="290" stroke="#1d4ed8" stroke-width="2"/>
+  <text x="190" y="126" fill="#93c5fd" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="22" font-weight="600" text-anchor="middle">置信水平</text>
+  <text x="400" y="126" fill="#93c5fd" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="22" font-weight="600" text-anchor="middle">显著性 \\(\\alpha\\)</text>
+  <text x="190" y="180" fill="#e0f2fe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20" text-anchor="middle">90%</text>
+  <text x="400" y="180" fill="#fef9c3" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20" text-anchor="middle">0.10</text>
+  <text x="190" y="240" fill="#e0f2fe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20" text-anchor="middle">95%</text>
+  <text x="400" y="240" fill="#fef9c3" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20" text-anchor="middle">0.05</text>
+  <text x="190" y="300" fill="#e0f2fe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20" text-anchor="middle">99%</text>
+  <text x="400" y="300" fill="#fef9c3" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20" text-anchor="middle">0.01</text>
+  <text x="320" y="60" fill="#bfdbfe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20" text-anchor="middle">显著性 = 1 - 置信水平</text>
+</svg>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <radialGradient id="sunGrad" cx="0.5" cy="0.5" r="0.6">
+      <stop offset="0%" stop-color="#fde68a"/>
+      <stop offset="100%" stop-color="#f97316"/>
+    </radialGradient>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#312e81"/>
+      <stop offset="100%" stop-color="#1e40af"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#bgGrad)"/>
+  <circle cx="170" cy="180" r="90" fill="url(#sunGrad)"/>
+  <circle cx="440" cy="180" r="22" fill="#60a5fa" stroke="#bfdbfe" stroke-width="3"/>
+  <circle cx="440" cy="180" r="120" fill="none" stroke="rgba(191,219,254,0.4)" stroke-width="2" stroke-dasharray="6 6"/>
+  <circle cx="440" cy="180" r="200" fill="none" stroke="rgba(191,219,254,0.2)" stroke-width="2" stroke-dasharray="4 6"/>
+  <text x="138" y="186" fill="#78350f" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="28" font-weight="700">Sun</text>
+  <text x="414" y="228" fill="#e0f2fe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18">Planet</text>
+  <text x="70" y="70" fill="#e0f2fe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20">原假设：地心说</text>
+  <text x="360" y="70" fill="#e0f2fe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20">备择假设：日心说</text>
+</svg>

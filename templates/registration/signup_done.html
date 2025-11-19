@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block title %}{% bilingual "Sign-up complete — verify your email" "注册成功 - 待邮箱验证" %}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6 col-lg-5">
+    <div class="alert alert-info">
+      {% bilingual "We've sent an activation email to " "我们已向" %}{{ email }}{% bilingual " — please open the link within 24 hours to finish activation." "发送激活邮件，请在24小时内点击邮件中的链接完成激活。" %}
+    </div>
+    {% if mail_error %}
+      <div class="alert alert-warning">
+        {% bilingual "We hit an issue while sending the email: " "发送邮件时遇到问题：" %}{{ mail_error }}。{% bilingual "Please retry later or use “Resend activation email” below." "请稍后重试，或使用下方“重发激活邮件”。" %}
+      </div>
+    {% endif %}
+    <div class="d-flex justify-content-between">
+      <a class="btn btn-outline-secondary" href="{% url 'login' %}">{% bilingual "Back to sign in" "返回登录" %}</a>
+      <a class="btn btn-primary" href="{% url 'trading:resend_activation' %}">{% bilingual "Resend activation email" "重发激活邮件" %}</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

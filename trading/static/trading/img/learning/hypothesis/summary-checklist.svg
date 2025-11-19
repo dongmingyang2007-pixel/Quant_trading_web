@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="sumBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#sumBg)"/>
+  <g transform="translate(200 90)">
+    <rect x="0" y="0" width="240" height="200" rx="18" fill="rgba(15,23,42,0.7)" stroke="#38bdf8" stroke-width="3"/>
+    <path d="M30 60 l20 20 l40 -40" fill="none" stroke="#34d399" stroke-width="6" stroke-linecap="round"/>
+    <text x="40" y="120" fill="#bfdbfe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18">假设卡</text>
+    <text x="40" y="155" fill="#bfdbfe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18">统计量 &amp; p 值</text>
+    <text x="40" y="190" fill="#bfdbfe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18">行动建议</text>
+  </g>
+  <text x="320" y="60" text-anchor="middle" fill="#e0f2fe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20">检验结果三要素</text>
+</svg>

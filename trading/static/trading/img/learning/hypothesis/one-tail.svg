@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="oneTailBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#0f766e"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#oneTailBg)"/>
+  <path d="M80 280 C180 80 500 60 560 280" fill="#22d3ee" opacity="0.25"/>
+  <line x1="80" y1="280" x2="560" y2="280" stroke="#e2e8f0" stroke-width="2"/>
+  <line x1="380" y1="280" x2="380" y2="110" stroke="#f97316" stroke-width="4"/>
+  <line x1="320" y1="280" x2="320" y2="80" stroke="#334155" stroke-dasharray="6 6" stroke-width="2"/>
+  <text x="380" y="310" fill="#facc15" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18" text-anchor="middle">z₍α₎</text>
+  <text x="470" y="120" fill="#fef3c7" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20">拒绝域 (α)</text>
+  <text x="250" y="140" fill="#bae6fd" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="20">保留区</text>
+</svg>

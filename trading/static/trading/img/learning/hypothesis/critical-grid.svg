@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="gridBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b1120"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#gridBg)"/>
+  <rect x="120" y="90" width="400" height="200" rx="16" fill="rgba(15,23,42,0.75)" stroke="#60a5fa" stroke-width="3"/>
+  <line x1="120" y1="150" x2="520" y2="150" stroke="#1d4ed8" stroke-width="2"/>
+  <line x1="120" y1="210" x2="520" y2="210" stroke="#1d4ed8" stroke-width="2"/>
+  <line x1="240" y1="90" x2="240" y2="290" stroke="#1d4ed8" stroke-width="2"/>
+  <line x1="360" y1="90" x2="360" y2="290" stroke="#1d4ed8" stroke-width="2"/>
+  <line x1="480" y1="90" x2="480" y2="290" stroke="#1d4ed8" stroke-width="2"/>
+  <text x="180" y="130" text-anchor="middle" fill="#bfdbfe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18">检验类型</text>
+  <text x="300" y="130" text-anchor="middle" fill="#bfdbfe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18">α</text>
+  <text x="420" y="130" text-anchor="middle" fill="#bfdbfe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18">临界值</text>
+  <text x="510" y="130" text-anchor="middle" fill="#bfdbfe" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="18">行动</text>
+  <text x="180" y="185" text-anchor="middle" fill="#f8fafc" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="16">单尾</text>
+  <text x="180" y="245" text-anchor="middle" fill="#f8fafc" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="16">双尾</text>
+  <text x="300" y="185" text-anchor="middle" fill="#fef08a" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="16">0.05</text>
+  <text x="300" y="245" text-anchor="middle" fill="#fef08a" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="16">0.05</text>
+  <text x="420" y="185" text-anchor="middle" fill="#fef3c7" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="16">±1.645</text>
+  <text x="420" y="245" text-anchor="middle" fill="#fef3c7" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="16">±1.96</text>
+  <text x="510" y="185" text-anchor="middle" fill="#bbf7d0" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="16">触发提醒</text>
+  <text x="510" y="245" text-anchor="middle" fill="#bbf7d0" font-family="'Segoe UI','PingFang SC',sans-serif" font-size="16">严格复核</text>
+</svg>

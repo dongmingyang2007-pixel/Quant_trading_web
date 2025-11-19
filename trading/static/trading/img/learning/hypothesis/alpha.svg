@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="alphaGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#alphaGrad)"/>
+  <g fill="#f8fafc" font-family="'Segoe UI', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif">
+    <text x="48" y="112" font-size="46" font-weight="700">显著性水平 α</text>
+    <text x="48" y="164" font-size="24">置信区间 · 决策风险 · 拒绝域</text>
+  </g>
+  <g fill="none" stroke="#bfdbfe" stroke-width="3" opacity="0.75" transform="translate(60 210)">
+    <path d="M0 80 Q80 0 160 60 T320 40 T480 20"/>
+    <line x1="0" y1="96" x2="0" y2="0"/>
+    <line x1="480" y1="96" x2="480" y2="0"/>
+    <text x="0" y="-12" fill="#bfdbfe" font-size="20">左拒绝域</text>
+    <text x="420" y="-12" fill="#bfdbfe" font-size="20">右拒绝域</text>
+  </g>
+</svg>

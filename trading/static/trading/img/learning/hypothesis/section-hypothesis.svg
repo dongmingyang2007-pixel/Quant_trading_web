@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="hypothesisGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1d4ed8"/>
+      <stop offset="100%" stop-color="#9333ea"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" rx="24" fill="url(#hypothesisGrad)"/>
+  <g fill="#f8fafc" font-family="'Segoe UI', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif">
+    <text x="48" y="108" font-size="40" font-weight="700">样本推断总体</text>
+    <text x="48" y="156" font-size="24">提出命题 · 采集样本 · 设定检验 · 输出结论</text>
+  </g>
+  <g transform="translate(48 200)" fill="none" stroke="#ede9fe" stroke-width="3">
+    <rect x="0" y="0" width="140" height="90" rx="14"/>
+    <rect x="160" y="0" width="140" height="90" rx="14"/>
+    <rect x="320" y="0" width="140" height="90" rx="14"/>
+    <rect x="480" y="0" width="140" height="90" rx="14"/>
+    <line x1="140" y1="45" x2="160" y2="45"/>
+    <line x1="300" y1="45" x2="320" y2="45"/>
+    <line x1="460" y1="45" x2="480" y2="45"/>
+  </g>
+</svg>
