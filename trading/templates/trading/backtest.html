@@ -82,6 +82,59 @@
     box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08);
     padding: 18px 20px;
 }
+.quick-glance--loading {
+    opacity: 0.92;
+}
+.quick-card--skeleton {
+    pointer-events: none;
+}
+.skeleton-line,
+.skeleton-block {
+    position: relative;
+    display: inline-block;
+    overflow: hidden;
+    background: rgba(226, 232, 240, 0.85);
+    border-radius: 12px;
+}
+.skeleton-line {
+    width: 100%;
+    height: 12px;
+    margin-bottom: 6px;
+}
+.skeleton-line--title {
+    width: 60%;
+    height: 14px;
+}
+.skeleton-line--text {
+    width: 80%;
+    height: 10px;
+}
+.skeleton-line::after,
+.skeleton-block::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.55), rgba(255,255,255,0));
+    transform: translateX(-100%);
+    animation: backtest-skeleton 1.2s infinite;
+}
+@keyframes backtest-skeleton {
+    0% {
+        transform: translateX(-100%);
+    }
+    60% {
+        transform: translateX(100%);
+    }
+    100% {
+        transform: translateX(100%);
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .skeleton-line::after,
+    .skeleton-block::after {
+        animation: none;
+    }
+}
 
 .quick-card-title {
     font-size: 1rem;
@@ -691,6 +744,7 @@
 
 {% block extra_scripts %}
 {{ block.super }}
+<script src="{% static 'trading/js/vendor/lightweight-charts.standalone.production.js' %}"></script>
 <script src="{% static 'trading/js/history_delete.js' %}"></script>
 <script src="{% static 'trading/js/backtest_submit.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
 {% endblock %}
@@ -816,7 +870,6 @@
         </div>
     </section>
     {% endif %}
-    {% endwith %}
 
     <div class="backtest-workspace">
 
@@ -914,6 +967,21 @@
                     </div>
                 {% endif %}
             </div>
+{% else %}
+            <div class="quick-glance quick-glance--loading" aria-hidden="true">
+                {% for _ in "123"|make_list %}
+                <div class="quick-card quick-card--skeleton">
+                    <div class="skeleton-line skeleton-line--title"></div>
+                    <ul class="quick-card-list">
+                        <li><span class="skeleton-line skeleton-line--text"></span></li>
+                        <li><span class="skeleton-line skeleton-line--text"></span></li>
+                        <li><span class="skeleton-line skeleton-line--text"></span></li>
+                    </ul>
+                </div>
+                {% endfor %}
+            </div>
+{% endif %}
+{% if result %}
             <section class="backtest-card backtest-report">
                 <aside class="backtest-report-nav" aria-label="{% trans 'Analysis navigation' %}">
                     <button type="button" class="backtest-tab active" data-panel="overview">{% bilingual "Executive Overview" "核心概览" %}</button>
@@ -1282,18 +1350,42 @@
                             <p class="text-muted mb-3">
                                 图表依据 PDF 中的多周期统计与情景分析框架绘制，包括累计收益、风险对比及未来情景预测，可与“知识图谱”“宏观脉搏”折叠卡配合查看。
                             </p>
-                            {% if result.charts %}
-                            <div class="chart-grid">
-                                {% for chart in result.charts %}
-                                <figure class="chart-card">
-                                    <img src="data:image/png;base64,{{ chart.img }}" alt="{{ chart.title }}" class="chart-img">
-                                    <figcaption class="chart-caption">{{ chart.title }}</figcaption>
-                                </figure>
-                                {% endfor %}
-                            </div>
-                            {% else %}
-                            <p class="text-muted mb-0">图表模块已关闭，可在参数区勾选“生成图表”。</p>
-                            {% endif %}
+                            {% with has_interactive=result.interactive_chart has_static=result.charts %}
+                                {% if has_interactive or has_static %}
+                                    {% if has_interactive %}
+                                    <section class="interactive-chart-card">
+                                        <header class="chart-head">
+                                            <div>
+                                                <h3>{% bilingual "Interactive price + signals" "交互式价格 / 信号图" %}</h3>
+                                                <p class="text-muted mb-0">{% bilingual "Scroll to zoom, drag to pan, click signal markers for trade details." "支持缩放、拖拽，并可点击信号标记查看盈亏明细。" %}</p>
+                                            </div>
+                                            <div class="chart-legend" id="chart-legend"></div>
+                                        </header>
+                                        <div id="interactive-chart" class="interactive-chart-canvas"></div>
+                                        <footer class="chart-footer">
+                                            <div>
+                                                <strong>{% bilingual "Signal detail" "信号详情" %}</strong>
+                                                <p class="text-muted small mb-1">{% bilingual "Click a Buy (B) / Sell (S) marker to view this trade's P&L." "点击买入 (B) / 卖出 (S) 图标查看该交易盈亏。" %}</p>
+                                                <div class="chart-trade-info" id="chart-trade-info"></div>
+                                            </div>
+                                        </footer>
+                                    </section>
+                                    {{ result.interactive_chart|json_script:"interactive-chart-data" }}
+                                    {% endif %}
+                                    {% if has_static %}
+                                    <div class="chart-grid">
+                                        {% for chart in result.charts %}
+                                        <figure class="chart-card">
+                                            <img src="data:image/png;base64,{{ chart.img }}" alt="{{ chart.title }}" class="chart-img">
+                                            <figcaption class="chart-caption">{{ chart.title }}</figcaption>
+                                        </figure>
+                                        {% endfor %}
+                                    </div>
+                                    {% endif %}
+                                {% else %}
+                                    <p class="text-muted mb-0">图表模块已关闭，可在参数区勾选“生成图表”。</p>
+                                {% endif %}
+                            {% endwith %}
                         </div>
 
                         <div class="backtest-panel" data-panel="signals" id="signals-pane">
@@ -1302,7 +1394,7 @@
                             </p>
                             <button class="hero-button ghost small mb-3" id="toggle-signals">隐藏历史明细</button>
                             <div class="table-responsive" id="signals-table">
-                                <table class="table table-sm align-middle">
+                                <table class="table table-sm align-middle signals-table">
                                     <thead class="table-light">
                                         <tr>
                                             <th scope="col">日期</th>
@@ -1322,7 +1414,7 @@
                                     </thead>
                                     <tbody>
                                         {% for row in result.recent_rows %}
-                                        <tr>
+                                        <tr data-trade-time="{{ row.date }}">
                                             <td>{{ row.date }}</td>
                                             <td>{{ row.signal }}</td>
                                             <td>{{ row.position }}</td>
@@ -1397,12 +1489,13 @@
                                     </section>
                                 </div>
                             </div>
-                        </div>
+            </div>
 
             
         </div>
     </section>
-    {% endif %}
+{% endif %}
+    {% endwith %}
 
 
 
@@ -1608,6 +1701,215 @@ document.addEventListener('DOMContentLoaded', () => {
 </script>
 
 <script nonce="{{ csp_nonce }}">
+window.addEventListener('load', () => {
+    const chartDataNode = document.getElementById('interactive-chart-data');
+    if (!chartDataNode) return;
+    let chartPayload = null;
+    try {
+        chartPayload = JSON.parse(chartDataNode.textContent || '{}');
+    } catch (_error) {
+        chartPayload = null;
+    }
+    if (!chartPayload || !Array.isArray(chartPayload.candles) || !chartPayload.candles.length) {
+        return;
+    }
+    if (typeof LightweightCharts === 'undefined') {
+        window.setTimeout(() => {
+            if (typeof LightweightCharts === 'undefined') {
+                console.warn('LightweightCharts is unavailable.');
+            }
+        }, 0);
+        return;
+    }
+    const root = document.getElementById('interactive-chart');
+    if (!root) return;
+
+    const chart = LightweightCharts.createChart(root, {
+        layout: { background: { type: 'solid', color: '#f8fafc' }, textColor: '#0f172a' },
+        rightPriceScale: { borderColor: '#e2e8f0' },
+        timeScale: { borderColor: '#e2e8f0', timeVisible: true, secondsVisible: false },
+        grid: {
+            horzLines: { color: '#f1f5f9' },
+            vertLines: { color: '#f1f5f9' },
+        },
+        localization: {
+            locale: document.documentElement.lang || navigator.language,
+            dateFormat: 'yyyy-MM-dd',
+        },
+    });
+
+    const resizeChart = () => {
+        const rect = root.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+            chart.resize(rect.width, rect.height);
+            chart.timeScale().fitContent();
+            return true;
+        }
+        return false;
+    };
+    const ensureVisible = () => {
+        if (!resizeChart()) {
+            window.setTimeout(resizeChart, 220);
+        }
+    };
+    resizeChart();
+    window.setTimeout(resizeChart, 250);
+    window.addEventListener('resize', () => resizeChart());
+
+    const chartsPanel = document.getElementById('charts-pane');
+    if (chartsPanel) {
+        if (chartsPanel.classList.contains('active')) {
+            ensureVisible();
+        }
+        if (typeof MutationObserver !== 'undefined') {
+            const observer = new MutationObserver(() => {
+                if (chartsPanel.classList.contains('active')) {
+                    ensureVisible();
+                }
+            });
+            observer.observe(chartsPanel, { attributes: true, attributeFilter: ['class'] });
+        }
+    }
+
+    const candleSeries = chart.addCandlestickSeries({
+        upColor: '#16a34a',
+        downColor: '#dc2626',
+        borderVisible: false,
+        wickUpColor: '#16a34a',
+        wickDownColor: '#dc2626',
+    });
+    candleSeries.setData(chartPayload.candles);
+
+    if (Array.isArray(chartPayload.sma_short) && chartPayload.sma_short.length) {
+        const shortLine = chart.addLineSeries({
+            color: '#0ea5e9',
+            lineWidth: 2,
+            title: `SMA(${chartPayload.short_window || 'S'})`,
+        });
+        shortLine.setData(chartPayload.sma_short);
+    }
+    if (Array.isArray(chartPayload.sma_long) && chartPayload.sma_long.length) {
+        const longLine = chart.addLineSeries({
+            color: '#f97316',
+            lineWidth: 2,
+            title: `SMA(${chartPayload.long_window || 'L'})`,
+        });
+        longLine.setData(chartPayload.sma_long);
+    }
+
+    const docLang = (document.documentElement.getAttribute('lang') || navigator.language || '').toLowerCase();
+    const chartLangIsZh = docLang.startsWith('zh');
+    const infoPlaceholder = chartLangIsZh
+        ? '点击图中的买入或卖出图标查看这笔交易详情。'
+        : 'Click any Buy (B) or Sell (S) marker to view the trade details.';
+
+
+    const legendBox = document.getElementById('chart-legend');
+    const infoBox = document.getElementById('chart-trade-info');
+
+    const signals = Array.isArray(chartPayload.signals) ? chartPayload.signals : [];
+    const signalsByTime = new Map();
+    signals.forEach((signal) => {
+        const key = signal.time;
+        if (!signalsByTime.has(key)) signalsByTime.set(key, []);
+        signalsByTime.get(key).push(signal);
+    });
+    if (signals.length) {
+        candleSeries.setMarkers(
+            signals.map((signal) => ({
+                time: signal.time,
+                position: signal.type === 'buy' ? 'belowBar' : 'aboveBar',
+                color: signal.type === 'buy' ? '#16a34a' : '#dc2626',
+                shape: signal.type === 'buy' ? 'arrowUp' : 'arrowDown',
+                text: signal.type === 'buy' ? 'B' : 'S',
+            })),
+        );
+        displayTradeInfo([signals[signals.length - 1]]);
+    } else {
+        displayTradeInfo(null);
+    }
+
+    const highlightRow = (timeStr) => {
+        document.querySelectorAll('[data-trade-time]').forEach((row) => {
+            row.classList.toggle('is-hovered', !!timeStr && row.dataset.tradeTime === timeStr);
+        });
+    };
+
+    const updateLegend = (timeStr, price) => {
+        if (!legendBox) return;
+        if (!timeStr || !price) {
+            legendBox.textContent = '';
+            return;
+        }
+        legendBox.innerHTML = `
+            <div>${timeStr}</div>
+            <div>O ${Number(price.open || 0).toFixed(2)} H ${Number(price.high || 0).toFixed(2)}</div>
+            <div>L ${Number(price.low || 0).toFixed(2)} C ${Number(price.close || 0).toFixed(2)}</div>
+        `;
+    };
+
+    function displayTradeInfo(signalList) {
+        if (!infoBox) return;
+        if (!signalList || !signalList.length) {
+            infoBox.textContent = infoPlaceholder;
+            return;
+        }
+        const text = signalList
+            .map((sig) => {
+                const action = sig.type === 'buy' ? (chartLangIsZh ? '买入' : 'Buy') : chartLangIsZh ? '卖出' : 'Sell';
+                const price = sig.price ? `${chartLangIsZh ? '价格' : 'Price'} ${sig.price}` : '';
+                const pnl =
+                    sig.daily_return !== undefined
+                        ? `${chartLangIsZh ? '当日' : 'Daily'} ${sig.daily_return}`
+                        : sig.cum_return !== undefined
+                        ? `${chartLangIsZh ? '累计' : 'Cumulative'} ${sig.cum_return}`
+                        : '';
+                return `${action} • ${sig.time} ${price ? `• ${price}` : ''} ${pnl ? `• ${pnl}` : ''}`;
+            })
+            .join('<br>');
+        infoBox.innerHTML = text;
+    }
+
+    const normalizeTime = (input) => {
+        if (!input) return null;
+        if (typeof input === 'string') return input;
+        if (typeof input === 'object') {
+            const year = input.year ?? input.yearValue;
+            const month = input.month ?? input.monthValue;
+            const day = input.day ?? input.dayValue;
+            if (year && month && day) {
+                return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            }
+        }
+        return null;
+    };
+    chart.subscribeCrosshairMove((param) => {
+        if (!param || !param.time) {
+            highlightRow(null);
+            updateLegend(null, null);
+            return;
+        }
+        const timeStr = normalizeTime(param.time);
+        if (timeStr) highlightRow(timeStr);
+        const price = param.seriesPrices?.get?.(candleSeries);
+        updateLegend(timeStr, price);
+    });
+
+    chart.subscribeClick((param) => {
+        if (!param || !param.time) return;
+        const timeStr = normalizeTime(param.time);
+        if (!timeStr) return;
+        const matchedSignals = signalsByTime.get(timeStr);
+        if (matchedSignals && matchedSignals.length) {
+            displayTradeInfo(matchedSignals);
+        }
+    });
+
+    chart.timeScale().fitContent();
+});
+</script>
+
+<script nonce="{{ csp_nonce }}">
 const reportContext = {% if result %}JSON.parse('{{ result_json|escapejs }}'){% else %}{}{% endif %};
 const AI_FETCH_TIMEOUT_MS = {{ ai_fetch_timeout_ms|default:120000 }};
 if (!reportContext.chat_history) {
@@ -1709,402 +2011,6 @@ const aiText = langIsZh
 
 document.addEventListener('DOMContentLoaded', () => {
     const form = document.getElementById('analysis-form');
-    const taskEndpoint = TASK_ENDPOINT || '';
-    const statusTemplate = TASK_STATUS_TEMPLATE || '';
-    const historyBaseUrl = (HISTORY_LOAD_BASE || '').trim();
-    let asyncBacktestEnabled = true;
-    const TASK_STORAGE_KEY = "backtestTaskStore";
-
-    // 任务浮窗管理
-    const dock =
-        document.getElementById('task-dock') ||
-        (function () {
-            const node = document.createElement('div');
-            node.id = 'task-dock';
-            node.className = 'task-dock minimized';
-            node.innerHTML = `
-                <div id="task-dock-header" class="task-dock-header">
-                    <span>${langIsZh ? '回测任务' : 'Backtest Tasks'}</span>
-                    <div style="display:flex;align-items:center;gap:6px;">
-                        <span id="task-count" class="task-count">0</span>
-                        <button id="task-toggle" class="task-toggle" aria-label="${langIsZh ? '展开/折叠任务' : 'Toggle tasks'}">▾</button>
-                    </div>
-                </div>
-                <div id="task-dock-body" class="task-dock-body" hidden></div>
-            `;
-            document.body.appendChild(node);
-            return node;
-        })();
-    const dockHeader = dock.querySelector('#task-dock-header');
-    const dockBody = dock.querySelector('#task-dock-body');
-    const dockToggle = dock.querySelector('#task-toggle');
-    const dockCount = dock.querySelector('#task-count');
-    let dockMinimized = true;
-    let dragState = null;
-
-    const tasks = new Map(); // taskId -> {status, ticker, created, link}
-
-    const persistTasks = () => {
-        try {
-            const payload = {
-                statusTemplate,
-                historyBaseUrl,
-                tasks: Array.from(tasks.entries()).map(([id, data]) => ({ id, ...data })),
-            };
-            window.localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify(payload));
-        } catch (error) {
-            console.warn("Persist task dock failed:", error);
-        }
-    };
-
-    const hydrateTasks = () => {
-        let payload = null;
-        try {
-            payload = JSON.parse(window.localStorage.getItem(TASK_STORAGE_KEY) || "null");
-        } catch (error) {
-            payload = null;
-        }
-        if (!payload || !Array.isArray(payload.tasks)) {
-            return;
-        }
-        payload.tasks.forEach((entry) => {
-            if (!entry || !entry.id) return;
-            tasks.set(entry.id, entry);
-        });
-        renderTasks();
-        updateCount();
-        // 重新轮询未完成的任务
-        payload.tasks.forEach((entry) => {
-            if (!entry || !entry.id) return;
-            if (["PENDING", "STARTED", "RETRY", ""].includes(entry.status || "")) {
-                window.setTimeout(() => pollTask(entry.id, Date.now()), 500);
-            }
-        });
-    };
-
-    const updateCount = () => {
-        dockCount.textContent = tasks.size;
-        if (tasks.size === 0) {
-            dock.classList.add('minimized');
-            dockBody.hidden = true;
-            dockMinimized = true;
-        }
-    };
-
-    const renderTasks = () => {
-        if (!dockBody) return;
-        dockBody.innerHTML = '';
-        tasks.forEach((task, id) => {
-            const pill = document.createElement('div');
-            pill.className = 'task-pill' + (task.status === 'SUCCESS' ? ' success' : task.status === 'FAILURE' ? ' error' : '');
-            pill.innerHTML = `
-                <h6>${task.ticker || 'Task'}<span class="status">${task.status}</span></h6>
-                <div class="task-meta">
-                    <span>${task.created || ''}</span>
-                    ${task.message ? `<span>${task.message}</span>` : ''}
-                </div>
-            `;
-            const actions = document.createElement('div');
-            actions.className = 'task-actions';
-            if (task.link) {
-                const btn = document.createElement('a');
-                btn.href = task.link;
-                btn.textContent = langIsZh ? '查看报告' : 'View report';
-                actions.appendChild(btn);
-            }
-            const dismiss = document.createElement('button');
-            dismiss.textContent = langIsZh ? '移除' : 'Dismiss';
-            dismiss.addEventListener('click', () => {
-                tasks.delete(id);
-                renderTasks();
-                updateCount();
-            });
-            actions.appendChild(dismiss);
-            pill.appendChild(actions);
-            dockBody.appendChild(pill);
-        });
-    };
-
-    const toggleDock = () => {
-        dockMinimized = !dockMinimized;
-        if (dockMinimized) {
-            dock.classList.add('minimized');
-            dockBody.hidden = true;
-            dock.style.transform = 'translateY(0)';
-        } else {
-            dock.classList.remove('minimized');
-            dockBody.hidden = false;
-        }
-    };
-
-    dockToggle.addEventListener('click', (e) => {
-        e.stopPropagation();
-        toggleDock();
-    });
-    dockHeader.addEventListener('dblclick', toggleDock);
-    dock.addEventListener('click', () => {
-        if (dockMinimized) toggleDock();
-    });
-
-    // 简易拖拽
-    dockHeader.addEventListener('mousedown', (e) => {
-        dragState = {
-            startX: e.clientX,
-            startY: e.clientY,
-            startLeft: dock.offsetLeft,
-            startTop: dock.offsetTop,
-        };
-        dock.style.right = 'auto';
-        dock.style.bottom = 'auto';
-        document.addEventListener('mousemove', handleDrag);
-        document.addEventListener('mouseup', stopDrag);
-    });
-    const handleDrag = (e) => {
-        if (!dragState) return;
-        const dx = e.clientX - dragState.startX;
-        const dy = e.clientY - dragState.startY;
-        dock.style.left = `${dragState.startLeft + dx}px`;
-        dock.style.top = `${dragState.startTop + dy}px`;
-    };
-    const stopDrag = () => {
-        dragState = null;
-        document.removeEventListener('mousemove', handleDrag);
-        document.removeEventListener('mouseup', stopDrag);
-    };
-
-    const buildStatusUrl = (taskId) =>
-        statusTemplate ? statusTemplate.replace('TASK_ID_PLACEHOLDER', encodeURIComponent(taskId)) : '';
-
-    const serializeFormParams = () => {
-        if (!form) return null;
-        const data = new FormData(form);
-        const params = {};
-        data.forEach((value, key) => {
-            if (key === 'csrfmiddlewaretoken') {
-                return;
-            }
-            params[key] = value;
-        });
-        // 规范化日期格式，后端 DateField 期望 YYYY-MM-DD；缺失时对 end_date 兜底为今天
-        ['start_date', 'end_date'].forEach((k) => {
-            if (params[k]) {
-                params[k] = String(params[k]).replace(/\//g, '-');
-            }
-        });
-        const todayIso = new Date().toISOString().slice(0, 10);
-        if (!params.end_date) {
-            params.end_date = todayIso;
-            const endInput = form.querySelector('[name="end_date"]');
-            if (endInput) endInput.value = todayIso;
-        }
-        if (!params.start_date) {
-            params.start_date = todayIso;
-            const startInput = form.querySelector('[name="start_date"]');
-            if (startInput) startInput.value = todayIso;
-        }
-        return params;
-    };
-
-    const redirectToHistory = (historyId) => {
-        const fallbackBase = historyBaseUrl || `${window.location.origin}${BACKTEST_PATH}`;
-        try {
-            const target = new URL(fallbackBase);
-            target.searchParams.set('history_id', historyId);
-            window.location.assign(target.toString());
-        } catch (error) {
-            const separator = fallbackBase.includes('?') ? '&' : '?';
-            window.location.assign(`${fallbackBase}${separator}history_id=${encodeURIComponent(historyId)}`);
-        }
-    };
-
-    const asyncText = langIsZh
-        ? {
-              queue: '任务已排队，等待执行…',
-              running: '策略引擎运行中…',
-              retry: '任务重试中…',
-              success: '任务完成，可随时查看报告。',
-              failure: '任务执行失败，请重试。',
-              timeout: '等待超时，请重试或检查网络。',
-          }
-        : {
-              queue: 'Task queued and awaiting execution…',
-              running: 'Strategy engines are running…',
-              retry: 'Task is retrying…',
-              success: 'Task complete. You can view the report anytime.',
-              failure: 'Task failed. Please retry.',
-              timeout: 'Polling timed out. Please retry or check connectivity.',
-          };
-
-    // no-op overlay helpers保持兼容
-    const setOverlayStatus = () => {};
-    const hideOverlay = () => {};
-    const showOverlay = () => {};
-
-    const updateTask = (taskId, payload) => {
-        const existing = tasks.get(taskId) || {};
-        const prevSize = tasks.size;
-        tasks.set(taskId, { ...existing, ...payload });
-        renderTasks();
-        updateCount();
-        if (tasks.size > prevSize) {
-            dockMinimized = false;
-            dockBody.hidden = false;
-            dock.classList.remove('minimized');
-        }
-        persistTasks();
-    };
-
-    const pollTask = (taskId, startedAt) => {
-        const statusUrl = buildStatusUrl(taskId);
-        if (!statusUrl) {
-            updateTask(taskId, { status: 'FAILURE', message: 'status URL missing' });
-            return;
-        }
-        fetch(statusUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
-            .then((response) => {
-                if (!response.ok) {
-                    return response
-                        .json()
-                        .catch(() => ({}))
-                        .then((data) => {
-                            throw new Error((data && data.error) || `HTTP ${response.status}`);
-                        });
-                }
-                return response.json();
-            })
-            .then((data) => {
-                const state = (data && data.state) || '';
-                if (state === 'SUCCESS') {
-                    const historyId = data.result && data.result.history_id;
-                    updateTask(taskId, {
-                        status: 'SUCCESS',
-                        message: asyncText.success,
-                        link: historyId ? `${historyBaseUrl || BACKTEST_PATH}?history_id=${encodeURIComponent(historyId)}` : null,
-                    });
-                    return;
-                }
-                if (state === 'FAILURE' || state === 'REVOKED') {
-                    updateTask(taskId, { status: 'FAILURE', message: data.error || asyncText.failure });
-                    return;
-                }
-                const elapsed = Date.now() - startedAt;
-                if (elapsed > TASK_MAX_WAIT_MS) {
-                    updateTask(taskId, { status: 'FAILURE', message: asyncText.timeout });
-                    return;
-                }
-                const runningMsg = state === 'STARTED' ? asyncText.running : state === 'RETRY' ? asyncText.retry : asyncText.queue;
-                updateTask(taskId, { status: state || 'PENDING', message: runningMsg });
-                window.setTimeout(() => pollTask(taskId, startedAt), TASK_POLL_INTERVAL_MS);
-            })
-            .catch((error) => {
-                updateTask(taskId, { status: 'FAILURE', message: error.message || asyncText.failure });
-            });
-    };
-
-    const triggerAsyncBacktest = () => {
-        const params = serializeFormParams();
-        if (!params) {
-            return Promise.reject(new Error('Form data missing.'));
-        }
-        return fetch(taskEndpoint, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRFToken': csrfToken,
-            },
-            // DRF v1 接口期望字段平铺在请求体
-            body: JSON.stringify(params),
-        })
-            .then((response) => {
-                const safeJson = () =>
-                    response
-                        .json()
-                        .catch(() => ({}))
-                        .then((data) => data || {});
-                if (!response.ok) {
-                    return safeJson().then((data) => {
-                        // 将后端校验错误透出，便于回退或提示
-                        const firstError = (() => {
-                            if (!data || typeof data !== 'object') return null;
-                            if (data.error) return data.error;
-                            if (data.detail) return data.detail;
-                            const firstVal = Object.values(data)[0];
-                            if (Array.isArray(firstVal) && firstVal.length) return firstVal[0];
-                            return null;
-                        })();
-                        const message =
-                            firstError ||
-                            (data && (data.error || data.detail || data.message)) ||
-                            (response.status === 400
-                                ? langIsZh
-                                    ? '提交数据格式有误，请检查表单。'
-                                    : 'Validation failed. Please check the form.'
-                                : `HTTP ${response.status}`);
-                        const error = new Error(message);
-                        error.payload = data;
-                        error.status = response.status;
-                        throw error;
-                    });
-                }
-                return safeJson();
-            })
-            .then((data) => {
-                const ticker = params.ticker || 'Task';
-                const created = new Date().toLocaleTimeString();
-                const immediateHistory = data.history_id || (data.result && data.result.history_id);
-                if (immediateHistory) {
-                    const link = `${historyBaseUrl || BACKTEST_PATH}?history_id=${encodeURIComponent(immediateHistory)}`;
-                    updateTask(`history-${immediateHistory}`, {
-                        status: 'SUCCESS',
-                        message: asyncText.success,
-                        ticker,
-                        created,
-                        link,
-                    });
-                    return;
-                }
-                if (data.task_id) {
-                    const taskId = data.task_id;
-                    updateTask(taskId, { status: 'PENDING', message: asyncText.queue, ticker, created });
-                    window.setTimeout(() => pollTask(taskId, Date.now()), TASK_REFRESH_INTERVAL);
-                    return;
-                }
-                // 同步但无 history_id 时，返回成功状态以免用户无感知
-                if (data.result) {
-                    updateTask(`sync-${Date.now()}`, {
-                        status: 'SUCCESS',
-                        message: asyncText.success,
-                        ticker,
-                        created,
-                        link: null,
-                    });
-                    return;
-                }
-                throw new Error('Task id missing from response.');
-            });
-    };
-
-    if (form) {
-        form.addEventListener('submit', (event) => {
-            if (!asyncBacktestEnabled || !taskEndpoint) {
-                // 无异步端点时回退传统表单提交
-                return;
-            }
-            event.preventDefault();
-            triggerAsyncBacktest().catch((error) => {
-                console.error('Async backtest error:', error);
-                alert(
-                    error.message ||
-                        (langIsZh ? '回测提交失败，已尝试回退传统方式。' : 'Backtest submit failed; falling back.')
-                );
-                // 失败时回退传统同步流程，保证用户仍能同步触发
-                form.submit();
-            });
-        });
-    }
-
-    hydrateTasks();
-
     const navItems = Array.from(document.querySelectorAll('.backtest-tab'));
     const panels = Array.from(document.querySelectorAll('.backtest-panel'));
 

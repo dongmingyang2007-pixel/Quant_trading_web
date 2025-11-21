@@ -14,6 +14,7 @@
   const searchForm = document.getElementById('market-search-form');
   const searchInput = document.getElementById('market-search-input');
   const cardTemplate = document.getElementById('market-card-template');
+  const skeletonTemplate = document.getElementById('market-card-skeleton');
   const suggestionList = document.getElementById('market-suggestions-list');
   const recentChips = document.querySelector('[data-role="recent-chips"]');
   const recentCount = document.querySelector('[data-role="recent-count"]');
@@ -156,8 +157,31 @@
     }
   }
 
+  function clearListState(container) {
+    if (!container) return;
+    container.removeAttribute('data-loading');
+    container.classList.remove('is-loading');
+    container.innerHTML = '';
+  }
+
+  function setListLoading(container) {
+    if (!container) return;
+    if (!skeletonTemplate) {
+      clearListState(container);
+      return;
+    }
+    const count = Number(container.getAttribute('data-skeleton-count')) || 3;
+    container.setAttribute('data-loading', 'true');
+    container.classList.add('is-loading');
+    container.innerHTML = '';
+    for (let i = 0; i < count; i += 1) {
+      container.appendChild(skeletonTemplate.content.cloneNode(true));
+    }
+  }
+
   function renderEmpty(container, message) {
     if (!container) return;
+    clearListState(container);
     const div = document.createElement('div');
     div.className = 'market-list-empty';
     div.textContent = message;
@@ -166,6 +190,7 @@
 
   function renderError(container, message) {
     if (!container) return;
+    clearListState(container);
     const div = document.createElement('div');
     div.className = 'market-error';
     div.textContent = message || TEXT.genericError;
@@ -248,6 +273,7 @@
   function renderChipGroup(container, items, options = {}) {
     if (!container) return;
     const pool = Array.isArray(items) ? items.filter(Boolean) : [];
+    hideChipSkeleton(container);
     container.innerHTML = '';
     if (options.countTarget) {
       options.countTarget.textContent = pool.length;
@@ -282,6 +308,27 @@
       }
       container.appendChild(chip);
     });
+  }
+
+  function showChipSkeleton(container, count = 3) {
+    if (!container) return;
+    if (container.dataset.loading === 'true') return;
+    container.dataset.loading = 'true';
+    const fragment = document.createDocumentFragment();
+    for (let i = 0; i < count; i += 1) {
+      const placeholder = document.createElement('span');
+      placeholder.className = 'skeleton-chip';
+      placeholder.setAttribute('aria-hidden', 'true');
+      fragment.appendChild(placeholder);
+    }
+    container.appendChild(fragment);
+  }
+
+  function hideChipSkeleton(container) {
+    if (!container) return;
+    if (container.dataset.loading !== 'true') return;
+    container.removeAttribute('data-loading');
+    container.querySelectorAll('.skeleton-chip').forEach((node) => node.remove());
   }
 
   function attachChipHandler(container, options = {}) {
@@ -589,8 +636,10 @@
     }
 
     setStatus(`${TEXT.loading} ${TEXT.timeframes[currentTimeframe] || currentTimeframe} ${TEXT.dataSuffix}`);
-    if (listGainers) listGainers.innerHTML = '';
-    if (listLosers) listLosers.innerHTML = '';
+    setListLoading(listGainers);
+    setListLoading(listLosers);
+    showChipSkeleton(recentChips, 3);
+    showChipSkeleton(watchlistChips, 4);
 
     const shouldPost =
       Boolean(options.watchAction) || Boolean(options.recentAction) || Boolean(normalizedQuery);
@@ -665,12 +714,14 @@
     } catch (error) {
       renderError(listGainers, error && error.message);
       setStatus(TEXT.statusError);
+      hideChipSkeleton(recentChips);
+      hideChipSkeleton(watchlistChips);
     }
   }
 
   function renderList(container, items, timeframe, invert) {
     if (!container) return;
-    container.innerHTML = '';
+    clearListState(container);
     if (!items.length) {
       renderEmpty(container, TEXT.emptyList);
       return;

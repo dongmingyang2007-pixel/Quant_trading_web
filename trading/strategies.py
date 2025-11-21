@@ -1651,6 +1651,115 @@ def format_table(backtest: pd.DataFrame) -> list[dict[str, Any]]:
     ]
 
 
+def _format_chart_time(value: Any) -> str:
+    if isinstance(value, (pd.Timestamp, datetime)):
+        return pd.Timestamp(value).strftime("%Y-%m-%d")
+    if isinstance(value, date):
+        return value.strftime("%Y-%m-%d")
+    try:
+        return pd.to_datetime(value).strftime("%Y-%m-%d")
+    except Exception:
+        return str(value)
+
+
+def build_interactive_chart_payload(
+    prices: pd.DataFrame, backtest: pd.DataFrame, params: StrategyInput, *, max_points: int = 1500
+) -> dict[str, Any]:
+    if prices.empty or backtest.empty:
+        return {}
+    display_prices = prices.sort_index().tail(max_points).copy()
+    candle_cols = ["open", "high", "low", "close"]
+    for col in candle_cols:
+        if col not in display_prices.columns:
+            display_prices[col] = display_prices.get("adj close")
+    candles: list[dict[str, float | str]] = []
+    for idx, row in display_prices.iterrows():
+        try:
+            open_val = float(row["open"])
+            high_val = float(row["high"])
+            low_val = float(row["low"])
+            close_val = float(row["close"])
+        except (TypeError, ValueError):
+            continue
+        if any(math.isnan(val) for val in (open_val, high_val, low_val, close_val)):
+            continue
+        candles.append(
+            {
+                "time": _format_chart_time(idx),
+                "open": round(open_val, 4),
+                "high": round(high_val, 4),
+                "low": round(low_val, 4),
+                "close": round(close_val, 4),
+            }
+        )
+
+    def _series_from(column: str, precision: int = 4) -> list[dict[str, float | str]]:
+        if column not in display_prices.columns:
+            return []
+        series: list[dict[str, float | str]] = []
+        for idx, value in display_prices[column].dropna().items():
+            try:
+                num_val = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isnan(num_val):
+                continue
+            series.append({"time": _format_chart_time(idx), "value": round(num_val, precision)})
+        return series
+
+    rsi_series = _series_from("rsi", precision=2)
+    sma_short_series = _series_from("sma_short")
+    sma_long_series = _series_from("sma_long")
+
+    # Trade markers
+    signals: list[dict[str, Any]] = []
+    aligned_backtest = backtest.sort_index().loc[display_prices.index.min() : display_prices.index.max()]
+    for idx, row in aligned_backtest.iterrows():
+        signal_value = row.get("signal")
+        if signal_value is None:
+            continue
+        try:
+            signal_int = int(signal_value)
+        except (TypeError, ValueError):
+            continue
+        if signal_int == 0:
+            continue
+        trade_type = "buy" if signal_int > 0 else "sell"
+        try:
+            price_val = round(float(row.get("adj close", float("nan"))), 4)
+        except (TypeError, ValueError):
+            price_val = None
+        try:
+            cum_ret = round(float(row.get("cum_strategy", 0.0)), 4)
+        except (TypeError, ValueError):
+            cum_ret = None
+        signals.append(
+            {
+                "time": _format_chart_time(idx),
+                "type": trade_type,
+                "price": price_val,
+                "position": row.get("position"),
+                "cum_return": cum_ret,
+                "daily_return": round(float(row.get("strategy_return", 0.0)), 4)
+                if not pd.isna(row.get("strategy_return"))
+                else None,
+            }
+        )
+
+    if not candles:
+        return {}
+    return {
+        "symbol": params.ticker.upper(),
+        "candles": candles,
+        "sma_short": sma_short_series,
+        "sma_long": sma_long_series,
+        "rsi": rsi_series,
+        "signals": signals,
+        "short_window": params.short_window,
+        "long_window": params.long_window,
+    }
+
+
 def generate_charts(
     prices: pd.DataFrame,
     backtest: pd.DataFrame,
@@ -2282,6 +2391,8 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
                 "未找到 walk-forward 报告，请运行 trading.mlops.walk_forward_train 生成最新报告。"
             )
 
+    interactive_chart = build_interactive_chart_payload(prices, backtest, params)
+
     result_payload = {
         "ticker": params.ticker.upper(),
         "start_date": params.start_date.strftime("%Y-%m-%d"),
@@ -2294,6 +2405,7 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
         "stats": stats,
         "benchmark_stats": benchmark_stats,
         "charts": charts,
+        "interactive_chart": interactive_chart,
         "recommendations": recommendations,
         "related_portfolios": related_portfolios,
         "key_takeaways": key_takeaways,

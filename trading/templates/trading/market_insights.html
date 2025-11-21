@@ -91,7 +91,11 @@
                 </div>
             </div>
             <div class="memory-card__body">
-                <div class="memory-chip-flow" data-role="recent-chips"></div>
+                <div class="memory-chip-flow" data-role="recent-chips" data-loading="true">
+                    {% for _ in "123"|make_list %}
+                    <span class="skeleton-chip" aria-hidden="true"></span>
+                    {% endfor %}
+                </div>
                 <div class="memory-card__footer">
                     {% if lang_prefix == 'zh' %}
                         自动保留最近 6 条检索记录。
@@ -126,7 +130,11 @@
                         </div>
                     </div>
                     <div class="memory-card__body">
-                        <div class="memory-chip-flow favorites-chip-flow" data-role="watchlist-chips"></div>
+                        <div class="memory-chip-flow favorites-chip-flow" data-role="watchlist-chips" data-loading="true">
+                            {% for _ in "1234"|make_list %}
+                            <span class="skeleton-chip" aria-hidden="true"></span>
+                            {% endfor %}
+                        </div>
                         <div class="memory-card__footer">
                             {% if lang_prefix == 'zh' %}
                                 使用“加入关注列表”按钮即可把当前标的收藏在此，支持最多 10 条。
@@ -158,7 +166,7 @@
                     {% if lang_prefix == 'zh' %}按所选时间范围排序，展示表现最佳的股票。{% else %}Best performers within the selected window.{% endif %}
                 </p>
             </header>
-            <div class="market-list" data-role="gainers"></div>
+            <div class="market-list" data-role="gainers" data-skeleton-count="3"></div>
         </article>
         <article class="market-column">
             <header class="market-column-head">
@@ -167,7 +175,7 @@
                     {% if lang_prefix == 'zh' %}关注回撤最大的标的，观察潜在反弹机会。{% else %}Track the deepest pullbacks for potential reversals.{% endif %}
                 </p>
             </header>
-            <div class="market-list" data-role="losers"></div>
+            <div class="market-list" data-role="losers" data-skeleton-count="3"></div>
         </article>
     </section>
 
@@ -199,6 +207,29 @@
             </div>
             <footer class="market-card-foot">
                 <span class="market-updated" data-role="updated"></span>
+            </footer>
+        </article>
+    </template>
+    <template id="market-card-skeleton">
+        <article class="market-card market-card--skeleton" aria-hidden="true">
+            <header class="market-card-head">
+                <div class="market-meta">
+                    <span class="skeleton-line skeleton-line--md"></span>
+                </div>
+                <div class="market-change-group">
+                    <span class="market-metric">
+                        <span class="skeleton-line skeleton-line--sm"></span>
+                    </span>
+                    <span class="market-metric">
+                        <span class="skeleton-line skeleton-line--xs"></span>
+                    </span>
+                </div>
+            </header>
+            <div class="market-card-chart">
+                <div class="skeleton-block"></div>
+            </div>
+            <footer class="market-card-foot">
+                <span class="skeleton-line skeleton-line--xs"></span>
             </footer>
         </article>
     </template>

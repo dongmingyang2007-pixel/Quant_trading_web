@@ -17,6 +17,9 @@
     const selectedTopicBadge = composePanel?.querySelector("[data-role='selected-topic']");
     const topicInput = composePanel?.querySelector("[data-role='topic-input']");
     const createTopicBtn = root.querySelector("[data-role='create-topic']");
+    const composeTriggers = [];
+    if (openComposeBtn) composeTriggers.push(openComposeBtn);
+    if (createTopicBtn) composeTriggers.push(createTopicBtn);
     const composerForm = composePanel?.querySelector("[data-role='composer']");
     const contentTextarea = composerForm?.querySelector("textarea[name='content']");
     const croppedInput = composerForm?.querySelector("[data-role='cropped-data']");
@@ -44,6 +47,8 @@
     const activeTopicName = root.dataset.activeTopicName;
 
     let objectUrl = null;
+    let lastComposeTrigger = null;
+    let lastDialogFocus = null;
 
     const cropState = {
         dataUrl: "",
@@ -77,9 +82,21 @@
         cropperImage.style.transform = `translate(-50%, -50%) translate(${cropState.offsetX}px, ${cropState.offsetY}px) scale(${scale})`;
     };
 
+    const setComposeExpanded = (expanded) => {
+        composeTriggers.forEach((btn) => {
+            if (btn) {
+                btn.setAttribute("aria-expanded", expanded ? "true" : "false");
+            }
+        });
+        if (composePanel) {
+            composePanel.setAttribute("aria-hidden", expanded ? "false" : "true");
+        }
+    };
+
     const openCompose = (opts = {}) => {
         if (!composePanel) return;
         composePanel.classList.remove("d-none");
+        setComposeExpanded(true);
         if (contentTextarea) {
             setTimeout(() => contentTextarea.focus(), 50);
         }
@@ -90,12 +107,17 @@
             selectedTopicBadge.textContent = `#${opts.newTopic ? "新话题" : activeTopicName || "话题"}`;
         }
         if (newTopicFields) {
-            newTopicFields.classList.toggle("d-none", !opts.newTopic);
-            if (!opts.newTopic) {
+            const willShow = Boolean(opts.newTopic);
+            newTopicFields.classList.toggle("d-none", !willShow);
+            newTopicFields.setAttribute("aria-hidden", willShow ? "false" : "true");
+            if (!willShow) {
                 newTopicFields.querySelectorAll("input,textarea").forEach((el) => {
                     el.value = "";
                 });
             }
+        }
+        if (toggleNewTopicBtn) {
+            toggleNewTopicBtn.setAttribute("aria-expanded", opts.newTopic ? "true" : "false");
         }
         if (topicInput && opts.newTopic) {
             topicInput.value = "";
@@ -105,15 +127,24 @@
     const closeCompose = () => {
         if (!composePanel) return;
         composePanel.classList.add("d-none");
+        setComposeExpanded(false);
         if (newTopicFields) {
             newTopicFields.classList.add("d-none");
+            newTopicFields.setAttribute("aria-hidden", "true");
             newTopicFields.querySelectorAll("input,textarea").forEach((el) => (el.value = ""));
+        }
+        if (toggleNewTopicBtn) {
+            toggleNewTopicBtn.setAttribute("aria-expanded", "false");
         }
         if (topicInput) {
             topicInput.value = activeTopicId || "";
         }
         if (selectedTopicBadge) {
             selectedTopicBadge.textContent = `#${activeTopicName || "话题"}`;
+        }
+        if (lastComposeTrigger) {
+            lastComposeTrigger.focus();
+            lastComposeTrigger = null;
         }
     };
 
@@ -133,8 +164,10 @@
         if (!cropperModal || !cropperImage || !cropperStage || !cropZoom) return;
         cropState.dataUrl = dataUrl;
         cropState.originalFile = file;
+        lastDialogFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         cropperModal.classList.remove("d-none");
         cropperModal.setAttribute("aria-hidden", "false");
+        cropperModal.focus({ preventScroll: true });
         cropZoom.value = "1";
         cropState.zoom = 1;
         cropState.offsetX = 0;
@@ -161,6 +194,10 @@
         cropperModal.classList.add("d-none");
         cropperModal.setAttribute("aria-hidden", "true");
         cropState.pointer = null;
+        if (lastDialogFocus) {
+            lastDialogFocus.focus();
+            lastDialogFocus = null;
+        }
     };
 
     const applyCroppedImage = () => {
@@ -224,7 +261,10 @@
     };
 
     if (openComposeBtn && composePanel) {
-        openComposeBtn.addEventListener("click", () => openCompose());
+        openComposeBtn.addEventListener("click", (event) => {
+            lastComposeTrigger = event.currentTarget;
+            openCompose();
+        });
     }
 
     if (closeComposeBtn) {
@@ -238,6 +278,8 @@
         toggleNewTopicBtn.addEventListener("click", () => {
             const willShow = newTopicFields.classList.contains("d-none");
             newTopicFields.classList.toggle("d-none", !willShow);
+            newTopicFields.setAttribute("aria-hidden", willShow ? "false" : "true");
+            toggleNewTopicBtn.setAttribute("aria-expanded", willShow ? "true" : "false");
             if (topicInput) {
                 topicInput.value = willShow ? "" : activeTopicId || "";
             }
@@ -256,7 +298,8 @@
     }
 
     if (createTopicBtn) {
-        createTopicBtn.addEventListener("click", () => {
+        createTopicBtn.addEventListener("click", (event) => {
+            lastComposeTrigger = event.currentTarget;
             openCompose({ newTopic: true });
             const input = newTopicFields?.querySelector("input");
             if (input) {
@@ -353,6 +396,14 @@
             closeCropper();
         });
     }
+
+    document.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        if (cropperModal && !cropperModal.classList.contains("d-none")) {
+            event.preventDefault();
+            closeCropper();
+        }
+    });
 
     const escapeHtml = (value) =>
         value

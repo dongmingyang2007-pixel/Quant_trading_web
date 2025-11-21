@@ -44,7 +44,11 @@
         <aside class="community-topics">
             <div class="topic-head">
                 <span>{% bilingual "Topics" "话题广场" %}</span>
-                <button type="button" class="btn btn-sm btn-outline-primary" data-role="create-topic">
+                <button type="button"
+                        class="btn btn-sm btn-outline-primary"
+                        data-role="create-topic"
+                        aria-controls="community-compose-panel"
+                        aria-expanded="false">
                     {% bilingual "New topic" "新建话题" %}
                 </button>
             </div>
@@ -76,7 +80,11 @@
             {% endif %}
 
             <div class="community-toolbar">
-                <button type="button" class="btn btn-primary" data-role="open-compose">
+                <button type="button"
+                        class="btn btn-primary"
+                        data-role="open-compose"
+                        aria-controls="community-compose-panel"
+                        aria-expanded="false">
                     <span class="me-1">＋</span>{% bilingual "New post" "发布新动态" %}
                 </button>
                 <div class="community-topic-meta">
@@ -91,7 +99,13 @@
                 </div>
             </div>
 
-            <section class="community-card community-post-form d-none" data-role="compose-panel">
+            <section class="community-card community-post-form d-none"
+                     data-role="compose-panel"
+                     id="community-compose-panel"
+                     role="region"
+                     aria-labelledby="community-compose-title"
+                     aria-hidden="true">
+                <h2 id="community-compose-title" class="visually-hidden">{% bilingual "Compose a new post" "发布新动态" %}</h2>
                 <form method="post" enctype="multipart/form-data" novalidate data-role="composer">
                     {% csrf_token %}
                     <input type="hidden" name="action" value="create_post">
@@ -101,12 +115,19 @@
                         <span class="badge bg-primary-subtle text-primary-emphasis" data-role="selected-topic">
                             #{{ active_topic.name }}
                         </span>
-                        <button type="button" class="btn btn-link btn-sm" data-role="toggle-new-topic">
+                        <button type="button"
+                                class="btn btn-link btn-sm"
+                                data-role="toggle-new-topic"
+                                aria-controls="community-new-topic-fields"
+                                aria-expanded="false">
                             {% bilingual "Create topic" "创建新话题" %}
                         </button>
                         <button type="button" class="btn-close ms-auto" data-role="close-compose" aria-label="{% bilingual 'Close compose panel' '关闭发布面板' %}"></button>
                     </div>
-                    <div class="compose-new-topic d-none" data-role="new-topic-fields">
+                    <div class="compose-new-topic d-none"
+                         data-role="new-topic-fields"
+                         id="community-new-topic-fields"
+                         aria-hidden="true">
                         <div class="row g-3 align-items-end">
                             <div class="col-md-6">
                                 <label class="form-label">{% bilingual "Topic name" "新话题名称" %}</label>
@@ -279,7 +300,12 @@
     </div>
 </div>
 
-<div class="community-cropper d-none" data-role="cropper-modal" aria-hidden="true">
+<div class="community-cropper d-none"
+     data-role="cropper-modal"
+     role="dialog"
+     aria-modal="true"
+     aria-hidden="true"
+     tabindex="-1">
     <div class="cropper-dialog">
         <div class="cropper-header">
             <h2 class="cropper-title">{% bilingual "Crop image" "裁剪图片" %}</h2>

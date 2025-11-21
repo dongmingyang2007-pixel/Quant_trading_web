@@ -52,10 +52,21 @@
     const taskEndpoint = form.dataset.taskEndpoint || (typeof TASK_ENDPOINT !== 'undefined' ? TASK_ENDPOINT : '');
     const statusTemplate =
         form.dataset.taskStatusTemplate || (typeof TASK_STATUS_TEMPLATE !== 'undefined' ? TASK_STATUS_TEMPLATE : '');
-    const historyBase = form.dataset.historyBase || (typeof BACKTEST_PATH !== 'undefined' ? BACKTEST_PATH : '');
+    const historyBase =
+        form.dataset.historyBase ||
+        (typeof HISTORY_LOAD_BASE !== 'undefined' && HISTORY_LOAD_BASE) ||
+        (typeof BACKTEST_PATH !== 'undefined' ? BACKTEST_PATH : '');
     const csrfInput = form.querySelector('input[name=csrfmiddlewaretoken]');
     const csrfToken = csrfInput ? csrfInput.value : '';
     const TASK_POLL_INTERVAL_MS = 2500;
+    let pageUnloading = false;
+    window.addEventListener('beforeunload', () => {
+        pageUnloading = true;
+    });
+    window.addEventListener('pagehide', () => {
+        pageUnloading = true;
+    });
+
     const asyncText = langIsZh
         ? {
               queue: '任务已排队，等待执行…',
@@ -118,15 +129,16 @@
                         status: 'SUCCESS',
                         message: asyncText.success,
                         link: historyId ? `${historyBase}?history_id=${encodeURIComponent(historyId)}` : null,
+                        taskId,
                     });
                     return;
                 }
                 if (state === 'FAILURE' || state === 'REVOKED') {
-                    updateDockTask(taskId, { status: 'FAILURE', message: data.error || asyncText.failure });
+                    updateDockTask(taskId, { status: 'FAILURE', message: data.error || asyncText.failure, taskId });
                     return;
                 }
                 const runningMsg = state === 'STARTED' ? asyncText.running : state === 'RETRY' ? asyncText.retry : asyncText.queue;
-                updateDockTask(taskId, { status: state || 'PENDING', message: runningMsg });
+                updateDockTask(taskId, { status: state || 'PENDING', message: runningMsg, taskId });
                 const elapsed = Date.now() - startedAt;
                 if (elapsed < 10 * 60 * 1000) {
                     window.setTimeout(() => pollTask(taskId, startedAt), TASK_POLL_INTERVAL_MS);
@@ -178,6 +190,7 @@
                 'X-CSRFToken': csrfToken,
             },
             body: JSON.stringify(params),
+            keepalive: true,
         })
             .then((response) => {
                 return response
@@ -220,12 +233,20 @@
                         ticker,
                         created,
                         link,
+                        taskId: immediateHistory,
                     });
                     return;
                 }
                 if (data.task_id) {
                     const taskId = data.task_id;
-                    updateDockTask(taskId, { status: 'PENDING', message: asyncText.queue, ticker, created });
+                    const shortId = String(taskId).slice(-6).toUpperCase();
+                    updateDockTask(taskId, {
+                        status: 'PENDING',
+                        message: `${asyncText.queue} · #${shortId}`,
+                        ticker,
+                        created,
+                        taskId,
+                    });
                     window.setTimeout(() => pollTask(taskId, Date.now()), TASK_POLL_INTERVAL_MS);
                     return;
                 }
@@ -236,6 +257,7 @@
                         ticker,
                         created,
                         link: null,
+                        taskId: null,
                     });
                     return;
                 }
@@ -267,9 +289,12 @@
         }
         submitAsync(params, placeholderId)
             .catch((error) => {
+                if (pageUnloading) {
+                    console.warn('Backtest submission interrupted by navigation:', error);
+                    return;
+                }
                 updateDockTask(placeholderId, { status: 'FAILURE', message: error.message || asyncText.failure });
-                alert(error.message || (langIsZh ? '回测提交失败，已尝试回退传统方式。' : 'Backtest submit failed.'));
-                form.submit();
+                alert(error.message || (langIsZh ? '回测提交失败，请稍后重试。' : 'Backtest submit failed. Please try again.'));
             })
             .finally(() => {
                 if (submitBtn) {

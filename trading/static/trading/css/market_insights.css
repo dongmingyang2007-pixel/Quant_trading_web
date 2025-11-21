@@ -473,6 +473,39 @@
     opacity: 0.8;
 }
 
+[data-loading="true"] .market-chip,
+[data-loading="true"] .market-chip-empty,
+[data-loading="true"] .market-chip-remove {
+    display: none;
+}
+
+.skeleton-chip {
+    display: inline-flex;
+    min-width: 72px;
+    height: 34px;
+    border-radius: 999px;
+    background: rgba(226, 232, 240, 0.85);
+    margin-right: 8px;
+    margin-bottom: 10px;
+    position: relative;
+    overflow: hidden;
+}
+
+.skeleton-chip::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.55), rgba(255,255,255,0));
+    transform: translateX(-100%);
+    animation: market-shimmer 1.2s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .skeleton-chip::after {
+        animation: none;
+    }
+}
+
 .chip-hint {
     margin: 0;
     font-size: 0.8rem;
@@ -661,6 +694,72 @@
     font-size: 0.78rem;
     color: #64748b;
 }
+.market-card--skeleton {
+    pointer-events: none;
+}
+.market-card--skeleton .skeleton-line,
+.market-card--skeleton .skeleton-block {
+    position: relative;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(226, 232, 240, 0.8);
+}
+.market-card--skeleton .skeleton-block {
+    height: 48px;
+    border-radius: 14px;
+}
+.market-card--skeleton .skeleton-line {
+    display: inline-block;
+    height: 12px;
+    width: 100%;
+    margin-bottom: 6px;
+}
+.market-card--skeleton .skeleton-line--md {
+    width: 60%;
+    height: 14px;
+}
+.market-card--skeleton .skeleton-line--sm {
+    width: 40%;
+    height: 10px;
+}
+.market-card--skeleton .skeleton-line--xs {
+    width: 30%;
+    height: 10px;
+}
+.market-card--skeleton .skeleton-line::after,
+.market-card--skeleton .skeleton-block::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.6), rgba(255,255,255,0));
+    transform: translateX(-100%);
+    animation: market-shimmer 1.2s infinite;
+}
+.market-list[data-loading="true"] {
+    opacity: 0.85;
+}
+.market-list[data-loading="true"] .market-card {
+    box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .market-card--skeleton .skeleton-line::after,
+    .market-card--skeleton .skeleton-block::after {
+        animation: none;
+    }
+}
+
+@keyframes market-shimmer {
+    0% {
+        transform: translateX(-100%);
+    }
+    60% {
+        transform: translateX(100%);
+    }
+    100% {
+        transform: translateX(100%);
+    }
+}
 
 .market-list-empty {
     display: grid;
@@ -706,3 +805,5 @@
         padding: 12px 14px 16px;
     }
 }
+
+html[data-theme="dark"] .market-page { color: inherit; }

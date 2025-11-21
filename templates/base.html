@@ -8,197 +8,11 @@
     {% bootstrap_css %}
     {% bootstrap_javascript %}
     <link rel="stylesheet" href="{% static 'trading/css/styles.css' %}">
-    <style nonce="{{ csp_nonce }}">
-        /* Ensure task dock looks consistent on every page even if cached CSS misses */
-        .task-dock {
-            position: fixed !important;
-            right: 18px !important;
-            bottom: 18px !important;
-            left: auto !important;
-            top: auto !important;
-            width: 360px;
-            max-height: 72vh;
-            background: linear-gradient(160deg, rgba(245, 249, 255, 0.96), rgba(234, 242, 255, 0.92));
-            border: 1px solid rgba(148, 163, 184, 0.5);
-            box-shadow: 0 22px 56px rgba(15, 23, 42, 0.18);
-            border-radius: 18px;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            z-index: 9999;
-            backdrop-filter: blur(6px);
-            transition: opacity 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
-        }
-        .task-dock.minimized {
-            width: auto;
-            min-width: 200px;
-            height: auto;
-            cursor: pointer;
-            padding: 10px 14px;
-            gap: 10px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: space-between;
-            border-radius: 16px;
-            box-shadow: 0 16px 32px rgba(15, 23, 42, 0.18);
-        }
-        .task-dock-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-            padding: 14px 16px;
-            background: linear-gradient(120deg, rgba(59, 130, 246, 0.16), rgba(14, 165, 233, 0.12));
-            border-bottom: 1px solid rgba(148, 163, 184, 0.26);
-            font-weight: 700;
-            color: #0f172a;
-            user-select: none;
-            cursor: move;
-        }
-        .task-dock.minimized .task-dock-header {
-            border-bottom: none;
-            padding: 0;
-            background: transparent;
-            cursor: pointer;
-        }
-        .task-dock-body {
-            padding: 12px 14px;
-            overflow-y: auto;
-            display: grid;
-            gap: 10px;
-            background: #fff;
-        }
-        .task-dock-body::before {
-            content: "";
-            height: 1px;
-            margin: -12px -14px 12px -14px;
-            background: linear-gradient(90deg, rgba(148, 163, 184, 0.08), rgba(148, 163, 184, 0.25), rgba(148, 163, 184, 0.08));
-            display: block;
-        }
-        .task-pill {
-            padding: 10px 12px;
-            border-radius: 14px;
-            border: 1px solid rgba(148, 163, 184, 0.32);
-            background: rgba(248, 250, 252, 0.96);
-            box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
-        }
-        .task-header-left {
-            display: inline-flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .task-header-right {
-            display: inline-flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .task-title {
-            font-size: 1.05rem;
-            font-weight: 700;
-            color: #0f172a;
-        }
-        .task-dot {
-            display: inline-flex;
-            width: 14px;
-            height: 14px;
-            border-radius: 999px;
-            background: linear-gradient(135deg, #2563eb, #0ea5e9);
-            box-shadow: 0 0 0 6px rgba(37, 99, 235, 0.14);
-            flex-shrink: 0;
-        }
-        .task-pill h6 {
-            margin: 0 0 4px 0;
-            font-size: 0.95rem;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .task-pill .task-meta {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 0.82rem;
-            color: #475569;
-            flex-wrap: wrap;
-        }
-        .task-pill .status {
-            padding: 2px 8px;
-            border-radius: 999px;
-            border: 1px solid rgba(148, 163, 184, 0.6);
-            background: rgba(226, 232, 240, 0.5);
-            font-size: 0.78rem;
-            font-weight: 600;
-        }
-        .task-pill .status.success {
-            color: #16a34a;
-            border-color: rgba(22, 163, 74, 0.4);
-            background: rgba(22, 163, 74, 0.08);
-        }
-        .task-pill .status.failure {
-            color: #dc2626;
-            border-color: rgba(220, 38, 38, 0.4);
-            background: rgba(220, 38, 38, 0.08);
-        }
-        .task-pill .status.pending {
-            color: #ca8a04;
-            border-color: rgba(202, 138, 4, 0.4);
-            background: rgba(202, 138, 4, 0.08);
-        }
-        .task-pill a {
-            color: #2563eb;
-            font-weight: 600;
-            font-size: 0.82rem;
-        }
-        .task-count {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            min-width: 22px;
-            height: 22px;
-            padding: 0 8px;
-            border-radius: 999px;
-            background: linear-gradient(135deg, #2563eb, #0ea5e9);
-            color: #fff;
-            font-size: 0.9rem;
-            font-weight: 700;
-        }
-        .task-toggle {
-            border: none;
-            background: linear-gradient(135deg, #2563eb, #1d4ed8);
-            color: #fff;
-            font-size: 12px;
-            cursor: pointer;
-            width: 32px;
-            height: 32px;
-            border-radius: 999px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 10px 22px rgba(37, 99, 235, 0.28);
-            transition: transform 0.12s ease, box-shadow 0.12s ease;
-            -webkit-appearance: none;
-            appearance: none;
-            outline: none;
-        }
-        .task-toggle::after {
-            content: "▾";
-            line-height: 1;
-            font-size: 13px;
-        }
-        .task-toggle:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 12px 26px rgba(37, 99, 235, 0.35);
-        }
-        .task-dock.minimized .task-dock-body {
-            display: none;
-        }
-        .task-dock:hover {
-            box-shadow: 0 24px 62px rgba(15, 23, 42, 0.22);
-        }
-    </style>
     {% block extra_head %}{% endblock %}
 </head>
-<body class="bg-light">
+<body class="bg-light"
+      data-task-status-template="{% url 'trading:api_v1_task_status' task_id='TASK_ID_PLACEHOLDER' %}"
+      data-task-history-base="{% url 'trading:backtest' %}">
     <nav class="navbar navbar-expand-lg navbar-dark om-nav shadow-sm mb-4">
         <div class="container-xl">
             <a class="navbar-brand fw-semibold" href="{% url 'trading:backtest' %}">{% bilingual "Quant Trading Simulator" "量化交易模拟器" %}</a>
@@ -225,22 +39,32 @@
                         </li>
                     {% endif %}
                 </ul>
-                <div class="d-flex align-items-center gap-3 flex-wrap justify-content-end">
-                    <form action="{% url 'set_language' %}" method="post" class="language-switcher">
+                <div class="nav-actions">
+                    <form action="{% url 'set_language' %}" method="post" class="nav-lang-switcher">
                         {% csrf_token %}
                         <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                        <div class="btn-group btn-group-sm" role="group" aria-label="{% bilingual 'Language switch' '语言切换' %}">
-                            <button type="submit" name="language" value="zh-hans" class="btn btn-outline-light {% if request.LANGUAGE_CODE == 'zh-hans' %}active{% endif %}">
+                        <div class="nav-lang-pill" role="group" aria-label="{% bilingual 'Language switch' '语言切换' %}">
+                            <button type="submit" name="language" value="zh-hans" class="lang-pill-btn{% if request.LANGUAGE_CODE == 'zh-hans' %} is-active{% endif %}">
                                 {% bilingual "中文" "中文" %}
                             </button>
-                            <button type="submit" name="language" value="en" class="btn btn-outline-light {% if request.LANGUAGE_CODE == 'en' %}active{% endif %}">
+                            <button type="submit" name="language" value="en" class="lang-pill-btn{% if request.LANGUAGE_CODE == 'en' %} is-active{% endif %}">
                                 {% bilingual "English" "English" %}
                             </button>
                         </div>
                     </form>
                     {% if user.is_authenticated %}
-                        <span class="navbar-text text-white-50 small d-none d-lg-inline">{% bilingual "Welcome," "欢迎，" %}{{ user.username }}</span>
-                        <a class="btn btn-sm btn-outline-light" href="{% url 'logout' %}">{% bilingual "Sign out" "退出登录" %}</a>
+                        <span class="nav-greeting">{% bilingual "Welcome," "欢迎，" %}{{ user.username }}</span>
+                        <div class="nav-user-menu" data-user-menu>
+                            <button type="button" class="nav-user-toggle" data-menu-toggle aria-haspopup="true" aria-expanded="false">
+                                <span class="nav-user-avatar">{{ user.username|first|upper }}</span>
+                                <span class="nav-user-name">{{ user.username }}</span>
+                                <span class="nav-user-caret">▾</span>
+                            </button>
+                            <div class="nav-user-dropdown" data-menu-panel hidden>
+                                <a href="{% url 'trading:account' %}">{% bilingual "Account Center" "账户中心" %}</a>
+                                <a class="is-danger" href="{% url 'logout' %}">{% bilingual "Sign out" "退出登录" %}</a>
+                            </div>
+                        </div>
                     {% else %}
                         <a class="btn btn-sm btn-outline-light" href="{% url 'login' %}">{% bilingual "Sign in" "登录" %}</a>
                         <a class="btn btn-sm btn-light" href="{% url 'trading:signup' %}">{% bilingual "Sign up" "注册" %}</a>
@@ -249,6 +73,80 @@
             </div>
         </div>
     </nav>
+{% with lang_prefix=request.LANGUAGE_CODE|default:'zh-hans'|lower|slice:":2" %}
+    <script id="command-palette-data" type="application/json">
+    [
+        {
+            "id": "backtest",
+            "label": "{% if lang_prefix == 'zh' %}{{ "开始回测"|escapejs }}{% else %}{{ "Start Backtest"|escapejs }}{% endif %}",
+            "description": "{% if lang_prefix == 'zh' %}{{ "进入旗舰策略实验室"|escapejs }}{% else %}{{ "Open flagship strategy lab"|escapejs }}{% endif %}",
+            "shortcut": "B",
+            "type": "route",
+            "href": "{% url 'trading:backtest' %}"
+        },
+        {
+            "id": "market",
+            "label": "{% if lang_prefix == 'zh' %}{{ "股市信息"|escapejs }}{% else %}{{ "Market Insights"|escapejs }}{% endif %}",
+            "description": "{% if lang_prefix == 'zh' %}{{ "快速查看涨跌榜"|escapejs }}{% else %}{{ "Watch gainers/decliners dashboard"|escapejs }}{% endif %}",
+            "shortcut": "M",
+            "type": "route",
+            "href": "{% url 'trading:market_insights' %}"
+        },
+        {
+            "id": "learning",
+            "label": "{% if lang_prefix == 'zh' %}{{ "学习中心"|escapejs }}{% else %}{{ "Learning Hub"|escapejs }}{% endif %}",
+            "description": "{% if lang_prefix == 'zh' %}{{ "继续学习课程"|escapejs }}{% else %}{{ "Continue structured lessons"|escapejs }}{% endif %}",
+            "shortcut": "L",
+            "type": "route",
+            "href": "{% url 'trading:learning_center' %}"
+        },
+        {
+            "id": "community",
+            "label": "{% if lang_prefix == 'zh' %}{{ "社区广场"|escapejs }}{% else %}{{ "Community Hub"|escapejs }}{% endif %}",
+            "description": "{% if lang_prefix == 'zh' %}{{ "与社区分享灵感"|escapejs }}{% else %}{{ "Share insights with peers"|escapejs }}{% endif %}",
+            "shortcut": "C",
+            "type": "route",
+            "href": "{% url 'trading:community' %}"
+        }{% if user.is_authenticated %},
+        {
+            "id": "account",
+            "label": "{% if lang_prefix == 'zh' %}{{ "账户中心"|escapejs }}{% else %}{{ "Account Center"|escapejs }}{% endif %}",
+            "description": "{% if lang_prefix == 'zh' %}{{ "管理资料与历史记录"|escapejs }}{% else %}{{ "Profile, history & exports"|escapejs }}{% endif %}",
+            "shortcut": "A",
+            "type": "route",
+            "href": "{% url 'trading:account' %}"
+        }{% endif %}
+    ]
+    </script>
+{% endwith %}
+    <div id="command-palette" class="command-palette" aria-hidden="true" hidden>
+        <div class="command-palette__backdrop" data-role="palette-dismiss"></div>
+        <div class="command-palette__panel" role="dialog" aria-modal="true" aria-labelledby="command-palette-title">
+            <header class="command-palette__head">
+                <div class="command-palette__title">
+                    <span id="command-palette-title">{% bilingual "Command Palette" "命令面板" %}</span>
+                </div>
+                <div class="command-palette__input-wrap">
+                    <input type="text"
+                           class="command-palette__input"
+                           placeholder="{% bilingual 'Search commands or destinations…' '搜索命令或目标…' %}"
+                           autocomplete="off"
+                           data-role="palette-input">
+                </div>
+            </header>
+            <div class="command-palette__body">
+                <ul class="command-palette__list" data-role="palette-list"></ul>
+                <div class="command-palette__empty hidden" data-role="palette-empty">
+                    {% bilingual "No matching actions." "没有匹配的操作。" %}
+                </div>
+            </div>
+            <footer class="command-palette__footer">
+                <span>{% bilingual "Enter to execute" "回车执行" %}</span>
+                <span>{% bilingual "Esc to exit" "Esc 退出" %}</span>
+                <span>{% bilingual "↑ ↓ to navigate" "↑ ↓ 选择" %}</span>
+            </footer>
+        </div>
+    </div>
     <!-- 全局任务栏（固定在右下，不随页面切换消失） -->
     <div id="task-dock" class="task-dock minimized shadow" aria-live="polite" aria-label="{% bilingual "Backtest tasks" "回测任务" %}">
         <div id="task-dock-header" class="task-dock-header">
@@ -268,273 +166,9 @@
     <main class="container-xl pb-5">
         {% block content %}{% endblock %}
     </main>
-    <script nonce="{{ csp_nonce }}">
-        (function () {
-            const STORAGE_KEY = "backtestTaskStore";
-            if (window.__globalTaskDockMounted) return;
-            window.__globalTaskDockMounted = true;
-            const langIsZh = (document.documentElement.lang || "").toLowerCase().startsWith("zh");
-            const statusTemplate = "{% url 'trading:api_v1_task_status' task_id='TASK_ID_PLACEHOLDER' %}";
-            const historyBase = "{% url 'trading:backtest' %}";
-            const pollInterval = 5000;
-
-            const loadStore = () => {
-                try {
-                    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-                    if (!parsed || !Array.isArray(parsed.tasks)) return { tasks: [] };
-                    return parsed;
-                } catch (e) {
-                    return { tasks: [] };
-                }
-            };
-
-            const saveStore = (tasks) => {
-                try {
-                    localStorage.setItem(
-                        STORAGE_KEY,
-                        JSON.stringify({
-                            statusTemplate,
-                            historyBaseUrl: historyBase,
-                            tasks,
-                        })
-                    );
-                } catch (e) {
-                    // ignore
-                }
-            };
-
-            const buildStatusUrl = (taskId) =>
-                statusTemplate ? statusTemplate.replace("TASK_ID_PLACEHOLDER", encodeURIComponent(taskId)) : "";
-
-            const dock =
-                document.getElementById("task-dock") ||
-                (function () {
-                    const node = document.createElement("div");
-                    node.id = "task-dock";
-                    node.className = "task-dock minimized";
-                    node.style.right = "16px";
-                    node.style.bottom = "16px";
-                    node.style.left = "auto";
-                    node.style.top = "auto";
-                    node.innerHTML = `
-                        <div id="task-dock-header" class="task-dock-header">
-                            <span>${langIsZh ? "回测任务" : "Backtest Tasks"}</span>
-                            <div style="display:flex;align-items:center;gap:6px;">
-                                <span id="task-count" class="task-count">0</span>
-                                <button id="task-toggle" class="task-toggle" aria-label="${langIsZh ? "展开/折叠任务" : "Toggle tasks"}">▾</button>
-                            </div>
-                        </div>
-                        <div id="task-dock-body" class="task-dock-body" hidden></div>
-                    `;
-                    document.body.appendChild(node);
-                    return node;
-                })();
-
-            const dockHeader = dock.querySelector("#task-dock-header");
-            const dockBody = dock.querySelector("#task-dock-body");
-            const dockToggle = dock.querySelector("#task-toggle");
-            const dockCount = dock.querySelector("#task-count");
-            let dockMinimized = true;
-            let dragState = null;
-
-            const tasks = new Map();
-
-            const renderTasks = () => {
-                dockBody.innerHTML = "";
-                if (tasks.size === 0) {
-                    const empty = document.createElement("div");
-                    empty.className = "task-pill";
-                    empty.innerHTML = `<div class="task-meta">${langIsZh ? "暂无任务" : "No tasks yet"}</div>`;
-                    dockBody.appendChild(empty);
-                }
-                tasks.forEach((task, id) => {
-                    const pill = document.createElement("div");
-                    pill.className = "task-pill";
-                    const label = task.ticker || "Task";
-                    const statusClass =
-                        task.status === "SUCCESS" ? "success" : task.status === "FAILURE" ? "failure" : "pending";
-                    pill.innerHTML = `
-                        <h6>${label} <span class="status ${statusClass}">${task.status || "PENDING"}</span></h6>
-                        <div class="task-meta">
-                            <span>${task.message || ""}</span>
-                            <span>${task.created || ""}</span>
-                            ${task.link ? `<a href="${task.link}">${langIsZh ? "查看报告" : "View report"}</a>` : ""}
-                        </div>
-                    `;
-                    dockBody.appendChild(pill);
-                });
-                dockCount.textContent = tasks.size;
-                dockBody.hidden = dockMinimized;
-                dock.classList.toggle("minimized", dockMinimized);
-            };
-
-            const updateTask = (taskId, data) => {
-                const existing = tasks.get(taskId) || {};
-                const prevSize = tasks.size;
-                tasks.set(taskId, { ...existing, ...data });
-                // 只保留最新 5 条
-                while (tasks.size > 5) {
-                    const oldestKey = tasks.keys().next().value;
-                    tasks.delete(oldestKey);
-                }
-                renderTasks();
-                if (tasks.size > prevSize) {
-                    dockMinimized = false;
-                    renderTasks();
-                }
-                const snapshot = Array.from(tasks.entries()).map(([id, val]) => ({ id, ...val }));
-                saveStore(snapshot);
-                window.dispatchEvent(
-                    new CustomEvent("taskdock:update", {
-                        detail: {
-                            id: taskId,
-                            task: tasks.get(taskId),
-                            tasks: snapshot,
-                        },
-                    })
-                );
-            };
-
-            const pollTask = (taskId) => {
-                const url = buildStatusUrl(taskId);
-                if (!url) return;
-                fetch(url, { headers: { "X-Requested-With": "XMLHttpRequest" } })
-                    .then((res) => res.json().catch(() => ({})))
-                    .then((data) => {
-                        const state = data.state || "";
-                        if (state === "SUCCESS") {
-                            const hid = data.result && data.result.history_id;
-                            updateTask(taskId, {
-                                status: "SUCCESS",
-                                message: langIsZh ? "任务完成，可查看报告。" : "Task complete.",
-                                link: hid ? `${historyBase}?history_id=${encodeURIComponent(hid)}` : null,
-                            });
-                            return;
-                        }
-                        if (state === "FAILURE" || state === "REVOKED") {
-                            updateTask(taskId, { status: "FAILURE", message: data.error || "Failed" });
-                            return;
-                        }
-                        updateTask(taskId, {
-                            status: state || "PENDING",
-                            message: state === "STARTED" ? (langIsZh ? "运行中…" : "Running…") : langIsZh ? "已排队…" : "Queued…",
-                        });
-                        window.setTimeout(() => pollTask(taskId), pollInterval);
-                    })
-                    .catch(() => {});
-            };
-
-            const syncFromStore = () => {
-                const store = loadStore();
-                if (!store.tasks.length) {
-                    tasks.clear();
-                    renderTasks();
-                    window.dispatchEvent(
-                        new CustomEvent("taskdock:update", {
-                            detail: { id: null, task: null, tasks: [] },
-                        })
-                    );
-                    return;
-                }
-                store.tasks.forEach((item) => {
-                    if (item && item.id) {
-                        tasks.set(item.id, item);
-                    }
-                });
-                renderTasks();
-                window.dispatchEvent(
-                    new CustomEvent("taskdock:update", {
-                        detail: { id: null, task: null, tasks: store.tasks },
-                    })
-                );
-                store.tasks.forEach((item) => {
-                    if (!item || !item.id) return;
-                    if (["PENDING", "STARTED", "RETRY", ""].includes(item.status || "")) {
-                        window.setTimeout(() => pollTask(item.id), 500);
-                    }
-                });
-            };
-
-            const flushSnapshot = () => Array.from(tasks.entries()).map(([id, val]) => ({ id, ...val }));
-
-            const handleDrag = (e) => {
-                if (!dragState) return;
-                const dx = e.clientX - dragState.startX;
-                const dy = e.clientY - dragState.startY;
-                dock.style.left = `${dragState.startLeft + dx}px`;
-                dock.style.top = `${dragState.startTop + dy}px`;
-            };
-            const stopDrag = () => {
-                dragState = null;
-                document.removeEventListener("mousemove", handleDrag);
-                document.removeEventListener("mouseup", stopDrag);
-            };
-
-            dockToggle.addEventListener("click", (e) => {
-                e.stopPropagation();
-                dockMinimized = !dockMinimized;
-                renderTasks();
-            });
-            const dockClear = dock.querySelector("#task-clear");
-            if (dockClear) {
-                dockClear.addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    tasks.clear();
-                    renderTasks();
-                    const snapshot = [];
-                    saveStore(snapshot);
-                    window.dispatchEvent(new CustomEvent("taskdock:update", { detail: { id: null, task: null, tasks: snapshot } }));
-                });
-            }
-            dockHeader.addEventListener("mousedown", (e) => {
-                dragState = {
-                    startX: e.clientX,
-                    startY: e.clientY,
-                    startLeft: dock.offsetLeft,
-                    startTop: dock.offsetTop,
-                };
-                document.addEventListener("mousemove", handleDrag);
-                document.addEventListener("mouseup", stopDrag);
-            });
-            dockHeader.addEventListener("click", (e) => {
-                // 防止拖拽后误触展开/收起
-                if (dragState) return;
-                dockMinimized = !dockMinimized;
-                renderTasks();
-            });
-
-            window.addEventListener("storage", (event) => {
-                if (event.key === STORAGE_KEY) {
-                    syncFromStore();
-                }
-            });
-
-            syncFromStore();
-
-            // Expose helper for other scripts (e.g., backtest submit JS)
-            window.taskDock = {
-                updateTask,
-                pollTask,
-                buildStatusUrl,
-                renderTasks,
-                removeTask: (taskId) => {
-                    if (!taskId || !tasks.has(taskId)) return;
-                    tasks.delete(taskId);
-                    const snapshot = flushSnapshot();
-                    saveStore(snapshot);
-                    renderTasks();
-                    window.dispatchEvent(new CustomEvent("taskdock:update", { detail: { id: taskId, task: null, tasks: snapshot } }));
-                },
-                get statusTemplate() {
-                    return statusTemplate;
-                },
-                get historyBase() {
-                    return historyBase;
-                },
-            };
-            window.dispatchEvent(new CustomEvent("taskdock:ready", { detail: window.taskDock }));
-        })();
-    </script>
+    <script src="{% static 'trading/js/nav_controls.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
+    <script src="{% static 'trading/js/command_palette.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
+    <script src="{% static 'trading/js/task_dock.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
     {% block extra_scripts %}{% endblock %}
     <footer class="bg-white border-top py-4">
         <div class="container text-center text-muted small">

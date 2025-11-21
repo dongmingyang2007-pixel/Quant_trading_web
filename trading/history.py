@@ -190,17 +190,32 @@ def delete_history_record(record_id: str, *, user_id: Optional[str] = None) -> b
     return bool(deleted)
 
 
+def _compact_interactive_chart(value: Any, *, max_points: int = 800) -> dict[str, Any]:
+    """Keep only the latest points from the interactive chart for history snapshots."""
+    if not isinstance(value, dict):
+        return {}
+    compacted: dict[str, Any] = {}
+    for key, series in value.items():
+        if isinstance(series, list):
+            compacted[key] = series[-max_points:]
+        else:
+            compacted[key] = series
+    return compacted
+
+
 def sanitize_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
     """
     Convert backtest result payload into JSON-serializable dict.
-    Removes large fields like charts and coerces unsupported objects via str().
+    Removes heavy binary charts, keeps trimmed interactive payloads, and coerces unsupported objects via str().
     """
     if not isinstance(payload, dict):
         return {}
-    # Drop heavy / non-essential keys before serialization
-    filtered = {}
+    filtered: dict[str, Any] = {}
     for key, value in payload.items():
         if key == "charts":
+            continue
+        if key == "interactive_chart":
+            filtered[key] = _compact_interactive_chart(value)
             continue
         filtered[key] = value
     try:
