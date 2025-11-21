@@ -82,59 +82,6 @@
     box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08);
     padding: 18px 20px;
 }
-.quick-glance--loading {
-    opacity: 0.92;
-}
-.quick-card--skeleton {
-    pointer-events: none;
-}
-.skeleton-line,
-.skeleton-block {
-    position: relative;
-    display: inline-block;
-    overflow: hidden;
-    background: rgba(226, 232, 240, 0.85);
-    border-radius: 12px;
-}
-.skeleton-line {
-    width: 100%;
-    height: 12px;
-    margin-bottom: 6px;
-}
-.skeleton-line--title {
-    width: 60%;
-    height: 14px;
-}
-.skeleton-line--text {
-    width: 80%;
-    height: 10px;
-}
-.skeleton-line::after,
-.skeleton-block::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.55), rgba(255,255,255,0));
-    transform: translateX(-100%);
-    animation: backtest-skeleton 1.2s infinite;
-}
-@keyframes backtest-skeleton {
-    0% {
-        transform: translateX(-100%);
-    }
-    60% {
-        transform: translateX(100%);
-    }
-    100% {
-        transform: translateX(100%);
-    }
-}
-@media (prefers-reduced-motion: reduce) {
-    .skeleton-line::after,
-    .skeleton-block::after {
-        animation: none;
-    }
-}
 
 .quick-card-title {
     font-size: 1rem;
@@ -747,18 +694,10 @@
 <script src="{% static 'trading/js/vendor/lightweight-charts.standalone.production.js' %}"></script>
 <script src="{% static 'trading/js/history_delete.js' %}"></script>
 <script src="{% static 'trading/js/backtest_submit.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
+<script src="{% static 'trading/js/portfolio_builder.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
 {% endblock %}
 
 {% block content %}
-<div id="loading-overlay" class="loading-overlay overlay-hidden" aria-hidden="true">
-    <div class="loading-box loading-box--simple text-white" role="status" aria-live="polite">
-        <div class="simple-loader">
-            <div class="simple-spinner" aria-hidden="true"></div>
-            <p class="mb-1" id="overlay-status-text">{% bilingual "Running flagship analysis…" "正在加载中，请稍候…" %}</p>
-            <p class="mb-0 small text-white-50" id="overlay-sub-status"></p>
-        </div>
-    </div>
-</div>
 
 <div class="backtest-page container-xl">
     <header class="backtest-hero">
@@ -818,6 +757,26 @@
 {% endif %}
 
 <div class="backtest-shell container-xl">
+    <div id="backtest-loading-panel" class="backtest-loading-panel" aria-hidden="true" hidden>
+        <div class="quick-glance quick-glance--loading">
+            {% for _ in "123"|make_list %}
+            <div class="quick-card quick-card--skeleton">
+                <div class="skeleton-line skeleton-line--title"></div>
+                <ul class="quick-card-list">
+                    <li><span class="skeleton-line skeleton-line--text"></span></li>
+                    <li><span class="skeleton-line skeleton-line--text"></span></li>
+                    <li><span class="skeleton-line skeleton-line--text"></span></li>
+                </ul>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="backtest-skeleton-stack">
+            <span class="skeleton-line skeleton-line--title"></span>
+            <span class="skeleton-line skeleton-line--text"></span>
+            <div class="skeleton-block skeleton-block--card"></div>
+            <div class="skeleton-block skeleton-block--card"></div>
+        </div>
+    </div>
     {% with stories=focus_feed|slice:":10" %}
     {% if stories %}
     <section class="news-ribbon" id="news-ribbon" aria-label="{% bilingual 'Market highlights' '市场焦点' %}" data-story-count="{{ stories|length }}">
@@ -859,15 +818,29 @@
         </div>
     </section>
     {% else %}
-    <section class="news-ribbon news-ribbon-placeholder" aria-label="{% bilingual 'Market highlight placeholder' '市场焦点占位' %}">
-        <div class="news-placeholder-visual">
-            <span class="news-placeholder-title">{% bilingual "Market highlights" "市场焦点" %}</span>
-            <span class="news-placeholder-subtitle">{% bilingual "Stay tuned for curated headlines." "焦点资讯整理中，请稍候。" %}</span>
+    <section class="news-ribbon news-ribbon--empty" aria-label="{% bilingual 'Market highlight placeholder' '市场焦点占位' %}" aria-live="polite" aria-busy="true">
+        <div class="news-ribbon-head">
+            <span class="news-ribbon-title">{% bilingual "Market Flash" "市场快讯" %}</span>
+            <span class="news-ribbon-meta">{% bilingual "Curating relevant angles · new briefs arrive soon" "精选相关线索 · 最新资讯即将更新" %}</span>
         </div>
-        <div>
-            <h3>{% bilingual "Awaiting the latest highlight" "等待最新市场焦点" %}</h3>
-            <p>{% bilingual "Run a strategy or refresh the feed to see deal-relevant headlines and angles here." "运行一次策略或刷新资讯后，这里会展示与标的相关的最新消息与投资看点。" %}</p>
+        <div class="news-ribbon-viewport" aria-hidden="true">
+            <div class="news-ribbon-skeleton">
+                {% for _ in "123"|make_list %}
+                <article class="news-card news-card--skeleton" aria-hidden="true">
+                    <div class="news-card-media skeleton-block skeleton-block--media"></div>
+                    <div class="news-card-body">
+                        <span class="skeleton-line skeleton-line--chip"></span>
+                        <span class="skeleton-line skeleton-line--title"></span>
+                        <span class="skeleton-line skeleton-line--text"></span>
+                        <span class="skeleton-line skeleton-line--text"></span>
+                    </div>
+                </article>
+                {% endfor %}
+            </div>
         </div>
+        <p class="news-empty-hint">
+            {% bilingual "Strategy briefs are assembling. Run a backtest or refresh shortly to see curated headlines." "策略情报正在整理中。运行一次回测或稍后刷新，即可看到精选的市场头条。" %}
+        </p>
     </section>
     {% endif %}
 
@@ -1441,14 +1414,76 @@
             {% endif %}
             {% with load_base=history_load_url|default:request.path %}
                         <div class="backtest-panel" data-panel="history" id="history-pane">
-                            {% include "trading/includes/history_panel.html" with history_runs=history_runs history_message=history_message history_error=history_error accordion_id="history-accordion" empty_id="history-empty" delete_url_template=delete_template load_url=load_base %}
+                            {% include "trading/includes/history_panel.html" with history_runs=history_runs history_message=history_message history_error=history_error accordion_id="history-accordion" empty_id="history-empty" delete_url_template=delete_template load_url=load_base compare_url=history_compare_url %}
                         </div>
             {% endwith %}
             {% endwith %}
 
-                        <div class="backtest-panel" data-panel="expert" id="expert-pane">
-                            {% include "trading/includes/backtest_expert_panel.html" %}
+            {% if history_briefs %}
+            <section class="portfolio-builder-card tilt-card" data-portfolio-builder data-endpoint="{% url 'trading:build_portfolio' %}" v-cloak>
+                <header class="portfolio-builder-head">
+                    <div>
+                        <p class="builder-kicker">{% bilingual "Portfolio Builder" "投资组合构建器" %}</p>
+                        <h2>{% bilingual "Blend strategies into one view" "前端拼配策略组合" %}</h2>
+                        <p class="text-muted mb-0">{% bilingual "Select historical runs, assign weights, and instantly see the combined equity curve plus risk stats."
+                            "选择历史策略并设定权重，即时查看组合净值与风险指标。" %}</p>
+                    </div>
+                    <div class="builder-cash-group">
+                        <label class="form-label">{% bilingual "Cash weight (%)" "现金权重（%）" %}</label>
+                        <input type="number" class="form-control form-control-sm" min="0" max="100" step="1" v-model.number="cashWeight">
+                    </div>
+                </header>
+                <div class="portfolio-builder-body">
+                    <div class="builder-rows">
+                        <div class="builder-row" v-for="(row, index) in rows" :key="row.id">
+                            <select class="form-select form-select-sm" v-model="row.recordId">
+                                <option value="">[[ selectLabel ]]</option>
+                                <option v-for="option in options" :key="option.record_id" :value="option.record_id">
+                                    [[ option.label ]]
+                                </option>
+                            </select>
+                            <input type="number" class="form-control form-control-sm" min="0" max="100" step="1" v-model.number="row.weight">
+                            <button type="button" @click="removeRow(index)">×</button>
                         </div>
+                    </div>
+                    <div class="builder-actions">
+                        <button type="button" class="hero-button ghost xsmall" @click="addRow">[[ addLabel ]]</button>
+                        <button type="button" class="hero-button solid small" :disabled="!canSubmit || loading" @click="submitPortfolio">
+                            [[ loading ? loadingLabel : computeLabel ]]
+                        </button>
+                    </div>
+                    <p class="builder-hint" :class="{'text-danger': messageState === 'error'}">
+                        [[ message ]]
+                    </p>
+                </div>
+                <div class="portfolio-results" v-if="results">
+                    <div class="builder-metrics">
+                        <div class="builder-metric" v-for="item in metricRows" :key="item.key">
+                            <span>[[ item.label ]]</span>
+                            <strong>[[ item.value ]]</strong>
+                        </div>
+                    </div>
+                    <div class="builder-weights" v-if="weightsList.length">
+                        <span class="builder-weight-pill" v-for="entry in weightsList" :key="entry.label">
+                            [[ entry.label ]]: [[ entry.value ]]%
+                        </span>
+                    </div>
+                    <div class="portfolio-chart" ref="chart" aria-label="{% bilingual 'Portfolio equity chart' '组合净值曲线' %}"></div>
+                    <div class="builder-correlation" v-if="correlations.length">
+                        <ul>
+                            <li v-for="item in correlations" :key="item.label">
+                                [[ item.label ]]: [[ item.value ]]%
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+            {{ history_briefs|json_script:"portfolio-history-options" }}
+            {% endif %}
+
+            <div class="backtest-panel" data-panel="expert" id="expert-pane">
+                {% include "trading/includes/backtest_expert_panel.html" %}
+            </div>
 
 
                         <div class="backtest-panel" data-panel="ai" id="ai-panel">
@@ -1801,11 +1836,36 @@ window.addEventListener('load', () => {
     const chartLangIsZh = docLang.startsWith('zh');
     const infoPlaceholder = chartLangIsZh
         ? '点击图中的买入或卖出图标查看这笔交易详情。'
-        : 'Click any Buy (B) or Sell (S) marker to view the trade details.';
-
+        : 'Click any Buy (B) or Sell (S) marker to view trade rationale.';
 
     const legendBox = document.getElementById('chart-legend');
     const infoBox = document.getElementById('chart-trade-info');
+    const tooltip = document.createElement('div');
+    tooltip.className = 'chart-tooltip';
+    tooltip.setAttribute('role', 'status');
+    root.appendChild(tooltip);
+    const hideTooltip = () => tooltip.classList.remove('is-visible');
+    const showTooltip = (signalsAtPoint, coords) => {
+        if (!Array.isArray(signalsAtPoint) || !signalsAtPoint.length || !coords) {
+            hideTooltip();
+            return;
+        }
+        tooltip.innerHTML = signalsAtPoint
+            .map((sig) => {
+                const descriptor = describeSignal(sig);
+                const detailsList = descriptor.details.length
+                    ? `<ul>${descriptor.details.map((item) => `<li>${item}</li>`).join('')}</ul>`
+                    : '';
+                return `<div class="tooltip-entry"><h4>${descriptor.heading}</h4><div>${descriptor.summary}</div>${detailsList}</div>`;
+            })
+            .join('');
+        const bounds = root.getBoundingClientRect();
+        const limitX = Math.min(Math.max(coords.x, 24), bounds.width - 24);
+        const limitY = Math.min(Math.max(coords.y, 24), bounds.height - 24);
+        tooltip.style.left = `${limitX}px`;
+        tooltip.style.top = `${limitY}px`;
+        tooltip.classList.add('is-visible');
+    };
 
     const signals = Array.isArray(chartPayload.signals) ? chartPayload.signals : [];
     const signalsByTime = new Map();
@@ -1848,26 +1908,58 @@ window.addEventListener('load', () => {
         `;
     };
 
+    function describeSignal(signal) {
+        const ctx = signal.context || {};
+        const action = signal.type === 'buy' ? (chartLangIsZh ? '买入' : 'Buy') : chartLangIsZh ? '卖出' : 'Sell';
+        const summaryParts = [];
+        if (signal.price !== undefined && signal.price !== null) {
+            summaryParts.push(`${chartLangIsZh ? '价格' : 'Price'} ${Number(signal.price).toFixed(2)}`);
+        }
+        if (signal.daily_return !== undefined && signal.daily_return !== null) {
+            summaryParts.push(`${chartLangIsZh ? '当日收益' : 'Daily'} ${(signal.daily_return * 100).toFixed(2)}%`);
+        } else if (signal.cum_return !== undefined && signal.cum_return !== null) {
+            const cumulativePct = (signal.cum_return - 1) * 100;
+            summaryParts.push(`${chartLangIsZh ? '累计' : 'Cumulative'} ${cumulativePct.toFixed(2)}%`);
+        }
+        const details = [];
+        if (ctx.rsi !== undefined) {
+            let state = '';
+            if (ctx.rsi <= 30) state = chartLangIsZh ? '（超卖）' : ' (oversold)';
+            else if (ctx.rsi >= 70) state = chartLangIsZh ? '（超买）' : ' (overbought)';
+            details.push(`RSI ${ctx.rsi}${state}`);
+        }
+        if (ctx.probability !== undefined) {
+            details.push(`${chartLangIsZh ? '模型概率' : 'Model confidence'} ${(ctx.probability * 100).toFixed(1)}%`);
+        }
+        if (ctx.leverage !== undefined) {
+            details.push(`${chartLangIsZh ? '杠杆' : 'Leverage'} ×${ctx.leverage}`);
+        }
+        if (ctx.strategy_return !== undefined && ctx.strategy_return !== null) {
+            details.push(`${chartLangIsZh ? '策略日收益' : 'Strategy'} ${(ctx.strategy_return * 100).toFixed(2)}%`);
+        }
+        return {
+            heading: `${action} · ${signal.time}`,
+            summary: summaryParts.join(' • '),
+            details,
+        };
+    }
+
     function displayTradeInfo(signalList) {
         if (!infoBox) return;
         if (!signalList || !signalList.length) {
             infoBox.textContent = infoPlaceholder;
+            hideTooltip();
             return;
         }
-        const text = signalList
+        infoBox.innerHTML = signalList
             .map((sig) => {
-                const action = sig.type === 'buy' ? (chartLangIsZh ? '买入' : 'Buy') : chartLangIsZh ? '卖出' : 'Sell';
-                const price = sig.price ? `${chartLangIsZh ? '价格' : 'Price'} ${sig.price}` : '';
-                const pnl =
-                    sig.daily_return !== undefined
-                        ? `${chartLangIsZh ? '当日' : 'Daily'} ${sig.daily_return}`
-                        : sig.cum_return !== undefined
-                        ? `${chartLangIsZh ? '累计' : 'Cumulative'} ${sig.cum_return}`
-                        : '';
-                return `${action} • ${sig.time} ${price ? `• ${price}` : ''} ${pnl ? `• ${pnl}` : ''}`;
+                const descriptor = describeSignal(sig);
+                const detailText = descriptor.details.length
+                    ? descriptor.details.map((item) => `<span class="chart-trade-detail">${item}</span>`).join('')
+                    : '';
+                return `<div><span>${descriptor.heading}</span> ${detailText}</div>`;
             })
-            .join('<br>');
-        infoBox.innerHTML = text;
+            .join('');
     }
 
     const normalizeTime = (input) => {
@@ -1896,12 +1988,24 @@ window.addEventListener('load', () => {
     });
 
     chart.subscribeClick((param) => {
-        if (!param || !param.time) return;
+        if (!param || !param.time) {
+            hideTooltip();
+            return;
+        }
         const timeStr = normalizeTime(param.time);
-        if (!timeStr) return;
+        if (!timeStr) {
+            hideTooltip();
+            return;
+        }
         const matchedSignals = signalsByTime.get(timeStr);
         if (matchedSignals && matchedSignals.length) {
             displayTradeInfo(matchedSignals);
+            highlightRow(timeStr);
+            if (param.point) {
+                showTooltip(matchedSignals, param.point);
+            }
+        } else {
+            hideTooltip();
         }
     });
 
@@ -1924,10 +2028,6 @@ const TASK_ENDPOINT = "{% url 'trading:api_v1_backtest_tasks' %}";
 const TASK_STATUS_TEMPLATE = "{% url 'trading:api_v1_task_status' task_id='TASK_ID_PLACEHOLDER' %}";
 const HISTORY_LOAD_BASE = "{{ history_load_url|default:''|escapejs }}";
 const BACKTEST_PATH = "{% url 'trading:backtest' %}";
-const overlayDefaultText = langIsZh ? "正在加载中，请稍候…" : "Running flagship analysis…";
-const overlayDefaultSubText = langIsZh
-    ? "请保持页面打开，任务完成后会自动跳转。"
-    : "Keep this page open; you'll be redirected once the report is ready.";
 const csrfInput =
     document.querySelector('#analysis-form input[name=csrfmiddlewaretoken]') ||
     document.querySelector('input[name=csrfmiddlewaretoken]');

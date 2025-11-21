@@ -369,6 +369,7 @@ def backtest(request):
                 history_error = "未找到该历史记录或缺少快照。" if lang_is_zh else "The selected history record is missing or has no snapshot."
 
     history_runs = load_history(user_id=str(request.user.id)) if request.user.is_authenticated else []
+    history_briefs: list[dict[str, Any]] = []
     for entry in history_runs:
         try:
             snapshot_payload = entry.get("snapshot") or entry
@@ -378,6 +379,16 @@ def backtest(request):
         except (TypeError, ValueError):
             entry["json_payload"] = "{}"
         entry["warnings_localized"] = translate_list(entry.get("warnings") or [], language)
+        history_briefs.append(
+            {
+                "record_id": entry.get("record_id"),
+                "label": f"{entry.get('ticker', 'Strategy')} · {entry.get('engine', '')}",
+                "ticker": entry.get("ticker"),
+                "engine": entry.get("engine"),
+                "period": f"{entry.get('start_date', '--')} → {entry.get('end_date', '--')}",
+                "stats": entry.get("stats") or {},
+            }
+        )
 
     refresh_news = request.method == "POST" or request.GET.get("refresh_news") == "1"
     focus_feed = get_global_headlines(refresh=refresh_news)
@@ -411,6 +422,7 @@ def backtest(request):
         reverse("trading:delete_history", kwargs={"record_id": "placeholder"})
     )
     history_load_url = request.build_absolute_uri(reverse("trading:backtest"))
+    history_compare_url = reverse("trading:history_compare") if request.user.is_authenticated else ""
 
     return render(
         request,
@@ -429,5 +441,7 @@ def backtest(request):
             "ai_fetch_timeout_ms": getattr(settings, "AI_CHAT_FETCH_TIMEOUT_MS", getattr(settings, "AI_CHAT_TIMEOUT_SECONDS", 120) * 1000),
             "history_delete_template": history_delete_template,
             "history_load_url": history_load_url,
+            "history_compare_url": history_compare_url,
+            "history_briefs": history_briefs,
         },
     )

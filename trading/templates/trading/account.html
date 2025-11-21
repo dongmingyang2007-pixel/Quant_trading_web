@@ -222,7 +222,7 @@
                         </span>
                     {% endif %}
                 </div>
-                {% include "trading/includes/history_panel.html" with history_runs=history_runs history_message=None history_error=None prefix="account-history-" accordion_id="account-history-accordion" empty_id="account-history-empty" delete_url_template=history_delete_template load_url=history_load_url %}
+                {% include "trading/includes/history_panel.html" with history_runs=history_runs history_message=None history_error=None prefix="account-history-" accordion_id="account-history-accordion" empty_id="account-history-empty" delete_url_template=history_delete_template load_url=history_load_url compare_url=history_compare_url %}
             </section>
         </section>
 

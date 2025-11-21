@@ -166,6 +166,7 @@
     <main class="container-xl pb-5">
         {% block content %}{% endblock %}
     </main>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js" defer></script>
     <script src="{% static 'trading/js/nav_controls.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
     <script src="{% static 'trading/js/command_palette.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
     <script src="{% static 'trading/js/task_dock.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>

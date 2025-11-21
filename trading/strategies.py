@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, asdict
 from datetime import date, datetime, timedelta
 from typing import Any, Optional, Tuple
 import os
@@ -10,6 +10,7 @@ import io
 import math
 import re
 import hashlib
+import copy
 import random
 import time
 import json
@@ -44,6 +45,7 @@ from .risk_stats import (
     compute_white_reality_check_bootstrap,
     compute_spa_pvalue,
 )
+from .cache_utils import build_cache_key, cache_get_object, cache_set_object
 from .validation import (
     build_walk_forward_report,
     build_purged_kfold_schedule,
@@ -1714,6 +1716,29 @@ def build_interactive_chart_payload(
     # Trade markers
     signals: list[dict[str, Any]] = []
     aligned_backtest = backtest.sort_index().loc[display_prices.index.min() : display_prices.index.max()]
+
+    def _rounded(value: Any, precision: int = 4) -> float | None:
+        try:
+            num_val = float(value)
+        except (TypeError, ValueError):
+            return None
+        if math.isnan(num_val):
+            return None
+        return round(num_val, precision)
+
+    def _grab(source: Any, key: str) -> Any:
+        if source is None:
+            return None
+        if isinstance(source, dict):
+            return source.get(key)
+        try:
+            return source.get(key)
+        except AttributeError:
+            try:
+                return source[key]
+            except Exception:
+                return None
+
     for idx, row in aligned_backtest.iterrows():
         signal_value = row.get("signal")
         if signal_value is None:
@@ -1733,18 +1758,50 @@ def build_interactive_chart_payload(
             cum_ret = round(float(row.get("cum_strategy", 0.0)), 4)
         except (TypeError, ValueError):
             cum_ret = None
-        signals.append(
-            {
-                "time": _format_chart_time(idx),
-                "type": trade_type,
-                "price": price_val,
-                "position": row.get("position"),
-                "cum_return": cum_ret,
-                "daily_return": round(float(row.get("strategy_return", 0.0)), 4)
-                if not pd.isna(row.get("strategy_return"))
-                else None,
-            }
-        )
+        price_row = None
+        try:
+            price_row = display_prices.loc[idx]
+        except KeyError:
+            price_row = None
+        context: dict[str, Any] = {}
+        rsi_val = _rounded(_grab(price_row, "rsi") or _grab(row, "rsi"), 2)
+        if rsi_val is not None:
+            context["rsi"] = rsi_val
+        sma_short_val = _rounded(_grab(price_row, "sma_short") or _grab(row, "sma_short"), 2)
+        if sma_short_val is not None:
+            context["sma_short"] = sma_short_val
+        sma_long_val = _rounded(_grab(price_row, "sma_long") or _grab(row, "sma_long"), 2)
+        if sma_long_val is not None:
+            context["sma_long"] = sma_long_val
+        probability_val = _rounded(_grab(row, "probability"), 3)
+        if probability_val is not None:
+            context["probability"] = probability_val
+        leverage_val = _rounded(_grab(row, "leverage"), 2)
+        if leverage_val is not None:
+            context["leverage"] = leverage_val
+        exposure_val = _rounded(_grab(row, "exposure"), 2)
+        if exposure_val is not None:
+            context["exposure"] = exposure_val
+        strategy_ret_val = _rounded(_grab(row, "strategy_return"), 4)
+        if strategy_ret_val is not None:
+            context["strategy_return"] = strategy_ret_val
+        position_val = _rounded(_grab(row, "position"), 2)
+        if position_val is not None:
+            context["position"] = position_val
+
+        signal_entry = {
+            "time": _format_chart_time(idx),
+            "type": trade_type,
+            "price": price_val,
+            "position": row.get("position"),
+            "cum_return": cum_ret,
+            "daily_return": round(float(row.get("strategy_return", 0.0)), 4)
+            if not pd.isna(row.get("strategy_return"))
+            else None,
+        }
+        if context:
+            signal_entry["context"] = context
+        signals.append(signal_entry)
 
     if not candles:
         return {}
@@ -2590,12 +2647,27 @@ def _build_progress_plan(params: StrategyInput, payload: dict[str, Any]) -> dict
     }
 
 
+_CACHE_EXCLUDED_FIELDS = {"request_id", "user_id", "exec_latency_ms"}
+
+
+def _params_cache_signature(params: StrategyInput) -> str:
+    payload = asdict(params)
+    for key in _CACHE_EXCLUDED_FIELDS:
+        payload.pop(key, None)
+    signature_blob = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(signature_blob.encode("utf-8")).hexdigest()
+
+
 def run_quant_pipeline(params: StrategyInput) -> dict[str, Any]:
     """Wrapper with统一的耗时 metrics + request metadata."""
     pipeline_started = time.perf_counter()
     success = False
     error_message: str | None = None
     result_payload: dict[str, Any] | None = None
+    cache_ttl = int(getattr(settings, "STRATEGY_RESULT_CACHE_TTL", 1800) or 0)
+    enable_cache = cache_ttl > 0 and getattr(settings, "ENABLE_STRATEGY_RESULT_CACHE", True)
+    cache_key: str | None = None
+
     try:
         if isinstance(params.start_date, str):
             params.start_date = datetime.fromisoformat(params.start_date).date()
@@ -2605,9 +2677,21 @@ def run_quant_pipeline(params: StrategyInput) -> dict[str, Any]:
         pass
     _ensure_global_seed(getattr(params, "random_seed", DEFAULT_STRATEGY_SEED))
     try:
+        if enable_cache:
+            signature = _params_cache_signature(params)
+            cache_key = build_cache_key("strategy_result", params.ticker.upper(), signature)
+            cached = cache_get_object(cache_key)
+            if isinstance(cached, dict):
+                result_payload = copy.deepcopy(cached)
+                success = True
+                record_metric("backtest.cache_hit", ticker=params.ticker.upper())
+                return result_payload
+
         result = _run_quant_pipeline_inner(params)
         if isinstance(result, dict):
             result_payload = result
+            if cache_key and enable_cache:
+                cache_set_object(cache_key, result, cache_ttl)
         success = True
         return result
     except Exception as exc:

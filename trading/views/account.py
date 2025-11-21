@@ -47,8 +47,19 @@ def account(request):
     profile_error = None
 
     history_runs = load_history(user_id=str(user.id))
+    history_briefs: list[dict[str, Any]] = []
     for entry in history_runs:
         entry["warnings_localized"] = translate_list(entry.get("warnings") or [], language)
+        history_briefs.append(
+            {
+                "record_id": entry.get("record_id"),
+                "label": f"{entry.get('ticker', 'Strategy')} · {entry.get('engine', '')}",
+                "ticker": entry.get("ticker"),
+                "engine": entry.get("engine"),
+                "period": f"{entry.get('start_date', '--')} → {entry.get('end_date', '--')}",
+                "stats": entry.get("stats") or {},
+            }
+        )
     profile_data = load_profile(str(user.id))
     display_name = profile_data.get("display_name") or user.username
     avatar_path = profile_data.get("avatar_path") or ""
@@ -351,6 +362,8 @@ def account(request):
             reverse("trading:delete_history", kwargs={"record_id": "placeholder"})
         ),
         "history_load_url": request.build_absolute_uri(reverse("trading:backtest")),
+        "history_compare_url": reverse("trading:history_compare"),
+        "history_briefs": history_briefs,
     }
     return render(request, "trading/account.html", context)
 

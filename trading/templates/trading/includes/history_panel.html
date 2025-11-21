@@ -4,8 +4,20 @@
 {% if history_error %}
     <div class="alert alert-danger">{{ history_error }}</div>
 {% endif %}
-{% with accordion_id=accordion_id|default:"history-accordion" empty_id=empty_id|default:"history-empty" delete_url_base=delete_url_base|default:'' delete_url_template=delete_url_template|default:'' load_url=load_url|default:'' %}
+{% with accordion_id=accordion_id|default:"history-accordion" empty_id=empty_id|default:"history-empty" delete_url_base=delete_url_base|default:'' delete_url_template=delete_url_template|default:'' load_url=load_url|default:'' compare_url=compare_url|default:'' %}
 {% if history_runs %}
+    {% if compare_url %}
+    <div class="history-compare-bar"
+         data-role="history-compare"
+         data-accordion-id="{{ accordion_id }}"
+         data-compare-url="{{ compare_url }}">
+        <div>
+            <span class="history-compare-count" data-role="compare-count">0</span>
+            <span class="history-compare-note">{% bilingual "Selected · add 2-3 records for comparison" "已选择 · 选择 2-3 条记录进行对比" %}</span>
+        </div>
+        <button type="button" class="hero-button solid small" data-role="compare-launch" disabled>{% bilingual "Compare runs" "对比分析" %}</button>
+    </div>
+    {% endif %}
     <div class="history-accordion"
          id="{{ accordion_id }}"
          data-empty-id="{{ empty_id }}"
@@ -25,6 +37,18 @@
                     </div>
                 </summary>
                 <div class="history-body">
+                    {% if compare_url %}
+                    <div class="history-actions">
+                        <label class="history-compare-select">
+                            <input type="checkbox"
+                                   class="history-compare-checkbox"
+                                   data-role="history-compare-toggle"
+                                   value="{{ history.record_id }}">
+                            {% bilingual "Add to arena" "加入角斗场" %}
+                        </label>
+                        <span class="history-compare-hint">{% bilingual "Up to 3 runs" "最多 3 条" %}</span>
+                    </div>
+                    {% endif %}
                     <div class="history-actions">
                         <a href="{% if load_url %}{{ load_url }}?history_id={{ history.record_id }}{% else %}?history_id={{ history.record_id }}{% endif %}#history-pane"
                            class="hero-button ghost small history-view"

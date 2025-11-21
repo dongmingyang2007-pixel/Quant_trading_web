@@ -9,6 +9,7 @@ from .dashboard import backtest
 from .api import (
     ai_chat,
     ai_chat_stream,
+    build_portfolio_api,
     backtest_task_status,
     enqueue_backtest_task,
     enqueue_rl_task,
@@ -26,12 +27,14 @@ from .community import community, community_like, community_comment, community_d
 from .account import profile_public
 from .learning import learning_center, learning_module_detail
 from .observability_dashboard import observability_dashboard
+from .history_compare import history_compare
 
 __all__ = [
     "backtest",
     "screener_snapshot_api",
     "ai_chat",
     "ai_chat_stream",
+    "build_portfolio_api",
     "enqueue_backtest_task",
     "backtest_task_status",
     "enqueue_training_task",
@@ -54,4 +57,5 @@ __all__ = [
     "learning_center",
     "learning_module_detail",
     "observability_dashboard",
+    "history_compare",
 ]

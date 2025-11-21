@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% load static i18n django_bootstrap5 %}
+
+{% block title %}{% bilingual "Strategy Arena" "策略角斗场" %}{% endblock %}
+
+{% block extra_head %}
+{{ block.super }}
+{% endblock %}
+
+{% block content %}
+<div class="arena-page container-xl">
+    <header class="arena-hero">
+        <div>
+            <p class="arena-kicker">{% bilingual "Comparison Arena" "策略对比" %}</p>
+            <h1 class="arena-title">{% bilingual "Backtest Arena" "策略角斗场" %}</h1>
+            <p class="arena-subtitle">
+                {% bilingual "Stack multiple historical runs, normalize their equity curves, and see which playbook dominates." "一次选择多条历史回测，将净值归一化后叠加对比，快速看出哪套策略更胜。" %}
+            </p>
+        </div>
+        <div class="arena-actions">
+            <a class="hero-button ghost" href="{% url 'trading:backtest' %}#history-pane">{% bilingual "Back to history" "返回历史记录" %}</a>
+            <span class="arena-hint">{% bilingual "Tip: pick up to three records from the history list." "提示：在历史记录中最多选择 3 条参与对比。" %}</span>
+        </div>
+    </header>
+
+    {% if error_message %}
+        <div class="alert alert-warning">{{ error_message }}</div>
+    {% endif %}
+
+    {% if comparisons %}
+    <section class="arena-card tilt-card">
+        <header class="arena-card-head">
+            <div>
+                <h2>{% bilingual "Equity Curve Duel" "净值曲线对决" %}</h2>
+                <p class="text-muted mb-0">{% bilingual "All curves are rebased to 1 at the start of the stored window for an apples-to-apples read." "所有净值曲线已在记录窗口起点归一化为 1，方便直接比较走势。" %}</p>
+            </div>
+            <ul class="arena-legend">
+                {% for item in comparisons %}
+                <li>
+                    <span class="legend-dot" style="--legend-color: {{ item.color }}"></span>
+                    <div>
+                        <strong>{{ item.label }}</strong>
+                        <span class="legend-meta">{{ item.period }}</span>
+                    </div>
+                </li>
+                {% endfor %}
+            </ul>
+        </header>
+        <div id="arena-chart" class="arena-chart" aria-label="{% bilingual 'Equity comparison chart' '净值曲线对比图' %}"></div>
+    </section>
+
+    <section class="arena-stats">
+        <header class="arena-card-head">
+            <div>
+                <h2>{% bilingual "Key Metrics" "核心指标" %}</h2>
+                <p class="text-muted mb-0">{% bilingual "Sharpe, drawdowns, and volatility line up side-by-side." "夏普、回撤、波动等指标并列展示，一眼看出优劣。" %}</p>
+            </div>
+        </header>
+        <div class="arena-table-wrapper">
+            <table class="table arena-table align-middle">
+                <thead>
+                    <tr>
+                        <th scope="col">{% bilingual "Strategy" "策略" %}</th>
+                        <th scope="col">{% bilingual "Total return" "累计收益" %}</th>
+                        <th scope="col">{% bilingual "Sharpe" "夏普" %}</th>
+                        <th scope="col">{% bilingual "Max drawdown" "最大回撤" %}</th>
+                        <th scope="col">{% bilingual "Volatility" "波动率" %}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in comparisons %}
+                    <tr>
+                        <td>
+                            <span class="legend-dot legend-dot-inline" style="--legend-color: {{ item.color }}"></span>
+                            <strong>{{ item.ticker }}</strong>
+                            <span class="text-muted small ms-1">{{ item.engine }}</span>
+                        </td>
+                        <td>
+                            {% if item.derived.total_return_pct is not None %}
+                                {{ item.derived.total_return_pct|floatformat:2 }}%
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if item.stats.sharpe is not None %}
+                                {{ item.stats.sharpe|floatformat:2 }}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if item.derived.max_drawdown_pct is not None %}
+                                {{ item.derived.max_drawdown_pct|floatformat:2 }}%
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if item.derived.volatility_pct is not None %}
+                                {{ item.derived.volatility_pct|floatformat:2 }}%
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {% endif %}
+</div>
+
+{% if comparisons %}
+    {{ series_payload|json_script:"arena-series-data" }}
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+{{ block.super }}
+{% if comparisons %}
+<script src="{% static 'trading/js/vendor/lightweight-charts.standalone.production.js' %}"></script>
+<script src="{% static 'trading/js/backtest_compare.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
+{% endif %}
+{% endblock %}

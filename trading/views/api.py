@@ -9,6 +9,9 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from datetime import datetime, timezone
 import threading
 import time
+from itertools import combinations
+
+import pandas as pd
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
@@ -30,6 +33,8 @@ from ..task_queue import (
 )
 from ..train_ml import available_engines
 from ..rate_limit import check_rate_limit, rate_limit_key
+from ..history import get_history_record
+from ..portfolio import portfolio_stats
 from .dashboard import build_strategy_input
 
 SCREENER_PAGE_SIZE = int(os.environ.get("SCREENER_PAGE_SIZE", "50") or 50)
@@ -568,6 +573,134 @@ def enqueue_training_task(request):
 @login_required
 def training_task_status(request, task_id: str):
     return _task_status_response(request, task_id)
+
+
+@login_required
+@require_POST
+def build_portfolio_api(request):
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": _("Invalid payload.")}, status=400)
+
+    components = payload.get("components")
+    if not isinstance(components, list):
+        return JsonResponse({"error": _("Please choose at least one strategy.")}, status=400)
+
+    aggregated: dict[str, float] = {}
+    for entry in components:
+        if not isinstance(entry, dict):
+            continue
+        record_id = str(entry.get("record_id") or "").strip()
+        try:
+            weight = float(entry.get("weight") or 0.0)
+        except (TypeError, ValueError):
+            weight = 0.0
+        if record_id and weight > 0:
+            aggregated[record_id] = aggregated.get(record_id, 0.0) + weight
+
+    try:
+        cash_weight = max(float(payload.get("cash_weight") or 0.0), 0.0)
+    except (TypeError, ValueError):
+        cash_weight = 0.0
+
+    if not aggregated:
+        return JsonResponse({"error": _("Select at least one strategy with a positive weight.")}, status=400)
+
+    series_map: dict[str, pd.Series] = {}
+    info_map: dict[str, dict[str, Any]] = {}
+    for record_id, raw_weight in aggregated.items():
+        record = get_history_record(record_id, user_id=str(request.user.id))
+        if not record:
+            continue
+        snapshot = record.get("snapshot") or {}
+        recent_rows = snapshot.get("recent_rows") or []
+        dates = []
+        returns = []
+        for row in recent_rows:
+            date_value = row.get("date") or row.get("timestamp")
+            if not date_value:
+                continue
+            try:
+                dates.append(pd.to_datetime(date_value))
+            except Exception:
+                continue
+            daily_val = row.get("daily_return")
+            if daily_val is None:
+                daily_val = row.get("strategy_return")
+            try:
+                returns.append(float(daily_val or 0.0))
+            except (TypeError, ValueError):
+                returns.append(0.0)
+        if len(dates) < 5:
+            continue
+        label = f"{record.get('ticker', 'Strategy')} · {record.get('engine', '')}"
+        suffix = 1
+        unique = label
+        while unique in series_map:
+            suffix += 1
+            unique = f"{label} #{suffix}"
+        series_map[unique] = pd.Series(returns, index=dates).sort_index().fillna(0.0)
+        info_map[unique] = {"record_id": record_id, "weight": max(raw_weight, 0.0)}
+
+    if not series_map:
+        return JsonResponse({"error": _("No valid historical runs were found.")}, status=400)
+
+    total_weight = sum(item["weight"] for item in info_map.values()) + cash_weight
+    if total_weight <= 0:
+        return JsonResponse({"error": _("All weights are zero.")}, status=400)
+
+    for label in info_map:
+        info_map[label]["weight"] = info_map[label]["weight"] / total_weight
+    cash_norm = cash_weight / total_weight if cash_weight > 0 else 0.0
+
+    aligned = pd.DataFrame(series_map).sort_index().fillna(0.0)
+    if cash_norm > 0:
+        aligned["现金"] = 0.0
+
+    weight_lookup = {label: info["weight"] for label, info in info_map.items()}
+    if cash_norm > 0:
+        weight_lookup["现金"] = cash_norm
+    weight_series = pd.Series({col: weight_lookup.get(col, 0.0) for col in aligned.columns})
+    combined_returns = aligned.mul(weight_series, axis=1).sum(axis=1)
+    cumulative = (1 + combined_returns).cumprod()
+    metrics = portfolio_stats(combined_returns)
+
+    curve_points = [
+        {"time": idx.strftime("%Y-%m-%d"), "value": round(float(val), 6)}
+        for idx, val in cumulative.dropna().items()
+    ]
+
+    component_curves = []
+    for label, series in series_map.items():
+        curve = (1 + series).cumprod()
+        component_curves.append(
+            {
+                "label": label,
+                "record_id": info_map[label]["record_id"],
+                "weight": info_map[label]["weight"],
+                "points": [
+                    {"time": idx.strftime("%Y-%m-%d"), "value": round(float(val), 6)}
+                    for idx, val in curve.dropna().items()
+                ],
+            }
+        )
+
+    correlation_pairs: list[dict[str, Any]] = []
+    if len(series_map) >= 2:
+        corr_frame = aligned[[col for col in aligned.columns if col in series_map]]
+        corr_matrix = corr_frame.corr().replace([float("inf"), float("-inf")], 0.0).fillna(0.0)
+        for a, b in combinations(corr_matrix.columns, 2):
+            correlation_pairs.append({"a": a, "b": b, "value": float(corr_matrix.at[a, b])})
+
+    response = {
+        "weights": weight_lookup,
+        "metrics": metrics,
+        "curve": curve_points,
+        "components": component_curves,
+        "correlation": correlation_pairs,
+    }
+    return JsonResponse(response)
 
 
 @login_required

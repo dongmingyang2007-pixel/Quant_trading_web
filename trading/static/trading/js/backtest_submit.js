@@ -265,6 +265,19 @@
             });
     };
 
+    const backtestShell = document.querySelector('.backtest-shell');
+    const loadingPanel = document.getElementById('backtest-loading-panel');
+    const setInPlaceLoading = (flag) => {
+        if (!backtestShell || !loadingPanel) return;
+        if (flag) {
+            loadingPanel.hidden = false;
+            backtestShell.classList.add('is-loading');
+        } else {
+            loadingPanel.hidden = true;
+            backtestShell.classList.remove('is-loading');
+        }
+    };
+
     form.addEventListener('submit', (event) => {
         if (!taskEndpoint) {
             alert(langIsZh ? '未配置异步回测端点，将使用传统提交。' : 'Async endpoint missing, falling back to sync submit.');
@@ -287,6 +300,7 @@
             submitBtn.dataset.originalText = submitBtn.innerHTML;
             submitBtn.innerHTML = langIsZh ? '正在提交…' : 'Submitting…';
         }
+        setInPlaceLoading(true);
         submitAsync(params, placeholderId)
             .catch((error) => {
                 if (pageUnloading) {
@@ -303,6 +317,7 @@
                         submitBtn.innerHTML = submitBtn.dataset.originalText;
                     }
                 }
+                setInPlaceLoading(false);
             });
     });
 })();
