@@ -849,7 +849,7 @@
 
         <div class="backtest-main">
             <div class="backtest-hero-wrapper">
-                <section class="backtest-card tilt-card backtest-intro-card" data-tilt>
+                <section class="backtest-card backtest-intro-card">
                     <div class="hero-text">
                         <span class="hero-eyebrow">Quant Studio</span>
                         <h1 class="hero-title">{% bilingual "Quantitative Strategy Backtest" "量化投资回测" %}</h1>
@@ -900,7 +900,7 @@
             </div>
 
 {% if not result %}
-            <section class="backtest-card tilt-card backtest-form-card" data-tilt>
+            <section class="backtest-card backtest-form-card">
                 {% include "trading/includes/analysis_form.html" %}
             </section>
 {% endif %}
@@ -1437,7 +1437,7 @@
                     <div class="builder-rows">
                         <div class="builder-row" v-for="(row, index) in rows" :key="row.id">
                             <select class="form-select form-select-sm" v-model="row.recordId">
-                                <option value="">[[ selectLabel ]]</option>
+                                <option value="" disabled>[[ selectLabel ]]</option>
                                 <option v-for="option in options" :key="option.record_id" :value="option.record_id">
                                     [[ option.label ]]
                                 </option>

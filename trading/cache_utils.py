@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-import os
-import pickle
+import json
 import threading
 import time
 from typing import Any, Callable
+from io import BytesIO
+
+try:
+    import pandas as pd  # type: ignore
+except Exception:  # pragma: no cover - optional
+    pd = None  # type: ignore
 
 from django.conf import settings
 
@@ -100,20 +105,91 @@ def build_cache_key(*parts: Any) -> str:
     return ":".join(normalized)
 
 
-def cache_get_object(key: str) -> Any | None:
-    payload = get_cache().get(key)
-    if payload is None:
+def _is_json_safe(value: Any) -> bool:
+    """Allow only primitive/structured JSON types; reject everything else."""
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return True
+    if isinstance(value, dict):
+        return all(isinstance(k, str) and _is_json_safe(v) for k, v in value.items())
+    if isinstance(value, (list, tuple)):
+        return all(_is_json_safe(item) for item in value)
+    return False
+
+
+def _to_json_bytes(value: Any) -> bytes | None:
+    """Serialize JSON-safe objects to bytes; skip complex/unsafe types."""
+    if not _is_json_safe(value):
         return None
     try:
-        return pickle.loads(payload)
+        payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return None
+    return payload.encode("utf-8")
+
+
+def _encode_value(value: Any) -> bytes | None:
+    """Encode cache value to bytes with a simple format marker."""
+    if pd is not None:
+        try:
+            if isinstance(value, pd.Series):
+                buffer = BytesIO()
+                value.to_frame("value").to_parquet(buffer, index=True)
+                header = json.dumps({"type": "series"}, separators=(",", ":")).encode("utf-8")
+                return b"PQT1" + header + b"\n" + buffer.getvalue()
+            if isinstance(value, pd.DataFrame):
+                buffer = BytesIO()
+                value.to_parquet(buffer, index=True)
+                header = json.dumps({"type": "dataframe"}, separators=(",", ":")).encode("utf-8")
+                return b"PQT1" + header + b"\n" + buffer.getvalue()
+        except Exception:
+            return None
+
+    json_bytes = _to_json_bytes(value)
+    if json_bytes is not None:
+        return b"JSON" + json_bytes
+    return None
+
+
+def _decode_value(payload: bytes | None) -> Any | None:
+    if payload is None:
+        return None
+    if isinstance(payload, str):  # compatibility with potential string cache backends
+        payload = payload.encode("utf-8")
+    if payload.startswith(b"PQT1") and pd is not None:
+        try:
+            header_and_body = payload[4:]
+            split = header_and_body.find(b"\n")
+            if split == -1:
+                return None
+            header = json.loads(header_and_body[:split].decode("utf-8"))
+            body = header_and_body[split + 1 :]
+            df = pd.read_parquet(BytesIO(body))
+            if header.get("type") == "series" and isinstance(df, pd.DataFrame) and df.shape[1] == 1:
+                return df.iloc[:, 0]
+            return df
+        except Exception:
+            return None
+    if payload.startswith(b"JSON"):
+        try:
+            return json.loads(payload[4:].decode("utf-8"))
+        except Exception:
+            return None
+    # Legacy payloads without marker
+    try:
+        text = payload.decode("utf-8") if isinstance(payload, (bytes, bytearray)) else str(payload)
+        return json.loads(text)
     except Exception:
         return None
+
+
+def cache_get_object(key: str) -> Any | None:
+    payload = get_cache().get(key)
+    return _decode_value(payload)
 
 
 def cache_set_object(key: str, value: Any, ttl: int) -> None:
-    try:
-        payload = pickle.dumps(value)
-    except Exception:
+    payload = _encode_value(value)
+    if payload is None:
         return
     get_cache().set(key, payload, ttl)
 

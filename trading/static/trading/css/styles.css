@@ -3764,7 +3764,6 @@ a:hover { text-decoration: underline; }
 .community-card,
 .course-card,
 .learning-card,
-.backtest-card,
 .ai-card,
 .account-card {
     transition: transform 0.25s ease, box-shadow 0.25s ease;
@@ -3782,7 +3781,6 @@ a:hover { text-decoration: underline; }
 .community-card,
 .course-card,
 .learning-card,
-.backtest-card,
 .ai-card,
 .account-card):active {
     transform: scale(0.985);
@@ -4518,6 +4516,15 @@ a:hover { text-decoration: underline; }
     flex-wrap: wrap;
     gap: 12px;
     margin-bottom: 16px;
+}
+.history-accordion,
+.history-item,
+.history-details,
+.history-accordion:active,
+.history-item:active,
+.history-details:active,
+.account-history:active {
+    transform: none !important;
 }
 
 .history-grid {

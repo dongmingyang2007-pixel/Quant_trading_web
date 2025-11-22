@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import sys
 try:
     from dotenv import load_dotenv
 except Exception:
@@ -36,7 +37,8 @@ DATA_ROOT = _ensure_dir(DATA_ROOT)
 if load_dotenv:
     load_dotenv(os.fspath(PROJECT_ROOT / ".env"))
 
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "django-insecure-change-me")
+DEFAULT_SECRET_KEY = "django-insecure-change-me"
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", DEFAULT_SECRET_KEY)
 
 # Ensure SSL cert bundle is available for TLS connections (e.g., Gmail SMTP)
 try:
@@ -46,7 +48,11 @@ try:
 except Exception:
     pass
 
-DEBUG = os.environ.get("DJANGO_DEBUG", "1") not in {"0", "false", "False"}
+DEBUG_DEFAULT = "1" if "test" in sys.argv else "0"
+DEBUG = os.environ.get("DJANGO_DEBUG", DEBUG_DEFAULT) not in {"0", "false", "False"}
+
+if not DEBUG and SECRET_KEY == DEFAULT_SECRET_KEY and os.environ.get("DJANGO_ALLOW_INSECURE_KEY") not in {"1", "true", "True"}:
+    raise RuntimeError("DJANGO_SECRET_KEY must be set when DEBUG=0")
 
 if sentry_sdk and os.environ.get("SENTRY_DSN"):
     sentry_sdk.init(

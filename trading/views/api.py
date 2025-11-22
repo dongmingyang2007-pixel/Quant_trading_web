@@ -364,12 +364,6 @@ def ai_chat_stream(request):
         if retry_after:
             payload["retry_after_seconds"] = retry_after
         return JsonResponse(payload, status=429)
-    limited, retry_after = _is_rate_limited(request)
-    if limited:
-        payload = {"error": _("请求过于频繁，请稍后再试。"), "rate_limited": True, "request_id": request_id}
-        if retry_after:
-            payload["retry_after_seconds"] = retry_after
-        return JsonResponse(payload, status=429)
     guard_acquired = AI_INFLIGHT_GUARD.acquire(timeout=AI_GUARD_WAIT)
     if not guard_acquired:
         return JsonResponse(

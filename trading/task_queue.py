@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from typing import Any, Callable, Dict
+import logging
 
 from django.conf import settings
 
@@ -13,6 +14,7 @@ except Exception:  # pragma: no cover - celery always installed in prod
     states = None  # type: ignore
     AsyncResult = None  # type: ignore
 
+from .observability import record_metric
 from .tasks import (
     execute_backtest,
     execute_rl_job,
@@ -62,12 +64,30 @@ def _serialize_payload(value: Any) -> Any:
 
 def _submit_task(payload: Dict[str, Any], async_task: Any, sync_callable: Callable[[Dict[str, Any]], Dict[str, Any]]):
     serialized = _serialize_payload(payload)
-    if _should_use_async():
+    using_async = _should_use_async()
+    if using_async:
         try:
-            return async_task.delay(serialized)
-        except Exception:
-            pass
-    return SyncResult(sync_callable(serialized))
+            job = async_task.delay(serialized)
+            record_metric("task_queue.dispatch", mode="async", task=getattr(async_task, "__name__", ""), state="submitted")
+            return job
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Async dispatch failed, falling back to sync: %s", exc)
+            record_metric(
+                "task_queue.dispatch_fallback",
+                mode="sync",
+                task=getattr(async_task, "__name__", ""),
+                reason="async_failed",
+                error=str(exc),
+            )
+    result = sync_callable(serialized)
+    record_metric(
+        "task_queue.dispatch",
+        mode="sync",
+        task=getattr(async_task, "__name__", ""),
+        state="executed",
+        reason="eager" if not using_async else "fallback",
+    )
+    return SyncResult(result)
 
 
 def submit_backtest_task(payload: Dict[str, Any]) -> Any:

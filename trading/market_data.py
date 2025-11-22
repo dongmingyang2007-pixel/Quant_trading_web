@@ -5,6 +5,7 @@ from typing import Any, Iterable
 from pathlib import Path
 import json
 import time
+import hashlib
 
 import pandas as pd
 
@@ -41,15 +42,24 @@ def fetch(
     unique = [sym for sym in dict.fromkeys(symbols) if sym]
     cache_key = build_cache_key("market-data", sorted(unique), period or start, end, interval, fields)
 
+    def _cache_paths(key: str) -> tuple[Path, Path]:
+        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        base = digest[:24]
+        return DISK_CACHE_DIR / f"{base}.parquet", DISK_CACHE_DIR / f"{base}.json"
+
     def _load_disk_cache() -> pd.DataFrame:
-        path = DISK_CACHE_DIR / f"{cache_key}.parquet"
-        meta_path = DISK_CACHE_DIR / f"{cache_key}.json"
+        path, meta_path = _cache_paths(cache_key)
         if not path.exists() or not meta_path.exists():
             return pd.DataFrame()
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             ts = float(meta.get("timestamp", 0))
             if time.time() - ts > DISK_CACHE_TTL_SECONDS:
+                try:
+                    path.unlink(missing_ok=True)
+                    meta_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
                 return pd.DataFrame()
             df = pd.read_parquet(path)
             return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
@@ -60,9 +70,10 @@ def fetch(
         if not isinstance(df, pd.DataFrame) or df.empty:
             return
         try:
-            df.to_parquet(DISK_CACHE_DIR / f"{cache_key}.parquet")
-            meta = {"timestamp": time.time(), "symbols": unique, "fields": fields}
-            (DISK_CACHE_DIR / f"{cache_key}.json").write_text(json.dumps(meta), encoding="utf-8")
+            path, meta_path = _cache_paths(cache_key)
+            df.to_parquet(path)
+            meta = {"timestamp": time.time(), "symbols": unique, "fields": fields, "cache_key": cache_key}
+            meta_path.write_text(json.dumps(meta), encoding="utf-8")
         except Exception:
             pass
 

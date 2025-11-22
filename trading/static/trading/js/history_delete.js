@@ -3,90 +3,102 @@ document.addEventListener('DOMContentLoaded', () => {
   const TEXT = {
     minSelect: langIsZh ? '请至少选择两条记录再进行对比。' : 'Select at least two runs before comparing.',
     maxSelect: langIsZh ? '最多选择三条记录进行对比。' : 'Select up to three runs for comparison.',
+    hintEmpty: langIsZh ? '请选择 2-3 条历史记录以开始对比。' : 'Select 2-3 runs to start comparison.',
+    hintNeedMore: langIsZh ? '再选择至少一条记录即可对比。' : 'Select at least one more run.',
+    hintReady: langIsZh ? '已就绪，点击右侧按钮进入对比。' : 'Ready. Click the button to compare.',
+    hintFull: langIsZh ? '已达上限，可删除勾选项后重选。' : 'Maximum reached. Remove one to adjust.',
   };
 
-  function getCSRFToken() {
+  const getCSRFToken = () => {
     const csrfInput = document.querySelector('input[name=csrfmiddlewaretoken]');
     if (csrfInput) return csrfInput.value;
     const match = document.cookie.match(/csrftoken=([^;]+)/i);
     return match ? decodeURIComponent(match[1]) : '';
-  }
+  };
 
   const csrfToken = getCSRFToken();
   const compareState = new Map();
   const MAX_COMPARE = 3;
 
-  function findCompareBar(accordion) {
-    if (!accordion || !accordion.id) return null;
-    return document.querySelector(`[data-role="history-compare"][data-accordion-id="${accordion.id}"]`);
-  }
+  const findBar = (accordionId) =>
+    document.querySelector(`[data-role="history-compare"][data-accordion-id="${accordionId}"]`);
 
-  function updateCompareBar(bar) {
+  const updateBar = (accordionId) => {
+    const bar = findBar(accordionId);
     if (!bar) return;
-    const selection = compareState.get(bar) || [];
+    const selections = compareState.get(accordionId) || [];
     const countNode = bar.querySelector('[data-role="compare-count"]');
+    const noteNode = bar.querySelector('[data-role="compare-note"]');
     const launchBtn = bar.querySelector('[data-role="compare-launch"]');
-    if (countNode) {
-      countNode.textContent = `${selection.length}/${MAX_COMPARE}`;
+    if (countNode) countNode.textContent = `${selections.length}`;
+    if (noteNode) {
+      if (selections.length >= MAX_COMPARE) noteNode.textContent = TEXT.hintFull;
+      else if (selections.length >= 2) noteNode.textContent = TEXT.hintReady;
+      else if (selections.length === 1) noteNode.textContent = TEXT.hintNeedMore;
+      else noteNode.textContent = TEXT.hintEmpty;
     }
-    if (launchBtn) {
-      launchBtn.disabled = selection.length < 2;
-    }
-  }
+    if (launchBtn) launchBtn.disabled = selections.length < 2;
+  };
 
-  function toggleCompareSelection(checkbox) {
-    const accordion = checkbox.closest('.history-accordion');
-    const bar = findCompareBar(accordion);
-    if (!bar) return;
-    if (!compareState.has(bar)) {
-      compareState.set(bar, []);
+  const syncSelections = (accordionId) => {
+    if (!accordionId) return;
+    const container = document.getElementById(accordionId);
+    const selections = [];
+    if (container) {
+      container.querySelectorAll('[data-role="history-compare-toggle"]').forEach((checkbox) => {
+        if (checkbox.checked && checkbox.value && !selections.includes(checkbox.value)) {
+          selections.push(checkbox.value);
+        }
+      });
     }
-    const selection = compareState.get(bar);
-    const recordId = checkbox.value;
-    if (!recordId) return;
-    if (checkbox.checked && !selection.includes(recordId)) {
-      if (selection.length >= MAX_COMPARE) {
-        checkbox.checked = false;
-        alert(TEXT.maxSelect);
-        return;
-      }
-      selection.push(recordId);
-    } else if (!checkbox.checked) {
-      const idx = selection.indexOf(recordId);
-      if (idx >= 0) selection.splice(idx, 1);
-    }
-    updateCompareBar(bar);
-  }
+    compareState.set(accordionId, selections);
+    updateBar(accordionId);
+    return selections;
+  };
 
-  function purgeSelection(recordId) {
-    compareState.forEach((selection, bar) => {
-      const idx = selection.indexOf(recordId);
-      if (idx >= 0) {
-        selection.splice(idx, 1);
-        updateCompareBar(bar);
-      }
-    });
-  }
+  const enforceLimit = (accordionId, checkbox) => {
+    const selections = compareState.get(accordionId) || [];
+    if (selections.length > MAX_COMPARE && checkbox.checked) {
+      checkbox.checked = false;
+      syncSelections(accordionId);
+      alert(TEXT.maxSelect);
+      return false;
+    }
+    return true;
+  };
+
+  document.body.addEventListener('change', (event) => {
+    const checkbox = event.target.closest('[data-role="history-compare-toggle"]');
+    if (!checkbox) return;
+    const container = checkbox.closest('.history-accordion');
+    const accordionId = checkbox.dataset.compareId || container?.id;
+    if (!accordionId) return;
+    syncSelections(accordionId);
+    enforceLimit(accordionId, checkbox);
+  });
 
   document.body.addEventListener('click', async (event) => {
     const deleteBtn = event.target.closest('.history-delete');
     if (deleteBtn) {
       event.preventDefault();
-      const id = deleteBtn.dataset.id;
+      const recordId = deleteBtn.dataset.id;
       const container = deleteBtn.closest('.history-accordion');
-      const urlBase = container ? container.dataset.deleteUrlBase : null;
-      const urlTemplate = container ? container.dataset.deleteUrlTemplate : null;
-      const confirmMessage = container?.dataset.confirmDelete || '确定删除该历史回测记录吗？此操作不可撤销。';
-      const deleteFailedMessage = container?.dataset.deleteFailed || '删除失败，请稍后重试。';
-      const networkErrorMessage = container?.dataset.deleteNetwork || '删除时发生网络错误，请稍后再试。';
+      const accordionId = container?.id;
+      const urlBase = container?.dataset.deleteUrlBase || null;
+      const urlTemplate = container?.dataset.deleteUrlTemplate || null;
+      const confirmMessage =
+        container?.dataset.confirmDelete || '确定删除该历史回测记录吗？此操作不可撤销。';
+      const deleteFailedMessage =
+        container?.dataset.deleteFailed || '删除失败，请稍后重试。';
+      const networkErrorMessage =
+        container?.dataset.deleteNetwork || '删除时发生网络错误，请稍后再试。';
 
-      if (!id) return;
+      if (!recordId) return;
       let targetUrl = null;
       if (urlTemplate && urlTemplate.includes('placeholder')) {
-        targetUrl = urlTemplate.replace('placeholder', id);
+        targetUrl = urlTemplate.replace('placeholder', recordId);
       } else if (urlBase) {
-        const normalized = urlBase.replace(/\/+$/, '');
-        targetUrl = `${normalized}/${id}/`;
+        targetUrl = `${urlBase.replace(/\/+$/, '')}/${recordId}/`;
       }
       if (!targetUrl) return;
       if (!window.confirm(confirmMessage)) return;
@@ -100,33 +112,18 @@ document.addEventListener('DOMContentLoaded', () => {
           },
           credentials: 'same-origin',
         });
-
         if (!response.ok) {
-          let errorDetail = deleteFailedMessage;
-          try {
-            const errorData = await response.json();
-            if (errorData && errorData.detail) {
-              errorDetail = errorData.detail;
-            }
-          } catch (err) {
-            // ignore parsing errors
-          }
-          alert(errorDetail);
-          return;
+          throw new Error(deleteFailedMessage);
         }
-
         const item = deleteBtn.closest('.history-item');
-        if (item) {
-          purgeSelection(id);
-          item.remove();
-        }
-
+        if (item) item.remove();
         if (container && !container.querySelector('.history-item')) {
           const emptyId = container.dataset.emptyId;
           const emptyEl = emptyId ? document.getElementById(emptyId) : null;
           if (emptyEl) emptyEl.classList.remove('d-none');
           container.classList.add('d-none');
         }
+        if (accordionId) syncSelections(accordionId);
       } catch (error) {
         alert(`${networkErrorMessage} ${error.message || ''}`);
       }
@@ -137,23 +134,23 @@ document.addEventListener('DOMContentLoaded', () => {
     if (launchBtn) {
       const bar = launchBtn.closest('[data-role="history-compare"]');
       if (!bar) return;
-      const selection = compareState.get(bar) || [];
-      if (selection.length < 2) {
+      const accordionId = bar.dataset.accordionId;
+      const selections = compareState.get(accordionId) || [];
+      if (selections.length < 2) {
         alert(TEXT.minSelect);
         return;
       }
       const baseUrl = bar.dataset.compareUrl;
       if (!baseUrl) return;
       const url = new URL(baseUrl, window.location.origin);
-      url.searchParams.set('records', selection.join(','));
+      url.searchParams.set('records', selections.join(','));
       window.location.href = url.toString();
     }
   });
 
-  document.body.addEventListener('change', (event) => {
-    const checkbox = event.target.closest('[data-role="history-compare-toggle"]');
-    if (checkbox && checkbox.type === 'checkbox') {
-      toggleCompareSelection(checkbox);
-    }
+  document.querySelectorAll('[data-role="history-compare"]').forEach((bar) => {
+    const accordionId = bar.dataset.accordionId;
+    if (!accordionId) return;
+    syncSelections(accordionId);
   });
 });

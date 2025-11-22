@@ -9,6 +9,7 @@ import time
 import uuid
 import logging
 from typing import IO
+import os
 
 try:  # pragma: no cover - platform specific
     import fcntl  # type: ignore
@@ -23,6 +24,7 @@ from django.conf import settings
 
 DATA_CACHE_DIR = settings.DATA_CACHE_DIR
 METRICS_PATH = DATA_CACHE_DIR / "telemetry.ndjson"
+METRICS_MAX_BYTES = int(os.environ.get("METRICS_MAX_BYTES", str(5 * 1024 * 1024)) or 0)
 _METRIC_LOCK = threading.Lock()
 LOGGER = logging.getLogger(__name__)
 
@@ -82,18 +84,39 @@ def record_metric(event: str, **fields: Any) -> None:
         return
     try:
         METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _METRIC_LOCK, METRICS_PATH.open("a", encoding="utf-8") as fh:
-            try:
-                _lock_file_handle(fh)
-                fh.write(payload + "\n")
-                fh.flush()
-            finally:
+        with _METRIC_LOCK:
+            _rotate_metrics_file()
+            with METRICS_PATH.open("a", encoding="utf-8") as fh:
                 try:
-                    _unlock_file_handle(fh)
-                except Exception:
-                    pass
+                    _lock_file_handle(fh)
+                    fh.write(payload + "\n")
+                    fh.flush()
+                finally:
+                    try:
+                        _unlock_file_handle(fh)
+                    except Exception:
+                        pass
     except Exception as exc:  # pragma: no cover - IO errors
         LOGGER.warning("Failed to write metric %s: %s", event, exc)
+
+
+def _rotate_metrics_file() -> None:
+    """Simple size-based rotation to avoid unbounded telemetry growth."""
+    if METRICS_MAX_BYTES <= 0:
+        return
+    try:
+        if not METRICS_PATH.exists():
+            return
+        if METRICS_PATH.stat().st_size <= METRICS_MAX_BYTES:
+            return
+        backup = METRICS_PATH.with_name(f"{METRICS_PATH.name}.1")
+        try:
+            backup.unlink(missing_ok=True)
+        except Exception:
+            pass
+        METRICS_PATH.rename(backup)
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.warning("Failed to rotate metrics file: %s", exc)
 
 
 @contextmanager

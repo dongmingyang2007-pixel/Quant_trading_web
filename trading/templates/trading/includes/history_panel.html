@@ -11,9 +11,9 @@
          data-role="history-compare"
          data-accordion-id="{{ accordion_id }}"
          data-compare-url="{{ compare_url }}">
-        <div>
+        <div class="history-compare-status">
             <span class="history-compare-count" data-role="compare-count">0</span>
-            <span class="history-compare-note">{% bilingual "Selected · add 2-3 records for comparison" "已选择 · 选择 2-3 条记录进行对比" %}</span>
+            <span class="history-compare-note" data-role="compare-note">{% bilingual "Select 2-3 runs to start comparison." "请选择 2-3 条历史记录以开始对比" %}</span>
         </div>
         <button type="button" class="hero-button solid small" data-role="compare-launch" disabled>{% bilingual "Compare runs" "对比分析" %}</button>
     </div>
@@ -43,6 +43,7 @@
                             <input type="checkbox"
                                    class="history-compare-checkbox"
                                    data-role="history-compare-toggle"
+                                   data-compare-id="{{ accordion_id }}"
                                    value="{{ history.record_id }}">
                             {% bilingual "Add to arena" "加入角斗场" %}
                         </label>
