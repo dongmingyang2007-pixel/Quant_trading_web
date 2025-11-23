@@ -88,6 +88,36 @@ def _extract_last_signal(config: dict[str, Any] | None) -> tuple[str | None, str
     return last.get("source"), last.get("at")
 
 
+def _apply_risk_guard(weight: float, stats: dict[str, Any] | None, confidence: float | None) -> tuple[float, dict[str, Any] | None]:
+    """Downscale target weight based on volatility/VaR/confidence."""
+    if stats is None:
+        stats = {}
+    factor = 1.0
+    reasons: list[str] = []
+    vol = float(stats.get("volatility") or stats.get("annual_volatility") or 0.0)
+    var95 = float(stats.get("var_95") or 0.0)
+    cvar95 = float(stats.get("cvar_95") or 0.0)
+    if vol > 0.35:
+        factor *= 0.6
+        reasons.append(f"volatility {vol:.2f}")
+    elif vol > 0.25:
+        factor *= 0.8
+        reasons.append(f"volatility {vol:.2f}")
+    if var95 > 0.08 or cvar95 > 0.1:
+        factor *= 0.8
+        reasons.append(f"VaR/CVaR {max(var95,cvar95):.2f}")
+    if confidence is not None:
+        if confidence < 0.4:
+            factor *= 0.6
+            reasons.append(f"confidence {confidence:.2f}")
+        elif confidence < 0.6:
+            factor *= 0.85
+            reasons.append(f"confidence {confidence:.2f}")
+    if factor >= 0.999:
+        return weight, None
+    return weight * factor, {"factor": round(factor, 3), "reasons": reasons}
+
+
 def _to_decimal(value: Any, default: Decimal = Decimal("0")) -> Decimal:
     try:
         return Decimal(str(value))
@@ -263,6 +293,13 @@ def process_session(
     params = _build_strategy_from_config(session.config or {}, str(session.user_id))
     # 每次以最新日期作为回测终点，以便拿到最新信号
     params = params.__class__(**{**asdict(params), "end_date": date.today()})
+
+    target_weight = 0.0
+    signal_at = now
+    signal_source = "fresh"
+    signal_confidence: float | None = None
+
+    stats: dict[str, Any] | None = None
     try:
         # Optional light heartbeat: reuse cached signal if still fresh
         if ALLOW_LIGHT_HEARTBEAT and session.config.get("__last_signal"):
@@ -278,6 +315,7 @@ def process_session(
                 target_weight = float(last_signal.get("weight", 0.0))
                 signal_at = ts
                 signal_source = "light_cached"
+                signal_confidence = float(last_signal.get("confidence", 0.0)) if "confidence" in last_signal else None
                 record_metric("paper_signal_source", session_id=str(session.session_id), source="light_cached")
             else:
                 raise QuantStrategyError("cached_signal_expired")
@@ -286,6 +324,7 @@ def process_session(
     except QuantStrategyError:
         try:
             result = run_quant_pipeline(params)
+            stats = result.get("stats") or {}
             recent_rows = result.get("recent_rows") or []
             if not recent_rows:
                 raise PaperTradingError("策略未返回有效的 recent_rows，无法生成交易信号。")
@@ -293,6 +332,7 @@ def process_session(
             target_weight = float(last_bar.get("position", 0.0))
             signal_at = now
             signal_source = "fresh"
+            signal_confidence = float(last_bar.get("confidence")) if last_bar.get("confidence") is not None else None
             record_metric("paper_signal_source", session_id=str(session.session_id), source="fresh")
         except Exception as exc:
             last_signal = (session.config or {}).get("__last_signal") or {}
@@ -309,6 +349,7 @@ def process_session(
                     target_weight = float(last_signal.get("weight", 0.0))
                     signal_at = ts
                     signal_source = "fallback_cached"
+                    signal_confidence = float(last_signal.get("confidence", 0.0)) if "confidence" in last_signal else None
                     record_metric("paper_signal_source", session_id=str(session.session_id), source="fallback_cached")
                 else:
                     record_metric("paper_signal_source", session_id=str(session.session_id), source="failure", error=str(exc))
@@ -318,7 +359,16 @@ def process_session(
                 raise
 
     data_interval = _session_interval(session)
-    last_signal_payload = {"weight": float(target_weight), "at": signal_at.isoformat(), "source": signal_source}
+    adjusted_weight = target_weight
+    risk_guard = None
+    if signal_source == "fresh":
+        adjusted_weight, risk_guard = _apply_risk_guard(target_weight, stats, signal_confidence)
+
+    last_signal_payload = {"weight": float(adjusted_weight), "at": signal_at.isoformat(), "source": signal_source}
+    if signal_confidence is not None:
+        last_signal_payload["confidence"] = float(signal_confidence)
+    if risk_guard:
+        last_signal_payload["risk_guard"] = risk_guard
 
     quote = _extract_quote_from_cache(params.ticker, data_interval, price_cache)
     if not quote:
@@ -341,7 +391,7 @@ def process_session(
         positions, cash, trades = _rebalance_position(
             locked,
             price=float(price),
-            target_weight=target_weight,
+            target_weight=adjusted_weight,
             as_of=now,
             slippage_bps=getattr(params, "slippage_bps", DEFAULT_SLIPPAGE_BPS),
             commission_bps=getattr(params, "transaction_cost_bps", DEFAULT_COMMISSION_BPS),
@@ -377,12 +427,14 @@ def process_session(
     payload = {
         "session_id": str(session.session_id),
         "ticker": session.ticker,
-        "target_weight": target_weight,
+        "target_weight": adjusted_weight,
         "price": float(price),
         "equity": float(equity),
         "trades": [{"side": t.side, "quantity": float(t.quantity), "price": float(t.price)} for t in trades],
         "signal_source": signal_source,
         "last_signal_at": signal_at.isoformat(),
+        "signal_confidence": signal_confidence,
+        "risk_guard": risk_guard,
     }
     record_metric(
         "paper_session_processed",
@@ -475,6 +527,7 @@ def run_pending_sessions(limit: int = 20, price_cache: dict[str, object] | None 
 
 def serialize_session(session: PaperTradingSession, *, include_details: bool = False, trades_limit: int = 20) -> dict[str, Any]:
     sig_source, sig_at = _extract_last_signal(session.config or {})
+    last_signal = (session.config or {}).get("__last_signal") or {}
     payload = {
         "session_id": str(session.session_id),
         "name": session.name,
@@ -493,6 +546,8 @@ def serialize_session(session: PaperTradingSession, *, include_details: bool = F
         "pnl_pct": float(session.last_equity) / float(session.initial_cash or 1) - 1 if session.initial_cash else None,
         "signal_source": sig_source,
         "last_signal_at": sig_at,
+        "signal_confidence": last_signal.get("confidence"),
+        "risk_guard": last_signal.get("risk_guard"),
     }
     if include_details:
         curve = session.equity_curve or []

@@ -10,6 +10,7 @@ import hashlib
 import os
 import functools
 import threading
+import logging
 
 MAX_RETRIES = int(os.environ.get("MARKET_FETCH_MAX_RETRIES", "2") or 0)
 RETRY_BACKOFF_SECONDS = float(os.environ.get("MARKET_FETCH_RETRY_BACKOFF", "1.0") or 0)
@@ -18,12 +19,14 @@ RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("MARKET_FETCH_RATE_WINDOW", "60")
 
 _RATE_LOCK = threading.Lock()
 _RATE_BUCKET: list[float] = []
+LOGGER = logging.getLogger(__name__)
 
 import pandas as pd
 
 from django.conf import settings
 
 from .cache_utils import build_cache_key, cache_memoize
+from trading.observability import record_metric
 
 try:  # optional dependency
     import yfinance as yf  # type: ignore
@@ -64,6 +67,8 @@ def _rate_limited() -> bool:
         while _RATE_BUCKET and _RATE_BUCKET[0] < window_start:
             _RATE_BUCKET.pop(0)
         if len(_RATE_BUCKET) >= RATE_LIMIT_PER_WINDOW:
+            LOGGER.warning("market_data rate limit hit: %s in %ss", len(_RATE_BUCKET), RATE_LIMIT_WINDOW_SECONDS)
+            record_metric("market_rate_limited", count=len(_RATE_BUCKET), window=RATE_LIMIT_WINDOW_SECONDS)
             return False
         _RATE_BUCKET.append(now)
         return True
@@ -232,9 +237,19 @@ def fetch_recent_window(symbols: list[str] | tuple[str, ...] | str, *, interval:
             threads=False,
         )
     except Exception:
-        return {}
+        data = pd.DataFrame()
     result: dict[str, pd.DataFrame] = {}
     if not isinstance(data, pd.DataFrame) or data.empty:
+        # degrade to daily interval as a fallback if intraday fails
+        if interval.endswith("m") or interval.endswith("h"):
+            try:
+                degraded = fetch_recent_window(unique_symbols, interval="1d", limit=limit)
+                if degraded:
+                    LOGGER.warning("market_data degraded interval %s -> 1d for symbols=%s", interval, unique_symbols)
+                    record_metric("market_fetch_degraded", interval_from=interval, interval_to="1d", symbols=len(unique_symbols))
+                    return degraded
+            except Exception:
+                return {}
         return result
     if isinstance(data.columns, pd.MultiIndex):
         # data has MultiIndex (field, symbol)
@@ -260,8 +275,9 @@ def fetch_latest_quote(symbol: str, *, interval: str = "1m") -> dict[str, object
     """Fetch the latest quote for a symbol. Returns {'price': float, 'as_of': datetime}."""
     if not symbol:
         return {}
-    if yf is None:  # pragma: no cover - network dependency
+    if yf is None or not _rate_limited():  # pragma: no cover - network dependency
         return {}
+    source = "yf"
     try:
         data = _with_retries(
             yf.download,
@@ -274,6 +290,7 @@ def fetch_latest_quote(symbol: str, *, interval: str = "1m") -> dict[str, object
         if isinstance(data, pd.DataFrame) and not data.empty:
             extracted = _extract_price_from_frame(data)
             if extracted:
+                extracted["source"] = source
                 return extracted
     except Exception:
         pass
@@ -281,7 +298,10 @@ def fetch_latest_quote(symbol: str, *, interval: str = "1m") -> dict[str, object
     try:
         frame = fetch([symbol], period="5d", interval="1d", cache=False)
         if isinstance(frame, pd.DataFrame) and not frame.empty:
-            return _extract_price_from_frame(frame)
+            extracted = _extract_price_from_frame(frame)
+            if extracted:
+                extracted["source"] = "fallback"
+                return extracted
     except Exception:
         pass
     return {}

@@ -43,6 +43,8 @@
     const cfg = session.config || {};
     const slippageBps = cfg.slippage_bps ?? 5;
     const commissionBps = cfg.transaction_cost_bps ?? 8;
+    const confidence = session.signal_confidence;
+    const riskGuard = session.risk_guard;
     const lastRunTs = session.last_run_at ? new Date(session.last_run_at).getTime() : null;
     const intervalMs = (session.interval_seconds || 300) * 1000;
     const nowTs = Date.now();
@@ -116,7 +118,12 @@
         </div>
         <div class="paper-detail-box">
           <div class="fw-semibold">${lang.startsWith("zh") ? "信号来源" : "Signal source"}</div>
-          <div class="text-muted small"><span class="signal-pill source-${signalSource}">${signalLabels[signalSource] || signalLabels.unknown}</span> ${formatTs(session.last_signal_at)}</div>
+          <div class="text-muted small d-flex align-items-center gap-2 flex-wrap">
+            <span class="signal-pill source-${signalSource}">${signalLabels[signalSource] || signalLabels.unknown}</span>
+            ${confidence !== null && confidence !== undefined ? `<span class="confidence-pill">${lang.startsWith("zh") ? "置信度" : "Confidence"} ${(confidence * 100).toFixed(1)}%</span>` : ""}
+            <span>${formatTs(session.last_signal_at)}</span>
+            ${riskGuard ? `<span class="badge bg-warning-subtle text-warning-emphasis">${lang.startsWith("zh") ? "降风险" : "De-risked"} ×${riskGuard.factor ?? 1}</span>` : ""}
+          </div>
         </div>
         <div class="paper-detail-box">
           <div class="fw-semibold">${lang.startsWith("zh") ? "成本假设" : "Cost model"}</div>
