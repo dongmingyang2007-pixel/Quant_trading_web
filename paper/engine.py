@@ -12,13 +12,25 @@ from django.db import transaction
 from django.utils import timezone
 
 from paper.models import PaperTradingSession, PaperTrade
-from trading.strategies import StrategyInput, run_quant_pipeline
-from trading.market_data import fetch_latest_quote
+from trading.strategies import StrategyInput, run_quant_pipeline, QuantStrategyError
+from trading.market_data import fetch_latest_quote, fetch_recent_window
+from trading.observability import record_metric
+from django.conf import settings
+
+try:  # Optional dependency used only for cache extraction helpers
+    import pandas as pd
+except Exception:  # pragma: no cover - fallback when pandas unavailable
+    pd = None
 
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_INTERVAL_SECONDS = int(os.environ.get("PAPER_TRADING_INTERVAL_SECONDS", 300))
 DEFAULT_INITIAL_CASH = Decimal(os.environ.get("PAPER_TRADING_INITIAL_CASH", "100000"))
+DEFAULT_SLIPPAGE_BPS = float(os.environ.get("PAPER_TRADING_SLIPPAGE_BPS", "5.0"))
+DEFAULT_COMMISSION_BPS = float(os.environ.get("PAPER_TRADING_COMMISSION_BPS", "8.0"))
+FALLBACK_SIGNAL_TTL_SECONDS = int(os.environ.get("PAPER_TRADING_SIGNAL_TTL", "3600") or 0)
+FALLBACK_SIGNAL_MAX_AGE_SECONDS = int(os.environ.get("PAPER_TRADING_SIGNAL_MAX_AGE", str(86400 * 3)) or 0)
+ALLOW_LIGHT_HEARTBEAT = os.environ.get("PAPER_TRADING_ALLOW_LIGHT", "1") in {"1", "true", "True"}
 
 
 class PaperTradingError(RuntimeError):
@@ -37,7 +49,7 @@ def _parse_date_safe(value: Any, fallback: date | None = None) -> date:
 
 
 def _build_strategy_from_config(config: Dict[str, Any], user_id: str) -> StrategyInput:
-    payload = dict(config)
+    payload = {k: v for k, v in dict(config).items() if not str(k).startswith("__")}
     payload["user_id"] = user_id
     payload["request_id"] = payload.get("request_id") or f"paper-{user_id}"
     end = _parse_date_safe(payload.get("end_date"), date.today())
@@ -71,6 +83,18 @@ def _ensure_curve(curve: list[dict[str, Any]], entry: dict[str, Any], max_points
     return curve
 
 
+def _extract_last_signal(config: dict[str, Any] | None) -> tuple[str | None, str | None]:
+    last = (config or {}).get("__last_signal") or {}
+    return last.get("source"), last.get("at")
+
+
+def _to_decimal(value: Any, default: Decimal = Decimal("0")) -> Decimal:
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return default
+
+
 def _serialize_strategy_config(params: StrategyInput) -> dict[str, Any]:
     payload = asdict(params)
     for key in ("start_date", "end_date"):
@@ -80,14 +104,65 @@ def _serialize_strategy_config(params: StrategyInput) -> dict[str, Any]:
     return payload
 
 
-def _compute_account_value(positions: Dict[str, float], price_lookup: Dict[str, float], cash: float) -> float:
-    total = cash
+def _compute_account_value(positions: Dict[str, float], price_lookup: Dict[str, float], cash: Decimal | float) -> Decimal:
+    total = _to_decimal(cash)
     for symbol, qty in positions.items():
         price = price_lookup.get(symbol)
         if price is None:
             continue
-        total += float(qty) * float(price)
-    return float(total)
+        total += _to_decimal(qty) * _to_decimal(price)
+    return total
+
+
+def _session_interval(session: PaperTradingSession) -> str:
+    cfg = session.config or {}
+    interval = cfg.get("interval")
+    if interval:
+        return str(interval)
+    # Map interval_seconds (if present) to yfinance-friendly interval strings
+    try:
+        sec = int(cfg.get("interval_seconds") or session.interval_seconds or 86400)
+    except Exception:
+        sec = 86400
+    if sec <= 60:
+        return "1m"
+    if sec <= 300:
+        return "5m"
+    if sec <= 900:
+        return "15m"
+    if sec <= 1800:
+        return "30m"
+    if sec <= 3600:
+        return "1h"
+    return "1d"
+
+
+def _extract_quote_from_cache(ticker: str, interval: str, cache: dict[str, object] | None) -> dict[str, object]:
+    if not cache:
+        return {}
+    data = cache.get((ticker, interval)) or cache.get(ticker)
+    if data is None:
+        return {}
+    # Allow both {'price': ..} dicts and DataFrame snapshots
+    if isinstance(data, dict) and "price" in data:
+        return data
+    if pd is not None and isinstance(data, pd.DataFrame) and not data.empty:
+        try:
+            col = "Adj Close" if "Adj Close" in data.columns else "Close"
+            series = data[col] if col in data.columns else data.iloc[:, 0]
+            series = series.dropna()
+            if series.empty:
+                return {}
+            price = float(series.iloc[-1])
+            ts = series.index[-1]
+            try:
+                ts = ts.to_pydatetime()
+            except Exception:
+                pass
+            return {"price": price, "as_of": ts}
+        except Exception:
+            return {}
+    return {}
 
 
 def create_session(user, params: StrategyInput, *, name: str | None = None, initial_cash: Decimal | float | None = None) -> PaperTradingSession:
@@ -108,62 +183,150 @@ def create_session(user, params: StrategyInput, *, name: str | None = None, init
     return session
 
 
-def _rebalance_position(session: PaperTradingSession, *, price: float, target_weight: float, as_of: datetime) -> Tuple[Dict[str, float], float, list[PaperTrade]]:
+def _rebalance_position(
+    session: PaperTradingSession,
+    *,
+    price: float,
+    target_weight: float,
+    as_of: datetime,
+    slippage_bps: float,
+    commission_bps: float,
+) -> Tuple[Dict[str, float], Decimal, list[PaperTrade]]:
     positions = dict(session.current_positions or {})
-    cash = float(session.current_cash)
-    price_lookup = {session.ticker: price}
-    equity = _compute_account_value(positions, price_lookup, cash)
-    target_notional = equity * target_weight
-    current_qty = float(positions.get(session.ticker, 0.0))
-    desired_qty = target_notional / price if price else 0.0
+    cash = _to_decimal(session.current_cash)
+    price_dec = _to_decimal(price)
+    slip_rate = Decimal(str(slippage_bps / 10000.0))
+    comm_rate = Decimal(str(commission_bps / 10000.0))
+
+    # Use Decimal for all monetary math to avoid rounding drift
+    price_lookup = {session.ticker: float(price_dec)}
+    equity = _to_decimal(_compute_account_value(positions, price_lookup, float(cash)))
+    target_notional = equity * Decimal(str(target_weight))
+    current_qty = _to_decimal(positions.get(session.ticker, 0.0))
+    desired_qty = Decimal("0") if price_dec == 0 else target_notional / price_dec
     trade_qty = desired_qty - current_qty
     trades: list[PaperTrade] = []
 
-    if abs(trade_qty) > 1e-6:
-        side = "buy" if trade_qty > 0 else "sell"
-        notional = trade_qty * price
+    if abs(trade_qty) > Decimal("1e-9"):
+        is_buy = trade_qty > 0
+        side = "buy" if is_buy else "sell"
+        exec_price = price_dec * (Decimal("1") + slip_rate if is_buy else Decimal("1") - slip_rate)
+        notional = trade_qty * exec_price
+        commission = abs(notional) * comm_rate
         cash -= notional
-        positions[session.ticker] = desired_qty
+        cash -= commission
+        new_qty = current_qty + trade_qty
+        if abs(new_qty) < Decimal("1e-9"):
+            positions.pop(session.ticker, None)
+            new_qty = Decimal("0")
+        else:
+            positions[session.ticker] = float(new_qty.quantize(Decimal("0.00000001")))
         trade = PaperTrade(
             session=session,
             symbol=session.ticker,
             side=side,
-            quantity=Decimal(str(trade_qty)),
-            price=Decimal(str(price)),
-            notional=Decimal(str(abs(notional))),
-            metadata={"target_weight": target_weight, "equity_before": equity},
+            quantity=trade_qty.copy_abs(),
+            price=exec_price,
+            notional=abs(notional),
+            metadata={
+                "target_weight": target_weight,
+                "equity_before": float(equity),
+                "slippage_bps": slippage_bps,
+                "commission_bps": commission_bps,
+                "commission": float(commission),
+            },
             executed_at=as_of,
         )
         trades.append(trade)
-        equity = _compute_account_value(positions, price_lookup, cash)
+        equity = _to_decimal(_compute_account_value(positions, price_lookup, float(cash)))
 
     return positions, cash, trades
 
 
-def process_session(session: PaperTradingSession, *, now: datetime | None = None) -> dict[str, Any]:
+def process_session(
+    session: PaperTradingSession,
+    *,
+    now: datetime | None = None,
+    price_cache: dict[str, object] | None = None,
+) -> dict[str, Any]:
     if session.status != "running":
+        record_metric("paper_session_skipped", session_id=str(session.session_id), reason="not_running")
         return {"skipped": True, "reason": "not_running"}
 
     now = now or timezone.now()
     if timezone.is_naive(now):  # normalize for comparisons
         now = timezone.make_aware(now, timezone.get_current_timezone())
     if session.next_run_at and session.next_run_at > now:
+        record_metric("paper_session_skipped", session_id=str(session.session_id), reason="not_due")
         return {"skipped": True, "reason": "not_due"}
 
     params = _build_strategy_from_config(session.config or {}, str(session.user_id))
     # 每次以最新日期作为回测终点，以便拿到最新信号
     params = params.__class__(**{**asdict(params), "end_date": date.today()})
-    result = run_quant_pipeline(params)
-    recent_rows = result.get("recent_rows") or []
-    if not recent_rows:
-        raise PaperTradingError("策略未返回有效的 recent_rows，无法生成交易信号。")
-    last_bar = recent_rows[-1]
-    target_weight = float(last_bar.get("position", 0.0))
+    try:
+        # Optional light heartbeat: reuse cached signal if still fresh
+        if ALLOW_LIGHT_HEARTBEAT and session.config.get("__last_signal"):
+            last_signal = session.config["__last_signal"]
+            try:
+                ts = datetime.fromisoformat(last_signal.get("at"))
+                if timezone.is_naive(ts):
+                    ts = timezone.make_aware(ts, timezone.get_current_timezone())
+            except Exception:
+                ts = None
+            ttl = max(60, FALLBACK_SIGNAL_TTL_SECONDS) if FALLBACK_SIGNAL_TTL_SECONDS > 0 else 0
+            if ts and (ttl == 0 or (now - ts).total_seconds() <= ttl):
+                target_weight = float(last_signal.get("weight", 0.0))
+                signal_at = ts
+                signal_source = "light_cached"
+                record_metric("paper_signal_source", session_id=str(session.session_id), source="light_cached")
+            else:
+                raise QuantStrategyError("cached_signal_expired")
+        else:
+            raise QuantStrategyError("no_light_mode")
+    except QuantStrategyError:
+        try:
+            result = run_quant_pipeline(params)
+            recent_rows = result.get("recent_rows") or []
+            if not recent_rows:
+                raise PaperTradingError("策略未返回有效的 recent_rows，无法生成交易信号。")
+            last_bar = recent_rows[-1]
+            target_weight = float(last_bar.get("position", 0.0))
+            signal_at = now
+            signal_source = "fresh"
+            record_metric("paper_signal_source", session_id=str(session.session_id), source="fresh")
+        except Exception as exc:
+            last_signal = (session.config or {}).get("__last_signal") or {}
+            if last_signal:
+                try:
+                    ts = datetime.fromisoformat(last_signal.get("at"))
+                    if timezone.is_naive(ts):
+                        ts = timezone.make_aware(ts, timezone.get_current_timezone())
+                except Exception:
+                    ts = None
+                age = (now - ts).total_seconds() if ts else None
+                max_age = FALLBACK_SIGNAL_MAX_AGE_SECONDS or FALLBACK_SIGNAL_TTL_SECONDS
+                if ts and (max_age == 0 or (age is not None and age <= max_age)):
+                    target_weight = float(last_signal.get("weight", 0.0))
+                    signal_at = ts
+                    signal_source = "fallback_cached"
+                    record_metric("paper_signal_source", session_id=str(session.session_id), source="fallback_cached")
+                else:
+                    record_metric("paper_signal_source", session_id=str(session.session_id), source="failure", error=str(exc))
+                    raise
+            else:
+                record_metric("paper_signal_source", session_id=str(session.session_id), source="failure", error=str(exc))
+                raise
 
-    quote = fetch_latest_quote(params.ticker)
+    data_interval = _session_interval(session)
+    last_signal_payload = {"weight": float(target_weight), "at": signal_at.isoformat(), "source": signal_source}
+
+    quote = _extract_quote_from_cache(params.ticker, data_interval, price_cache)
+    if not quote:
+        quote = fetch_latest_quote(params.ticker, interval=data_interval)
     price = quote.get("price")
     if price is None:
-        raise PaperTradingError(f"未获取到 {params.ticker} 最新价格。")
+        record_metric("paper_session_skipped", session_id=str(session.session_id), reason="quote_unavailable")
+        return {"skipped": True, "reason": "quote_unavailable"}
     as_of = quote.get("as_of") or now
     if isinstance(as_of, str):
         try:
@@ -175,10 +338,19 @@ def process_session(session: PaperTradingSession, *, now: datetime | None = None
 
     with transaction.atomic():
         locked = PaperTradingSession.objects.select_for_update().get(pk=session.pk)
-        positions, cash, trades = _rebalance_position(locked, price=float(price), target_weight=target_weight, as_of=now)
+        positions, cash, trades = _rebalance_position(
+            locked,
+            price=float(price),
+            target_weight=target_weight,
+            as_of=now,
+            slippage_bps=getattr(params, "slippage_bps", DEFAULT_SLIPPAGE_BPS),
+            commission_bps=getattr(params, "transaction_cost_bps", DEFAULT_COMMISSION_BPS),
+        )
         price_lookup = {locked.ticker: float(price)}
         equity = _compute_account_value(positions, price_lookup, cash)
-        curve_entry = {"ts": now.isoformat(), "equity": round(equity, 2)}
+        curve_entry = {"ts": now.isoformat(), "equity": float(equity.quantize(Decimal("0.01")))}
+        cfg = dict(locked.config or {})
+        cfg["__last_signal"] = last_signal_payload
 
         locked.current_positions = positions
         locked.current_cash = Decimal(str(round(cash, 2)))
@@ -186,6 +358,7 @@ def process_session(session: PaperTradingSession, *, now: datetime | None = None
         locked.equity_curve = _ensure_curve(list(locked.equity_curve or []), curve_entry)
         locked.last_run_at = now
         locked.next_run_at = now + timedelta(seconds=max(30, locked.interval_seconds or DEFAULT_INTERVAL_SECONDS))
+        locked.config = cfg
         locked.save(
             update_fields=[
                 "current_positions",
@@ -194,23 +367,86 @@ def process_session(session: PaperTradingSession, *, now: datetime | None = None
                 "equity_curve",
                 "last_run_at",
                 "next_run_at",
+                "config",
                 "updated_at",
             ]
         )
         if trades:
             PaperTrade.objects.bulk_create(trades)
 
-    return {
+    payload = {
         "session_id": str(session.session_id),
         "ticker": session.ticker,
         "target_weight": target_weight,
         "price": float(price),
         "equity": float(equity),
         "trades": [{"side": t.side, "quantity": float(t.quantity), "price": float(t.price)} for t in trades],
+        "signal_source": signal_source,
+        "last_signal_at": signal_at.isoformat(),
     }
+    record_metric(
+        "paper_session_processed",
+        session_id=str(session.session_id),
+        ticker=session.ticker,
+        status=session.status,
+        trades=len(trades),
+        interval_seconds=locked.interval_seconds if "locked" in locals() else session.interval_seconds,
+    )
+    return payload
 
 
-def run_pending_sessions(limit: int = 20) -> list[dict[str, Any]]:
+def _infer_window_limit(session: PaperTradingSession) -> int:
+    cfg = session.config or {}
+    def _as_int(val: Any, default: int) -> int:
+        try:
+            return int(val)
+        except Exception:
+            return default
+    long_win = _as_int(cfg.get("long_window"), 20)
+    rsi = _as_int(cfg.get("rsi_period"), 14)
+    train = _as_int(cfg.get("train_window"), 252)
+    test = _as_int(cfg.get("test_window"), 21)
+    # cover最大指标周期，保底 120，封顶 1000
+    return max(120, min(1000, long_win * 5, rsi * 8, train + test + 60))
+
+
+def _build_price_cache(sessions: list[PaperTradingSession]) -> dict[str, object]:
+    """Batch-fetch a recent window for all tickers/intervals to reduce duplicate requests."""
+    # group by interval to avoid mixing resolutions
+    grouped: dict[str, list[str]] = {}
+    for s in sessions:
+        if not s.ticker:
+            continue
+        interval = _session_interval(s)
+        grouped.setdefault(interval, []).append(s.ticker)
+    if not grouped:
+        return {}
+    cache: dict[str, object] = {}
+    for interval, tickers in grouped.items():
+        unique = list({t for t in tickers if t})
+        if not unique:
+            continue
+        limit = max(_infer_window_limit(s) for s in sessions if _session_interval(s) == interval)
+        try:
+            frames = fetch_recent_window(unique, interval=interval, limit=limit)
+        except Exception:
+            frames = {}
+        if isinstance(frames, dict):
+            for ticker, frame in frames.items():
+                if frame is None:
+                    continue
+                cache[(ticker, interval)] = frame
+    LOGGER.info("Paper trading price cache built: %s groups, %s symbols", len(grouped), len(cache))
+    record_metric(
+        "paper_price_cache_built",
+        groups=len(grouped),
+        symbols=len(cache),
+        intervals=",".join(grouped.keys()) if grouped else "",
+    )
+    return cache
+
+
+def run_pending_sessions(limit: int = 20, price_cache: dict[str, object] | None = None) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     now = timezone.now()
     qs = (
@@ -222,9 +458,11 @@ def run_pending_sessions(limit: int = 20) -> list[dict[str, Any]]:
         LOGGER.info("Paper trading: no running sessions to process.")
         return [{"skipped": True, "reason": "no_running_sessions"}]
 
+    price_cache = price_cache or _build_price_cache(list(qs))
+
     for session in qs:
         try:
-            result = process_session(session, now=now)
+            result = process_session(session, now=now, price_cache=price_cache)
             results.append(result)
         except PaperTradingError as exc:
             LOGGER.warning("Paper trading failed for session %s: %s", session.pk, exc)
@@ -236,6 +474,7 @@ def run_pending_sessions(limit: int = 20) -> list[dict[str, Any]]:
 
 
 def serialize_session(session: PaperTradingSession, *, include_details: bool = False, trades_limit: int = 20) -> dict[str, Any]:
+    sig_source, sig_at = _extract_last_signal(session.config or {})
     payload = {
         "session_id": str(session.session_id),
         "name": session.name,
@@ -252,6 +491,8 @@ def serialize_session(session: PaperTradingSession, *, include_details: bool = F
         "created_at": session.created_at.isoformat() if session.created_at else None,
         "config": session.config or {},
         "pnl_pct": float(session.last_equity) / float(session.initial_cash or 1) - 1 if session.initial_cash else None,
+        "signal_source": sig_source,
+        "last_signal_at": sig_at,
     }
     if include_details:
         curve = session.equity_curve or []

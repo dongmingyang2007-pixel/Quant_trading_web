@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from django.core.management.base import BaseCommand
 
-from paper.engine import run_pending_sessions
+from paper.engine import run_pending_sessions, _build_price_cache
 from paper.models import PaperTradingSession
 
 
@@ -14,9 +14,15 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         limit = options.get("limit") or 20
-        running = PaperTradingSession.objects.filter(status="running").count()
+        qs = (
+            PaperTradingSession.objects.filter(status="running")
+            .order_by("next_run_at")
+            .select_related("user")[:limit]
+        )
+        running = qs.count()
         self.stdout.write(self.style.WARNING(f"Running sessions: {running}, limit: {limit}"))
-        results = run_pending_sessions(limit=limit)
+        price_cache = _build_price_cache(list(qs))
+        results = run_pending_sessions(limit=limit, price_cache=price_cache)
         if not results:
             self.stdout.write(self.style.WARNING("No sessions processed."))
             return

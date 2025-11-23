@@ -7,6 +7,17 @@ import json
 import time
 from datetime import datetime
 import hashlib
+import os
+import functools
+import threading
+
+MAX_RETRIES = int(os.environ.get("MARKET_FETCH_MAX_RETRIES", "2") or 0)
+RETRY_BACKOFF_SECONDS = float(os.environ.get("MARKET_FETCH_RETRY_BACKOFF", "1.0") or 0)
+RATE_LIMIT_PER_WINDOW = int(os.environ.get("MARKET_FETCH_RATE_LIMIT", "120") or 0)
+RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("MARKET_FETCH_RATE_WINDOW", "60") or 0)
+
+_RATE_LOCK = threading.Lock()
+_RATE_BUCKET: list[float] = []
 
 import pandas as pd
 
@@ -23,6 +34,39 @@ DATA_CACHE_DIR: Path = getattr(settings, "DATA_CACHE_DIR", Path(settings.DATA_RO
 DISK_CACHE_DIR = DATA_CACHE_DIR / "market_snapshots"
 DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 DISK_CACHE_TTL_SECONDS = int(getattr(settings, "MARKET_DISK_CACHE_TTL", 6 * 3600))
+
+def _with_retries(func, *args, **kwargs):
+    last_exc = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            return func(*args, **kwargs)
+        except Exception as exc:  # pragma: no cover - network/IO
+            last_exc = exc
+            if attempt >= MAX_RETRIES:
+                break
+            try:
+                time.sleep(RETRY_BACKOFF_SECONDS)
+            except Exception:
+                pass
+    if last_exc:
+        raise last_exc
+    return None
+
+
+def _rate_limited() -> bool:
+    """Simple in-memory rate limiter: returns True if allowed, False if over budget."""
+    if RATE_LIMIT_PER_WINDOW <= 0 or RATE_LIMIT_WINDOW_SECONDS <= 0:
+        return True
+    now = time.time()
+    window_start = now - RATE_LIMIT_WINDOW_SECONDS
+    with _RATE_LOCK:
+        # drop old
+        while _RATE_BUCKET and _RATE_BUCKET[0] < window_start:
+            _RATE_BUCKET.pop(0)
+        if len(_RATE_BUCKET) >= RATE_LIMIT_PER_WINDOW:
+            return False
+        _RATE_BUCKET.append(now)
+        return True
 
 
 def fetch(
@@ -80,13 +124,14 @@ def fetch(
 
     if not unique:
         return _load_disk_cache()
-    if yf is None:
+    if yf is None or not _rate_limited():
         fallback = _load_disk_cache()
         return fallback
 
     def _builder() -> pd.DataFrame:
         try:
-            data = yf.download(
+            data = _with_retries(
+                yf.download,
                 tickers=" ".join(unique),
                 period=period,
                 interval=interval,
@@ -126,6 +171,91 @@ def fetch(
     return fallback if isinstance(fallback, pd.DataFrame) else pd.DataFrame()
 
 
+def _extract_price_from_frame(frame: pd.DataFrame) -> dict[str, object]:
+    """Internal helper: pick latest price/timestamp from a price frame."""
+    try:
+        col = "Adj Close" if "Adj Close" in frame.columns else "Close"
+        if isinstance(frame.columns, pd.MultiIndex):
+            level0 = frame.columns.get_level_values(0)
+            col = "Adj Close" if "Adj Close" in level0 else level0[0]
+            series = frame.xs(col, level=0, axis=1)
+            if isinstance(series, pd.DataFrame):
+                series = series.iloc[:, 0]
+        else:
+            series = frame[col] if col in frame.columns else frame.iloc[:, 0]
+        series = series.dropna()
+        if series.empty:
+            return {}
+        price = float(series.iloc[-1])
+        ts = pd.to_datetime(series.index[-1]).to_pydatetime()
+        return {"price": price, "as_of": ts}
+    except Exception:
+        return {}
+
+
+def fetch_recent_window(symbols: list[str] | tuple[str, ...] | str, *, interval: str = "1d", limit: int = 120) -> dict[str, pd.DataFrame]:
+    """Batch-fetch a recent window of price data for one or more symbols.
+
+    Returns a dict of symbol -> DataFrame limited to `limit` rows (most recent first).
+    This is used by paper trading heartbeat to avoid N duplicate requests. Falls back to disk cache when rate limited.
+    """
+    if not symbols:
+        return {}
+    if isinstance(symbols, str):
+        symbols = [symbols]
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique_symbols: list[str] = []
+    for sym in symbols:
+        if sym and sym not in seen:
+            seen.add(sym)
+            unique_symbols.append(sym)
+    if not unique_symbols or yf is None:  # pragma: no cover - network dependency
+        return {}
+    def _resolve_period(interval: str, limit: int) -> str:
+        """Choose a compact period for yf.download to avoid over-fetching."""
+        interval = (interval or "1d").lower()
+        if interval.endswith("m") or interval.endswith("h"):
+            return "5d"  # intraday endpoints accept up to ~60d; 5d is enough for rolling signals here
+        days = max(30, limit * 2)
+        if days >= 365 * 10:
+            return "10y"
+        return f"{days}d"
+
+    try:
+        data = _with_retries(
+            yf.download,
+            tickers=" ".join(unique_symbols),
+            period=_resolve_period(interval, limit),
+            interval=interval,
+            progress=False,
+            threads=False,
+        )
+    except Exception:
+        return {}
+    result: dict[str, pd.DataFrame] = {}
+    if not isinstance(data, pd.DataFrame) or data.empty:
+        return result
+    if isinstance(data.columns, pd.MultiIndex):
+        # data has MultiIndex (field, symbol)
+        for sym in unique_symbols:
+            try:
+                sub = data.xs(sym, level=1, axis=1).dropna().tail(limit)
+                if not sub.empty:
+                    result[sym] = sub
+            except Exception:
+                continue
+    else:
+        # Single symbol only
+        try:
+            frame = data.dropna().tail(limit)
+            if not frame.empty:
+                result[unique_symbols[0]] = frame
+        except Exception:
+            pass
+    return result
+
+
 def fetch_latest_quote(symbol: str, *, interval: str = "1m") -> dict[str, object]:
     """Fetch the latest quote for a symbol. Returns {'price': float, 'as_of': datetime}."""
     if not symbol:
@@ -133,7 +263,8 @@ def fetch_latest_quote(symbol: str, *, interval: str = "1m") -> dict[str, object
     if yf is None:  # pragma: no cover - network dependency
         return {}
     try:
-        data = yf.download(
+        data = _with_retries(
+            yf.download,
             tickers=symbol,
             period="5d",
             interval=interval,
@@ -141,45 +272,16 @@ def fetch_latest_quote(symbol: str, *, interval: str = "1m") -> dict[str, object
             threads=False,
         )
         if isinstance(data, pd.DataFrame) and not data.empty:
-            # Prefer Close/Adj Close if available
-            col = "Adj Close" if "Adj Close" in data.columns else "Close"
-            if isinstance(data.columns, pd.MultiIndex):
-                # When multi-index, first level is field
-                if col in data.columns.get_level_values(0):
-                    try:
-                        series = data.xs(col, level=0, axis=1)
-                        if isinstance(series, pd.DataFrame):
-                            series = series.iloc[:, 0]
-                        price = float(series.dropna().iloc[-1])
-                        ts = pd.to_datetime(series.dropna().index[-1])
-                        return {"price": price, "as_of": ts.to_pydatetime()}
-                    except Exception:
-                        pass
-            else:
-                series = data[col].dropna() if col in data.columns else data.iloc[:, 0].dropna()
-                if not series.empty:
-                    price = float(series.iloc[-1])
-                    ts = pd.to_datetime(series.index[-1])
-                    return {"price": price, "as_of": ts.to_pydatetime()}
+            extracted = _extract_price_from_frame(data)
+            if extracted:
+                return extracted
     except Exception:
         pass
     # Fallback to end-of-day fetch
     try:
         frame = fetch([symbol], period="5d", interval="1d", cache=False)
         if isinstance(frame, pd.DataFrame) and not frame.empty:
-            try:
-                if isinstance(frame.columns, pd.MultiIndex):
-                    level0 = frame.columns.get_level_values(0)
-                    col = "Adj Close" if "Adj Close" in level0 else level0[0]
-                    series = frame.xs(col, level=0, axis=1).iloc[:, 0]
-                else:
-                    series = frame.iloc[:, 0]
-            except Exception:
-                series = frame.iloc[:, 0] if not isinstance(frame, pd.MultiIndex) else pd.Series(dtype=float)
-            series = series.dropna()
-            if not series.empty:
-                ts = pd.to_datetime(series.index[-1])
-                return {"price": float(series.iloc[-1]), "as_of": ts.to_pydatetime()}
+            return _extract_price_from_frame(frame)
     except Exception:
         pass
     return {}

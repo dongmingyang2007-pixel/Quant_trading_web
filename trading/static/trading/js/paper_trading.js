@@ -40,9 +40,31 @@
     const latestEquity = session.last_equity || 0;
     const pnlPct = session.pnl_pct !== null && session.pnl_pct !== undefined ? `${(session.pnl_pct * 100).toFixed(2)}%` : "--";
     const lang = (window.langPrefix || document.documentElement.lang || "zh").toLowerCase();
+    const cfg = session.config || {};
+    const slippageBps = cfg.slippage_bps ?? 5;
+    const commissionBps = cfg.transaction_cost_bps ?? 8;
+    const lastRunTs = session.last_run_at ? new Date(session.last_run_at).getTime() : null;
+    const intervalMs = (session.interval_seconds || 300) * 1000;
+    const nowTs = Date.now();
+    let healthState = "ok";
+    let healthLabel = lang.startsWith("zh") ? "调度正常" : "On schedule";
+    if (!lastRunTs) {
+      healthState = "warn";
+      healthLabel = lang.startsWith("zh") ? "尚未运行" : "Not run yet";
+    } else if (nowTs - lastRunTs > intervalMs * 3) {
+      healthState = "error";
+      healthLabel = lang.startsWith("zh") ? "严重延迟" : "Severely delayed";
+    } else if (nowTs - lastRunTs > intervalMs * 1.5) {
+      healthState = "warn";
+      healthLabel = lang.startsWith("zh") ? "轻微延迟" : "Running behind";
+    }
     const labels = lang.startsWith("zh")
       ? { status: "状态", equity: "权益", cash: "现金", pnl: "收益", positions: "持仓", trades: "成交明细", curve: "权益曲线（最近）", none: "暂无数据", noTrades: "暂无成交。", noPos: "暂无持仓", heartbeat: "调仓间隔", lastRun: "最近运行" }
       : { status: "Status", equity: "Equity", cash: "Cash", pnl: "Return", positions: "Positions", trades: "Trades", curve: "Equity (latest)", none: "No data", noTrades: "No trades yet.", noPos: "No positions", heartbeat: "Rebalance interval", lastRun: "Last run" };
+    const signalSource = session.signal_source || "unknown";
+    const signalLabels = lang.startsWith("zh")
+      ? { fresh: "新信号", fallback_cached: "回退信号", light_cached: "快速缓存", failure: "失败", unknown: "未知" }
+      : { fresh: "Fresh", fallback_cached: "Fallback", light_cached: "Light cached", failure: "Failure", unknown: "Unknown" };
 
     const positions = session.positions || {};
     const posList = Object.keys(positions).length
@@ -65,7 +87,10 @@
     detailEl.innerHTML = `
       <div class="paper-detail-grid">
         <div>
-          <p class="mb-1"><strong>${session.name || session.ticker}</strong></p>
+          <div class="d-flex align-items-center gap-2 flex-wrap">
+            <p class="mb-1"><strong>${session.name || session.ticker}</strong></p>
+            <span class="health-pill state-${healthState}">${healthLabel}</span>
+          </div>
           <p class="text-muted mb-1">${session.status.toUpperCase()} · ${session.ticker}${session.benchmark ? ` / ${session.benchmark}` : ""}</p>
           <p class="mb-0">${labels.heartbeat}: ${session.interval_seconds}s · ${labels.lastRun}: ${formatTs(session.last_run_at)}</p>
         </div>
@@ -88,6 +113,14 @@
         <div class="paper-detail-box">
           <div class="fw-semibold">${lang.startsWith("zh") ? "最近成交" : "Last trade"}</div>
           <div class="text-muted small">${formatTs(session.last_trade_at)}</div>
+        </div>
+        <div class="paper-detail-box">
+          <div class="fw-semibold">${lang.startsWith("zh") ? "信号来源" : "Signal source"}</div>
+          <div class="text-muted small"><span class="signal-pill source-${signalSource}">${signalLabels[signalSource] || signalLabels.unknown}</span> ${formatTs(session.last_signal_at)}</div>
+        </div>
+        <div class="paper-detail-box">
+          <div class="fw-semibold">${lang.startsWith("zh") ? "成本假设" : "Cost model"}</div>
+          <div class="text-muted small">${lang.startsWith("zh") ? "滑点" : "Slippage"} ${slippageBps} bps · ${lang.startsWith("zh") ? "佣金" : "Commission"} ${commissionBps} bps</div>
         </div>
       </div>
 
@@ -130,6 +163,9 @@
       }
       return { running: "Running", paused: "Paused", stopped: "Stopped", error: "Error", draft: "Draft" }[st] || st;
     };
+    const signalLabels = lang.startsWith("zh")
+      ? { fresh: "新信号", fallback_cached: "回退", light_cached: "缓存", failure: "失败", unknown: "未知" }
+      : { fresh: "Fresh", fallback_cached: "Fallback", light_cached: "Cached", failure: "Failure", unknown: "Unknown" };
     listEl.innerHTML = sessions.map((s) => `
       <article class="paper-card paper-card--peach mb-3" data-session-id="${s.session_id}">
         <header class="d-flex justify-content-between align-items-start">
@@ -145,6 +181,7 @@
           <span>${lang.startsWith("zh") ? "收益" : "Return"} <strong>${s.pnl_pct !== null && s.pnl_pct !== undefined ? (s.pnl_pct * 100).toFixed(2) + "%" : "--"}</strong></span>
           <span>${lang.startsWith("zh") ? "频率" : "Interval"} <strong>${s.interval_seconds}s</strong></span>
           <span>${lang.startsWith("zh") ? "下次运行" : "Next run"} <strong>${formatTs(s.next_run_at)}</strong></span>
+          <span>${lang.startsWith("zh") ? "信号" : "Signal"} <strong><span class="signal-pill source-${s.signal_source || "unknown"}">${signalLabels[s.signal_source || "unknown"] || signalLabels.unknown}</span></strong></span>
         </div>
         <div class="paper-actions mt-2">
           <button type="button" class="btn btn-outline-secondary btn-sm" data-action="detail">${lang.startsWith("zh") ? "详情" : "Details"}</button>
