@@ -5,6 +5,7 @@ from typing import Any, Iterable
 from pathlib import Path
 import json
 import time
+from datetime import datetime
 import hashlib
 
 import pandas as pd
@@ -123,3 +124,62 @@ def fetch(
         return result
     fallback = _load_disk_cache()
     return fallback if isinstance(fallback, pd.DataFrame) else pd.DataFrame()
+
+
+def fetch_latest_quote(symbol: str, *, interval: str = "1m") -> dict[str, object]:
+    """Fetch the latest quote for a symbol. Returns {'price': float, 'as_of': datetime}."""
+    if not symbol:
+        return {}
+    if yf is None:  # pragma: no cover - network dependency
+        return {}
+    try:
+        data = yf.download(
+            tickers=symbol,
+            period="5d",
+            interval=interval,
+            progress=False,
+            threads=False,
+        )
+        if isinstance(data, pd.DataFrame) and not data.empty:
+            # Prefer Close/Adj Close if available
+            col = "Adj Close" if "Adj Close" in data.columns else "Close"
+            if isinstance(data.columns, pd.MultiIndex):
+                # When multi-index, first level is field
+                if col in data.columns.get_level_values(0):
+                    try:
+                        series = data.xs(col, level=0, axis=1)
+                        if isinstance(series, pd.DataFrame):
+                            series = series.iloc[:, 0]
+                        price = float(series.dropna().iloc[-1])
+                        ts = pd.to_datetime(series.dropna().index[-1])
+                        return {"price": price, "as_of": ts.to_pydatetime()}
+                    except Exception:
+                        pass
+            else:
+                series = data[col].dropna() if col in data.columns else data.iloc[:, 0].dropna()
+                if not series.empty:
+                    price = float(series.iloc[-1])
+                    ts = pd.to_datetime(series.index[-1])
+                    return {"price": price, "as_of": ts.to_pydatetime()}
+    except Exception:
+        pass
+    # Fallback to end-of-day fetch
+    try:
+        frame = fetch([symbol], period="5d", interval="1d", cache=False)
+        if isinstance(frame, pd.DataFrame) and not frame.empty:
+            try:
+                if isinstance(frame.columns, pd.MultiIndex):
+                    level0 = frame.columns.get_level_values(0)
+                    col = "Adj Close" if "Adj Close" in level0 else level0[0]
+                    series = frame.xs(col, level=0, axis=1).iloc[:, 0]
+                else:
+                    series = frame.iloc[:, 0]
+            except Exception:
+                series = frame.iloc[:, 0] if not isinstance(frame, pd.MultiIndex) else pd.Series(dtype=float)
+            series = series.dropna()
+            if not series.empty:
+                ts = pd.to_datetime(series.index[-1])
+                return {"price": float(series.iloc[-1]), "as_of": ts.to_pydatetime()}
+    except Exception:
+        pass
+    return {}

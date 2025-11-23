@@ -5,6 +5,7 @@ from typing import Any
 from rest_framework import serializers
 
 from ..forms import QuantStrategyForm
+from paper.models import PaperTradingSession
 
 
 class StrategyTaskSerializer(serializers.Serializer):
@@ -49,3 +50,20 @@ class TrainingTaskSerializer(StrategyTaskSerializer):
                 data = dict(data)
                 data["engines"] = [item.strip() for item in engines.split(",") if item.strip()]
         return super().to_internal_value(data)
+
+
+class PaperSessionCreateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=120, allow_blank=True, required=False)
+    initial_cash = serializers.DecimalField(max_digits=14, decimal_places=2, required=False)
+    interval_seconds = serializers.IntegerField(required=False)
+    params = serializers.DictField()
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        language = self.context.get("language")
+        params = attrs.get("params") or {}
+        form = QuantStrategyForm(params, language=language)
+        if not form.is_valid():
+            raise serializers.ValidationError(form.errors)
+        attrs["_cleaned"] = form.cleaned_data
+        attrs["_form_warnings"] = getattr(form, "warnings", [])
+        return attrs

@@ -80,6 +80,7 @@ INSTALLED_APPS = [
     "django.contrib.humanize",
     "django_bootstrap5",
     "rest_framework",
+    "paper",
     "trading",
 ]
 
@@ -238,6 +239,17 @@ CELERY_TASK_ALWAYS_EAGER = os.environ.get("CELERY_ALWAYS_EAGER", "1" if CELERY_B
 }
 CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_TIMEZONE = TIME_ZONE
+PAPER_TRADING_INTERVAL_SECONDS = int(os.environ.get("PAPER_TRADING_INTERVAL_SECONDS", "300") or 300)
+ENABLE_PAPER_TRADING_BEAT = os.environ.get("ENABLE_PAPER_TRADING_BEAT", "1") in {"1", "true", "True"}
+CELERY_BEAT_SCHEDULE = globals().get("CELERY_BEAT_SCHEDULE", {})
+if ENABLE_PAPER_TRADING_BEAT:
+    CELERY_BEAT_SCHEDULE.setdefault(
+        "paper_trading_heartbeat",
+        {
+            "task": "trading.tasks.run_paper_trading_heartbeat",
+            "schedule": PAPER_TRADING_INTERVAL_SECONDS,
+        },
+    )
 
 MARKET_HISTORY_CACHE_TTL = int(os.environ.get("MARKET_HISTORY_CACHE_TTL", 300))
 SCREENER_CACHE_TTL = int(os.environ.get("SCREENER_CACHE_TTL", 180))
@@ -269,7 +281,7 @@ SECURE_HSTS_PRELOAD = bool(SECURE_HSTS_SECONDS)
 CONTENT_SECURITY_POLICY = os.environ.get(
     "DJANGO_CONTENT_SECURITY_POLICY",
     "default-src 'self'; "
-    "script-src 'self' https://cdn.jsdelivr.net; "
+    "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com; "
     "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
     "img-src 'self' data: https:; "
     "connect-src 'self' https://query1.finance.yahoo.com https://ollama.com https://ollama.com/api https://ollama.com/api/web_search;",

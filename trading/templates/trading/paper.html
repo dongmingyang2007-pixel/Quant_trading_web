@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% load static i18n %}
+
+{% block title %}{% bilingual "Paper Trading" "模拟实盘" %}{% endblock %}
+
+{% block content %}
+<div class="container-xl paper-page">
+    <div class="paper-hero-shell mb-4">
+    <header class="paper-hero glass-panel">
+        <div class="paper-hero__left">
+            <p class="paper-hero__kicker">{% bilingual "Live signals with virtual capital" "实时信号＋虚拟资金" %}</p>
+            <h1 class="paper-hero__title">{% bilingual "Paper Trading" "模拟实盘" %}</h1>
+            <p class="paper-hero__desc">
+                {% bilingual "Route your latest backtest signals into a virtual account, auto-rebalancing on schedule." "将最新回测信号接入虚拟账户，按计划自动调仓，验证执行与风控。" %}
+            </p>
+            <div class="paper-hero__chips">
+                <span class="chip chip-light">{% bilingual "Signals: latest backtest" "信号来源：最新回测" %}</span>
+                <span class="chip chip-light">{% bilingual "Account: virtual cash + positions" "账户：虚拟现金＋持仓" %}</span>
+            </div>
+        </div>
+        <div class="paper-hero__right">
+            <div class="paper-hero__stat">
+                <p class="label">{% bilingual "Rebalance every" "调仓频率" %}</p>
+                <p class="value">{% bilingual "~5 min (default)" "默认约 5 分钟" %}</p>
+            </div>
+            <div class="paper-hero__stat">
+                <p class="label">{% bilingual "Status" "状态" %}</p>
+                <p class="value" data-role="paper-status-pill">{% bilingual "Auto-scheduling on" "自动调度开启" %}</p>
+            </div>
+            <div class="paper-hero__stat">
+                <p class="label">{% bilingual "Risk check" "风险检查" %}</p>
+                <p class="value">{% bilingual "Virtual capital only" "虚拟资金，不触碰真金" %}</p>
+            </div>
+        </div>
+    </header>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-5">
+            <div class="card shadow-sm h-100 paper-card paper-card--blue">
+                <div class="card-body">
+                    <div class="d-flex align-items-start justify-content-between">
+                        <div>
+                            <h2 class="h5 mb-1">{% bilingual "Create session" "创建模拟盘" %}</h2>
+                            <p class="text-muted small mb-0">{% bilingual "Use your backtest params, set virtual cash and rebalance interval." "使用回测参数，设定虚拟资金与调仓间隔。" %}</p>
+                        </div>
+                        <span class="badge bg-info-subtle text-info-emphasis">{% bilingual "Auto rebalance" "自动调仓" %}</span>
+                    </div>
+                    <form class="paper-form" data-role="paper-form">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <label class="form-label">{% bilingual "Session name" "会话名称" %}</label>
+                            <input type="text" name="name" class="form-control" placeholder="{% bilingual 'e.g. AAPL Demo' '例如：AAPL 模拟盘' %}">
+                        </div>
+                        <div class="row g-3">
+                            <div class="col-sm-6">
+                                <label class="form-label">{% bilingual "Ticker" "标的代码" %}</label>
+                                <input type="text" name="ticker" class="form-control" placeholder="AAPL" required>
+                            </div>
+                            <div class="col-sm-6">
+                                <label class="form-label">{% bilingual "Benchmark (optional)" "对比基准（可选）" %}</label>
+                                <input type="text" name="benchmark" class="form-control" placeholder="SPY">
+                            </div>
+                        </div>
+                        <div class="row g-3 mt-2">
+                            <div class="col-sm-6">
+                                <label class="form-label">{% bilingual "Start date" "开始日期" %}</label>
+                                <input type="date" name="start_date" class="form-control" required value="{{ paper_start_default }}" max="{{ paper_end_default }}">
+                            </div>
+                            <div class="col-sm-6">
+                                <label class="form-label">{% bilingual "End date" "结束日期" %}</label>
+                                <input type="date" name="end_date" class="form-control" required value="{{ paper_end_default }}" max="{{ paper_end_default }}">
+                            </div>
+                        </div>
+                        <div class="row g-3 mt-2">
+                            <div class="col-sm-6">
+                                <label class="form-label">{% bilingual "Capital (for model)" "策略资本" %}</label>
+                                <input type="number" name="capital" class="form-control" value="250000" min="0" step="1000">
+                            </div>
+                            <div class="col-sm-6">
+                                <label class="form-label">{% bilingual "Virtual cash" "虚拟现金" %}</label>
+                                <input type="number" name="initial_cash" class="form-control" value="100000" min="0" step="1000">
+                            </div>
+                        </div>
+                        <div class="row g-3 mt-2">
+                            <div class="col-sm-6">
+                                    <label class="form-label">{% bilingual "Rebalance interval (seconds)" "调仓间隔（秒）" %}</label>
+                                <input type="number" name="interval_seconds" class="form-control" value="300" min="30" step="30">
+                            </div>
+                            <div class="col-sm-6 d-flex align-items-end">
+                                <button type="submit" class="btn btn-primary w-100" data-role="paper-submit">
+                                    {% bilingual "Start paper session" "创建并启动模拟盘" %}
+                                </button>
+                            </div>
+                        </div>
+                        <div class="alert alert-warning mt-3 d-none" data-role="paper-form-alert"></div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-7">
+            <div class="card shadow-sm h-100 paper-card paper-card--peach">
+                <div class="card-body">
+                    <div class="d-flex align-items-center justify-content-between mb-2">
+                        <h2 class="h5 mb-0">{% bilingual "Sessions" "会话列表" %}</h2>
+                        <span class="text-muted small">{% bilingual "Latest first, click for details" "最新优先，点击查看详情" %}</span>
+                    </div>
+                    <div class="paper-sessions" data-role="paper-session-list">
+                        <p class="text-muted mb-0">{% bilingual "Loading sessions..." "正在加载会话..." %}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm mt-4">
+        <div class="card-body">
+            <h2 class="h5">{% bilingual "Session details" "模拟盘详情" %}</h2>
+            <p class="text-muted small mb-3">{% bilingual "Select a session to view equity curve and trades." "点击左侧会话查看权益曲线和成交明细。" %}</p>
+            <div class="paper-detail" data-role="paper-detail">
+                <p class="text-muted mb-0">{% bilingual "No session selected yet." "尚未选择会话。" %}</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{% static 'trading/js/paper_trading.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
+{% endblock %}

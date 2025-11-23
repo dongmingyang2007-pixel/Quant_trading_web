@@ -10,6 +10,7 @@ from django.conf import settings
 from .strategies import StrategyInput, run_quant_pipeline
 from .history import BacktestRecord, append_history, sanitize_snapshot
 from .train_ml import run_engine_benchmark
+from paper.engine import run_pending_sessions
 
 
 def _deserialize_strategy_input(payload: Dict[str, Any]) -> StrategyInput:
@@ -122,3 +123,16 @@ def run_training_task(payload: Dict[str, Any]) -> Dict[str, Any]:
 )
 def run_rl_task(payload: Dict[str, Any]) -> Dict[str, Any]:
     return execute_rl_job(payload)
+
+
+@shared_task(
+    autoretry_for=(Exception,),
+    retry_backoff=10,
+    retry_kwargs={"max_retries": 2},
+    default_retry_delay=10,
+    ignore_result=False,
+    queue="paper_trading",
+)
+def run_paper_trading_heartbeat(limit: int = 20) -> list[dict[str, Any]]:
+    """定时刷新正在运行的模拟实盘会话。"""
+    return run_pending_sessions(limit=limit)

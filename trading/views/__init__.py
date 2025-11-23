@@ -28,9 +28,11 @@ from .account import profile_public
 from .learning import learning_center, learning_module_detail
 from .observability_dashboard import observability_dashboard
 from .history_compare import history_compare
+from .paper import paper_trading
 
 __all__ = [
     "backtest",
+    "paper_trading",
     "screener_snapshot_api",
     "ai_chat",
     "ai_chat_stream",

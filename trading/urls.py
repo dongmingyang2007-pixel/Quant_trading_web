@@ -10,6 +10,7 @@ app_name = "trading"
 urlpatterns = [
     path("", RedirectView.as_view(pattern_name="trading:backtest", permanent=False)),
     path("backtest/", views.backtest, name="backtest"),
+    path("paper/", views.paper_trading, name="paper_trading"),
     path("api/screener/", views.screener_snapshot_api, name="screener_snapshot"),
     path("api/ai_chat/", views.ai_chat, name="ai_chat"),
     path("api/ai_chat/stream/", views.ai_chat_stream, name="ai_chat_stream"),
@@ -20,6 +21,8 @@ urlpatterns = [
     path("api/v1/rl/tasks/", api_v1.RLTaskView.as_view(), name="api_v1_rl_tasks"),
     path("api/v1/tasks/<str:task_id>/", api_v1.TaskStatusView.as_view(), name="api_v1_task_status"),
     path("api/v1/screener/", api_v1.ScreenerSnapshotView.as_view(), name="api_v1_screener"),
+    path("api/v1/paper/sessions/", api_v1.PaperSessionView.as_view(), name="api_v1_paper_sessions"),
+    path("api/v1/paper/sessions/<uuid:session_id>/", api_v1.PaperSessionDetailView.as_view(), name="api_v1_paper_session_detail"),
     path("api/training/task/", views.enqueue_training_task, name="enqueue_training_task"),
     path("api/training/task/<str:task_id>/", views.training_task_status, name="training_task_status"),
     path("api/rl/task/", views.enqueue_rl_task, name="enqueue_rl_task"),
