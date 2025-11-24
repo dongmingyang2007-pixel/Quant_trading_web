@@ -339,7 +339,9 @@ const updateTask = (taskId, data) => {
         broadcastSnapshot({ id: null, task: null, tasks: store.tasks });
         store.tasks.forEach((item) => {
             if (!item || !item.id) return;
-            if (["PENDING", "STARTED", "RETRY", ""].includes(item.status || "")) {
+            const status = String(item.status || "").toUpperCase();
+            const isTerminal = ["SUCCESS", "FAILURE", "REVOKED"].includes(status);
+            if (!isTerminal) {
                 window.setTimeout(() => pollTask(item.id), 500);
             }
         });

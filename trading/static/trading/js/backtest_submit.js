@@ -139,10 +139,8 @@
                 }
                 const runningMsg = state === 'STARTED' ? asyncText.running : state === 'RETRY' ? asyncText.retry : asyncText.queue;
                 updateDockTask(taskId, { status: state || 'PENDING', message: runningMsg, taskId });
-                const elapsed = Date.now() - startedAt;
-                if (elapsed < 10 * 60 * 1000) {
-                    window.setTimeout(() => pollTask(taskId, startedAt), TASK_POLL_INTERVAL_MS);
-                }
+                // 继续轮询直到拿到终态，避免长任务或页面挂起后状态停留在排队/运行中
+                window.setTimeout(() => pollTask(taskId, startedAt), TASK_POLL_INTERVAL_MS);
             })
             .catch(() => {});
     };

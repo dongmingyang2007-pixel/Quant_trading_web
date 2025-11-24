@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace, asdict
+from dataclasses import replace, asdict
 from datetime import date, datetime, timedelta
 from typing import Any, Optional, Tuple
 import os
@@ -25,19 +25,19 @@ from django.utils.translation import gettext_lazy as _
 from django.utils.safestring import mark_safe
 from django.conf import settings
 
-from .headlines import estimate_readers
-from .data_sources import collect_auxiliary_data, AuxiliaryData
-from . import screener
-from .preprocessing import FeatureStore, sanitize_price_history
-from .ml_models import build_custom_sequence_model
-from .reinforcement import build_reinforcement_playbook, train_value_agent
-from .rl_agents import build_rl_agent
-from .backtest_logger import BacktestLogEntry, append_log, top_runs
-from .observability import record_metric, track_latency
-from .http_client import http_client, HttpClientError
-from .security import sanitize_html_fragment
-from .optimization import PurgedWalkForwardSplit, _simulate_returns, _compute_slippage_cost
-from .risk_stats import (
+from ..headlines import estimate_readers
+from ..data_sources import collect_auxiliary_data, AuxiliaryData
+from .. import screener
+from ..preprocessing import sanitize_price_history
+from ..ml_models import build_custom_sequence_model
+from ..reinforcement import build_reinforcement_playbook, train_value_agent
+from ..rl_agents import build_rl_agent
+from ..backtest_logger import BacktestLogEntry, append_log, top_runs
+from ..observability import record_metric, track_latency
+from ..http_client import http_client, HttpClientError
+from ..security import sanitize_html_fragment
+from ..optimization import PurgedWalkForwardSplit, _simulate_returns, _compute_slippage_cost
+from ..risk_stats import (
     compute_robust_sharpe,
     calculate_cvar,
     recovery_period_days,
@@ -45,16 +45,72 @@ from .risk_stats import (
     compute_white_reality_check_bootstrap,
     compute_spa_pvalue,
 )
-from .cache_utils import build_cache_key, cache_get_object, cache_set_object
-from .validation import (
+from ..cache_utils import build_cache_key, cache_get_object, cache_set_object
+from ..validation import (
     build_walk_forward_report,
     build_purged_kfold_schedule,
     compute_tail_risk_summary,
     collect_repro_metadata,
 )
+from .config import (
+    DEFAULT_SEED_META,
+    DEFAULT_STRATEGY_SEED,
+    QuantStrategyError,
+    StrategyInput,
+    StrategyOutcome,
+)
+from .indicators import (
+    _attach_forward_returns,
+    _compute_asset_returns,
+    _normalized_open_prices,
+    _select_forward_return,
+    compute_indicators,
+)
+from .ml_engine import (
+    _calibration_summary,
+    _balanced_sample_weight,
+    _maybe_get_sample_weight,
+    build_calibration_plot,
+    build_feature_matrix,
+    build_labels,
+    build_threshold_heatmap,
+    compute_triple_barrier_labels,
+    load_best_ml_config,
+    run_ml_backtest,
+    scan_threshold_stability,
+    tune_thresholds_on_validation,
+)
+from .metrics import (
+    METRIC_DESCRIPTIONS,
+    build_core_metrics,
+    build_metric,
+    calculate_avg_gain_loss,
+    calculate_beta,
+    calculate_cagr,
+    calculate_calmar,
+    calculate_holding_periods,
+    calculate_hit_ratio,
+    calculate_sharpe,
+    calculate_sortino,
+    calculate_var_cvar,
+    format_currency,
+    compute_validation_metrics,
+    aggregate_oos_metrics,
+    build_oos_boxplot,
+    fig_to_base64,
+    format_percentage,
+    get_risk_free_rate_annual,
+)
+from .ma_cross import apply_execution_model, backtest_sma_strategy, format_table
+from .risk import (
+    apply_vol_targeting,
+    calculate_drawdown_series,
+    calculate_max_drawdown,
+    calculate_target_leverage,
+    enforce_min_holding,
+    enforce_risk_limits,
+)
 
-DEFAULT_STRATEGY_SEED = int(os.environ.get("STRATEGY_SEED", "42"))
-DEFAULT_SEED_META = {"strategy_seed": DEFAULT_STRATEGY_SEED}
 try:  # optional RL utils
     from stable_baselines3.common.utils import set_random_seed as sb3_set_seed  # type: ignore
 except Exception:  # pragma: no cover
@@ -107,7 +163,6 @@ except Exception:  # pragma: no cover
     torch = None  # type: ignore
     nn = None  # type: ignore
 
-DEFAULT_STRATEGY_SEED = int(os.environ.get("STRATEGY_SEED", "42"))
 
 
 def _ensure_global_seed(seed: int) -> None:
@@ -207,120 +262,7 @@ except Exception:
     pass
 
 
-class QuantStrategyError(Exception):
-    """Custom exception for strategy failures."""
-
-
-@dataclass(slots=True)
-class StrategyInput:
-    ticker: str
-    benchmark_ticker: Optional[str]
-    start_date: date
-    end_date: date
-    short_window: int
-    long_window: int
-    rsi_period: int
-    include_plots: bool
-    show_ai_thoughts: bool
-    risk_profile: str
-    capital: float
-    strategy_engine: str = "ml_momentum"
-    volatility_target: float = 0.15
-    transaction_cost_bps: float = 8.0
-    slippage_bps: float = 5.0
-    min_holding_days: int = 3
-    train_window: int = 252
-    test_window: int = 21
-    entry_threshold: float = 0.55
-    exit_threshold: float = 0.45
-    max_leverage: float = 2.5
-    # ML pipeline controls
-    ml_task: str = "direction"  # 'direction' | 'hybrid'
-    val_ratio: float = 0.15
-    embargo_days: int = 5
-    optimize_thresholds: bool = True
-    ml_model: str = "seq_hybrid"  # 默认自动融合 LSTM+Transformer；如后端缺失将自动回退
-    ml_params: dict[str, Any] | None = None
-    auto_apply_best_config: bool = True
-    calibrate_proba: bool = True
-    early_stopping_rounds: int = 50
-    use_feature_cache: bool = True
-    enable_hyperopt: bool = False
-    hyperopt_trials: int = 20
-    hyperopt_timeout: int = 120
-    max_drawdown_stop: float = 0.25
-    daily_exposure_limit: float = 1.5
-    dl_sequence_length: int = 32
-    dl_hidden_dim: int = 64
-    dl_dropout: float = 0.2
-    dl_epochs: int = 12
-    dl_batch_size: int = 64
-    dl_num_layers: int = 2
-    rl_engine: str = "value_iter"
-    rl_params: dict[str, Any] | None = None
-    validation_slices: int = 3
-    out_of_sample_ratio: float = 0.2
-    execution_liquidity_buffer: float = 0.05
-    execution_penalty_bps: float = 6.0
-    execution_mode: str = "adv"  # 'adv' or 'limit'
-    class_weight_mode: str = "balanced"  # imbalance handling
-    focal_gamma: float = 2.0
-    dynamic_exposure_multiplier: float = 1.0
-    label_return_path: str | None = None  # override label/future_return path; defaults to return_path
-    intraday_loss_limit: float = 0.08
-    slippage_model: dict[str, Any] | None = None
-    borrow_cost_bps: float = 0.0
-    long_borrow_cost_bps: float = 0.0
-    short_borrow_cost_bps: float = 0.0
-    max_adv_participation: float = 0.1
-    target_vol: float | None = None
-    vol_target_window: int = 60
-    # triple barrier labeling (optional)
-    label_style: str = "direction"  # 'direction' | 'triple_barrier'
-    tb_up: float = 0.03
-    tb_down: float = 0.03
-    tb_max_holding: int = 10
-    tb_dynamic: bool = False
-    tb_vol_multiplier: float = 1.2
-    tb_vol_window: int = 20
-    interest_keywords: list[str] | None = None
-    investment_horizon: str = "medium"
-    experience_level: str = "novice"
-    primary_goal: str = "growth"
-    return_path: str = "close_to_close"  # 'close_to_close' | 'close_to_open'
-    # 支持标签/回测收益口径：close_to_close | close_to_open | open_to_close
-    # 若前端需要拆分盘中/隔夜，可用 label_return_path 切换
-    request_id: str | None = None
-    user_id: str | None = None
-    model_version: str | None = None
-    data_version: str | None = None
-    exec_latency_ms: float | None = None
-    include_walk_forward_report: bool = False
-    walk_forward_horizon_days: int | None = None
-    walk_forward_step_days: int | None = None
-    walk_forward_jobs: int = 1
-    force_pfws: bool = True
-    # stats / reporting controls
-    stats_enable_bootstrap: bool = True
-    stats_bootstrap_samples: int = 600
-    stats_bootstrap_block: int | None = None
-    enforce_pfws_only: bool = False  # 若为 True，禁止非 PFWS 切分的训练/验证
-    random_seed: int = DEFAULT_STRATEGY_SEED
-    threshold_jobs: int = 1
-
-
-@dataclass(slots=True)
-class StrategyOutcome:
-    engine: str
-    backtest: pd.DataFrame
-    metrics: list[dict[str, Any]]
-    stats: dict[str, Any]
-    weight: float = 1.0
-
-
-DATA_CACHE_DIR = settings.DATA_CACHE_DIR
-DATA_CACHE_DIR.mkdir(exist_ok=True)
-FEATURE_STORE = FeatureStore()
+from .store import DATA_CACHE_DIR, FEATURE_STORE
 
 
 def extract_context_features(auxiliary: AuxiliaryData) -> dict[str, float]:
@@ -383,37 +325,6 @@ def extract_context_features(auxiliary: AuxiliaryData) -> dict[str, float]:
 
     return features
 
-METRIC_DESCRIPTIONS = {
-    "策略累计收益率": "策略净值相对起点的总涨幅，衡量绝对收益表现。",
-    "买入持有收益率": "直接持有标的（不做调仓）的回报，可用于衡量策略超额收益。",
-    "夏普比率": "单位波动获得的超额收益，>1 表示风险调整后表现良好。",
-    "最大回撤": "净值从高点到低点的最大跌幅，越小越稳健。",
-    "索提诺比率": "仅惩罚下跌波动的收益风险比，更关注下行风险。",
-    "年化波动率": "收益波动程度，反映风险水平。",
-    "年化复合收益率": "复利视角的年化收益，更贴近日常收益口径。",
-    "卡玛比率": "年化收益与最大回撤之比，衡量单位回撤创造收益能力。",
-    "胜率": "盈利交易日占比，可反映策略稳定性。",
-    "单日平均盈亏": "平均上涨日与下跌日的收益率，衡量盈亏对称度。",
-    "平均持仓比例": "在市场中的平均资金暴露程度。",
-    "平均杠杆（波动率目标）": "为达到目标波动率所需的平均杠杆倍数。",
-    "日度95%VaR": "在 95% 情况下，单日最大可能亏损的保守估计。",
-    "日度95%CVaR": "落在 VaR 置信区间外的平均亏损，衡量尾部风险。",
-    "交易日数量": "回测样本的交易日数量。",
-    "基准累计收益率": "选择的对比指数或资产在回测期内的收益。",
-    "基准年化波动率": "基准资产的波动水平。",
-    "基准夏普比率": "基准资产的风险调整后收益表现。",
-    "策略相对基准α": "策略相对基准的年化超额收益（CAPM α）。",
-    "β系数": "策略对基准波动的敏感度，>1 表示更敏感。",
-    "与基准相关系数": "策略与基准收益的同步度，接近 0 更有分散度。",
-    "信息比率": "单位跟踪误差的超额收益，越高代表超额收益稳定。",
-    "跟踪误差": "策略相对基准收益差的波动度。",
-    "预测胜率": "模型预测方向与实际收益方向一致的比例。",
-    "ROC-AUC": "预测概率区分上涨与下跌的能力，0.5 为随机水准。",
-    "年化换手率": "一年内的仓位变动次数衡量交易频率。",
-    "平均持仓天数": "单次开仓持有的平均持续时间。",
-    "成本占收益比": "交易成本与策略总收益的比例，用于衡量成本侵蚀。",
-}
-
 RISK_PROFILE_LABELS = {
     "conservative": "保守型",
     "balanced": "均衡型",
@@ -427,13 +338,6 @@ def build_metric(label: str, value: str) -> dict[str, str]:
         "value": value,
         "explain": METRIC_DESCRIPTIONS.get(label, ""),
     }
-
-
-def format_currency(value: float) -> str:
-    try:
-        return f"{value:,.0f}"
-    except ValueError:
-        return str(value)
 
 
 def normal_cdf(x: float) -> float:
@@ -570,159 +474,6 @@ def fetch_price_data(ticker: str, start: date, end: date) -> Tuple[pd.DataFrame,
     return data[base_cols].dropna(subset=["adj close"]), warnings
 
 
-def compute_indicators(
-    prices: pd.DataFrame, short_window: int, long_window: int, rsi_period: int
-) -> pd.DataFrame:
-    """Compute comprehensive technical indicators used for trading decisions."""
-    if long_window <= short_window:
-        raise QuantStrategyError("The long window must be greater than the short window.")
-
-    prices = prices.sort_index().copy()
-    prices["sma_short"] = prices["adj close"].rolling(window=short_window).mean()
-    prices["sma_long"] = prices["adj close"].rolling(window=long_window).mean()
-
-    # RSI (Wilder's smoothing)
-    delta = prices["adj close"].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    alpha = 1 / max(rsi_period, 1)
-    avg_gain = gain.ewm(alpha=alpha, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=alpha, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    prices["rsi"] = (100 - (100 / (1 + rs))).fillna(0)
-
-    prices["ema_short"] = prices["adj close"].ewm(span=max(short_window // 2, 2), adjust=False).mean()
-    prices["ema_long"] = prices["adj close"].ewm(span=max(long_window // 2, 4), adjust=False).mean()
-    prices["ema_trend"] = prices["ema_short"] / prices["ema_long"] - 1
-
-    # Bollinger Bands
-    rolling_std = prices["adj close"].rolling(window=long_window).std()
-    prices["boll_up"] = prices["sma_long"] + 2 * rolling_std
-    prices["boll_dn"] = prices["sma_long"] - 2 * rolling_std
-
-    # MACD
-    ema_fast = prices["adj close"].ewm(span=12, adjust=False).mean()
-    ema_slow = prices["adj close"].ewm(span=26, adjust=False).mean()
-    prices["macd"] = ema_fast - ema_slow
-    prices["macd_signal"] = prices["macd"].ewm(span=9, adjust=False).mean()
-    prices["macd_hist"] = prices["macd"] - prices["macd_signal"]
-
-    returns = prices["adj close"].pct_change()
-    prices["return_1d"] = returns
-    prices["return_5d"] = prices["adj close"].pct_change(5)
-    prices["return_21d"] = prices["adj close"].pct_change(21)
-    direction = np.sign(returns).fillna(0)
-    streak_group = (direction != direction.shift()).cumsum()
-    prices["return_streak"] = direction.groupby(streak_group).cumsum()
-
-    prices["vol_10d"] = returns.rolling(10).std()
-    prices["vol_20d"] = returns.rolling(20).std()
-    prices["vol_60d"] = returns.rolling(60).std()
-
-    prices["momentum_short"] = prices["adj close"] / prices["sma_short"] - 1
-    prices["momentum_long"] = prices["adj close"] / prices["sma_long"] - 1
-
-    high = prices["high"] if "high" in prices.columns else prices["adj close"]
-    low = prices["low"] if "low" in prices.columns else prices["adj close"]
-    prev_close = prices["adj close"].shift()
-    tr_components = pd.concat(
-        [
-            (high - low).abs(),
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
-        ],
-        axis=1,
-    ).fillna(0.0)
-    true_range = tr_components.max(axis=1)
-    atr_window = max(14, min(long_window, 60))
-    prices["atr_14"] = true_range.rolling(atr_window).mean()
-    prices["atr_pct"] = prices["atr_14"] / prices["adj close"]
-
-    up_move = high.diff()
-    down_move = low.shift(1) - low
-    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
-    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
-    tr_sum = true_range.rolling(atr_window).sum().replace(0, np.nan)
-    plus_di = pd.Series(plus_dm, index=prices.index).rolling(atr_window).sum() * 100 / tr_sum
-    minus_di = pd.Series(minus_dm, index=prices.index).rolling(atr_window).sum() * 100 / tr_sum
-    dx = (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan) * 100
-    prices["adx_14"] = dx.rolling(atr_window).mean()
-
-    volume = prices["volume"].fillna(0)
-    vol_ma20 = volume.rolling(20).mean()
-    prices["volume_z"] = (volume - vol_ma20) / (vol_ma20.replace(0, np.nan))
-    prices["volume_trend"] = volume.pct_change(5).replace([np.inf, -np.inf], np.nan)
-    direction = np.sign(prices["adj close"].diff().fillna(0))
-    prices["obv"] = (direction * volume).cumsum()
-    hl_range = (high - low).replace(0, np.nan)
-    mf_multiplier = ((prices["adj close"] - low) - (high - prices["adj close"])) / hl_range
-    mf_volume = mf_multiplier.fillna(0) * volume
-    vol_sum = volume.rolling(20).sum().replace(0, np.nan)
-    prices["cmf_20"] = mf_volume.rolling(20).sum() / vol_sum
-    prices["skew_21"] = returns.rolling(21).skew()
-    prices["kurt_21"] = returns.rolling(21).kurt()
-    if "price_z" not in prices.columns:
-        prices["price_z"] = (
-            (prices["adj close"] - prices["adj close"].rolling(64, min_periods=20).mean())
-            / (prices["adj close"].rolling(64, min_periods=20).std().replace(0, np.nan))
-        ).fillna(0.0)
-
-    _attach_forward_returns(prices)
-    prices["label"] = (prices["forward_return"] > 0).astype(int)
-
-    return prices
-
-
-def _normalized_open_prices(prices: pd.DataFrame) -> pd.Series:
-    if "open" not in prices:
-        return prices["adj close"]
-    open_series = prices["open"].copy()
-    close = prices.get("close")
-    if close is not None:
-        ratio = prices["adj close"] / close.replace(0, np.nan)
-        ratio = ratio.replace([np.inf, -np.inf], np.nan).fillna(1.0)
-        open_series = open_series * ratio
-    return open_series.fillna(prices["adj close"])
-
-
-def _attach_forward_returns(prices: pd.DataFrame) -> None:
-    adj_close = prices["adj close"]
-    next_close = adj_close.shift(-1)
-    prices["forward_return_close"] = (next_close / adj_close) - 1
-    adj_open = _normalized_open_prices(prices)
-    next_open = adj_open.shift(-1)
-    prices["forward_return_open"] = (next_open / adj_close) - 1
-    # 盘中收益：当日开到收
-    prices["forward_return_open_to_close"] = (adj_close / adj_open.replace(0, np.nan)) - 1
-    # 隔夜收益：收盘到次日开盘
-    prices["forward_return_overnight"] = prices["forward_return_open"]
-    prices["forward_return"] = prices["forward_return_close"]
-
-
-def _select_forward_return(
-    frame: pd.DataFrame,
-    params: StrategyInput,
-) -> tuple[pd.Series, str]:
-    """
-    Choose forward return series based on label_return_path/return_path.
-
-    Priority: label_return_path > return_path > default close_to_close.
-    支持 close_to_close / close_to_open / open_to_close 三种。
-    """
-    path = (getattr(params, "label_return_path", None) or getattr(params, "return_path", "close_to_close")).lower()
-    path = path if path in {"close_to_open", "open_to_close"} else "close_to_close"
-    key_map = {
-        "close_to_close": "forward_return_close",
-        "close_to_open": "forward_return_open",
-        "open_to_close": "forward_return_open_to_close",
-    }
-    series = frame.get(key_map[path])
-    if series is None:
-        # fallback to basic close-to-close
-        series = frame["adj close"].pct_change().shift(-1)
-    return series, path
-
-
 def _load_latest_walk_forward_report(params: StrategyInput) -> dict[str, Any] | None:
     """Load the latest walk-forward report if available on disk for display."""
     training_dir = DATA_CACHE_DIR / "training"
@@ -739,517 +490,6 @@ def _load_latest_walk_forward_report(params: StrategyInput) -> dict[str, Any] | 
         return payload
     except Exception:
         return None
-
-
-def _compute_asset_returns(frame: pd.DataFrame, params: StrategyInput) -> pd.Series:
-    """Select asset return series based on configured return_path."""
-
-    ret_path = getattr(params, "return_path", "close_to_close")
-    adj_close = frame["adj close"]
-    if ret_path == "close_to_open":
-        try:
-            adj_open = _normalized_open_prices(frame)
-            next_open = adj_open.shift(-1)
-            returns = (next_open / adj_close) - 1
-        except Exception:
-            returns = adj_close.shift(-1) / adj_close - 1
-        return returns.fillna(0.0)
-    if ret_path == "open_to_close":
-        try:
-            adj_open = _normalized_open_prices(frame)
-            returns = (adj_close / adj_open.replace(0, np.nan)) - 1
-        except Exception:
-            returns = adj_close / adj_close.shift(1) - 1
-        return returns.fillna(0.0)
-    # default close-to-close
-    return adj_close.pct_change().fillna(0.0)
-
-
-def _calibration_summary(probs: pd.Series, labels: pd.Series, bins: int = 10) -> dict[str, Any]:
-    """Simple reliability stats for probability calibration."""
-    clean = pd.DataFrame({"p": probs, "y": labels}).replace([np.inf, -np.inf], np.nan).dropna()
-    if clean.empty:
-        return {}
-    clean["bucket"] = pd.qcut(clean["p"], q=min(bins, len(clean)), duplicates="drop")
-    grouped = clean.groupby("bucket", observed=False)
-    rows = []
-    for _, grp in grouped:
-        rows.append(
-            {
-                "mean_pred": float(grp["p"].mean()),
-                "mean_true": float(grp["y"].mean()),
-                "count": int(grp.shape[0]),
-            }
-        )
-    brier = float(((clean["p"] - clean["y"]) ** 2).mean())
-    return {"buckets": rows, "brier": brier}
-
-
-def _build_calibration_plot(calib: dict[str, Any]) -> str | None:
-    """Render a reliability curve from calibration buckets."""
-    try:
-        buckets = calib.get("buckets") or []
-        if not buckets:
-            return None
-        preds = [b["mean_pred"] for b in buckets]
-        trues = [b["mean_true"] for b in buckets]
-        counts = [b["count"] for b in buckets]
-        fig, ax = plt.subplots(figsize=(5, 4))
-        ax.plot([0, 1], [0, 1], linestyle="--", color="#9ca3af", label="理想校准")
-        ax.plot(preds, trues, marker="o", color="#2563eb", label="实际")
-        ax.grid(alpha=0.2)
-        ax.set_xlabel("预测概率")
-        ax.set_ylabel("真实命中率")
-        ax.set_title("概率校准曲线")
-        # 次轴显示样本量
-        ax2 = ax.twinx()
-        ax2.bar(preds, counts, alpha=0.15, color="#10b981", width=0.05, label="分桶样本数")
-        ax2.set_ylabel("样本数")
-        ax.legend(loc="upper left")
-        return fig_to_base64(fig)
-    except Exception:
-        return None
-
-
-def _pfws_predict(
-    dataset: pd.DataFrame,
-    feature_columns: list[str],
-    params: StrategyInput,
-) -> tuple[pd.Series, pd.Series, list[float]]:
-    """Use PurgedWalkForwardSplit to generate out-of-sample probabilities/predictions."""
-
-    splitter = PurgedWalkForwardSplit(
-        train_window=params.train_window,
-        test_window=max(params.test_window, 5),
-        embargo=max(0, params.embargo_days),
-    )
-    probabilities = pd.Series(np.nan, index=dataset.index, dtype=float)
-    raw_signal = pd.Series(np.nan, index=dataset.index, dtype=float)
-    auc_scores: list[float] = []
-    model_params = params.ml_params or {}
-    labels_for_weight = dataset["target_multiclass"] if ("target_multiclass" in dataset and params.label_style == "triple_barrier") else dataset["target"]
-    sample_weight = _maybe_get_sample_weight(labels_for_weight, params)
-    for train_idx, test_idx in splitter.split(len(dataset)):
-        train_slice = dataset.iloc[train_idx]
-        test_slice = dataset.iloc[test_idx]
-        if train_slice["target"].nunique() < 2 or test_slice.empty:
-            continue
-        clf = _build_classifier(params.ml_model, model_params, feature_columns, params)
-        fit_kwargs = {}
-        if sample_weight is not None:
-            if isinstance(clf, Pipeline):
-                fit_kwargs["model__sample_weight"] = sample_weight[train_idx]
-            else:
-                fit_kwargs["sample_weight"] = sample_weight[train_idx]
-        try:
-            clf.fit(train_slice[feature_columns], train_slice["target"], **fit_kwargs)
-            proba = clf.predict_proba(test_slice[feature_columns])[:, 1]
-        except Exception:
-            continue
-        probabilities.iloc[test_idx] = proba
-        raw_signal.iloc[test_idx] = np.where(
-            proba >= params.entry_threshold,
-            1.0,
-            np.where(proba <= params.exit_threshold, -1.0, 0.0),
-        )
-        if roc_auc_score is not None and test_slice["target"].nunique() > 1:
-            try:
-                auc_scores.append(roc_auc_score(test_slice["target"], proba))
-            except Exception:
-                pass
-    return probabilities, raw_signal, auc_scores
-
-
-def build_feature_matrix(prices: pd.DataFrame, params: StrategyInput) -> tuple[pd.DataFrame, list[str]]:
-    """
-    Construct an ML-ready feature matrix with aligned targets.
-
-    Returns a tuple of (dataset, feature_columns).
-    """
-    cache_key: str | None = None
-    if getattr(params, "use_feature_cache", True):
-        try:
-            cache_key = FEATURE_STORE.fingerprint(prices, params)
-            cached = FEATURE_STORE.load(cache_key)
-            if cached:
-                dataset, feature_columns, _ = cached
-                if "target" in dataset:
-                    return dataset, feature_columns
-                # 缓存缺失标签时强制重建，避免旧版本污染
-        except Exception:
-            cache_key = None
-
-    dataset = prices.copy()
-    dataset["label_style"] = params.label_style
-    dataset["return_path"] = getattr(params, "return_path", "close_to_close")
-    if "forward_return_close" not in dataset:
-        dataset["forward_return_close"] = dataset["forward_return"]
-    if "forward_return_open" not in dataset:
-        dataset["forward_return_open"] = dataset["forward_return_close"]
-    if "forward_return_open_to_close" not in dataset:
-        dataset["forward_return_open_to_close"] = (dataset["adj close"] / _normalized_open_prices(dataset).replace(0, np.nan)) - 1
-    selected_returns, label_path = _select_forward_return(dataset, params)
-    dataset["forward_return"] = selected_returns
-    dataset["future_return"] = selected_returns
-    dataset["return_sign"] = np.sign(selected_returns.fillna(0))
-    dataset["return_path"] = getattr(params, "return_path", "close_to_close")
-    dataset["label_return_path"] = label_path
-
-    feature_columns = [
-        "return_1d",
-        "return_5d",
-        "return_21d",
-        "vol_10d",
-        "vol_20d",
-        "vol_60d",
-        "momentum_short",
-        "momentum_long",
-        "ema_trend",
-        "macd",
-        "macd_signal",
-        "macd_hist",
-        "rsi",
-        "volume_z",
-        "volume_trend",
-        "atr_14",
-        "atr_pct",
-        "adx_14",
-        "obv",
-        "cmf_20",
-        "skew_21",
-        "kurt_21",
-        "return_streak",
-        "price_z",
-    ]
-
-    # Derivative features for crossover strength
-    dataset["sma_diff"] = dataset["sma_short"] - dataset["sma_long"]
-    dataset["sma_ratio"] = dataset["sma_short"] / dataset["sma_long"] - 1
-    dataset["boll_bandwidth"] = (dataset["boll_up"] - dataset["boll_dn"]) / dataset["sma_long"]
-    feature_columns.extend(["sma_diff", "sma_ratio", "boll_bandwidth"])
-
-    # Apply labeling via helper for复用/缓存
-    labeled = build_labels(dataset, params)
-    if params.label_style == "triple_barrier":
-        if "target_multiclass" not in labeled:
-            raise QuantStrategyError("三重闸标签生成失败，缺少 target_multiclass。")
-        dataset["target"] = labeled["target"]
-        dataset["target_multiclass"] = labeled["target_multiclass"]
-        # 记录动态阈值轨迹用于稳定性分析
-        dynamic_up = labeled.get("tb_up_active")
-        dynamic_down = labeled.get("tb_down_active")
-        dataset["tb_up_active"] = dynamic_up
-        dataset["tb_down_active"] = dynamic_down
-        dataset = dataset.dropna(subset=feature_columns + ["forward_return", "target"])
-        dataset["future_return"] = dataset["forward_return"]
-    else:
-        dataset["target"] = labeled["target"]
-        dataset = dataset.dropna(subset=feature_columns + ["forward_return", "target"])
-
-    if cache_key:
-        try:
-            signature_parts = {
-                "features": feature_columns,
-                "label": params.label_style,
-                "windows": [params.short_window, params.long_window, params.rsi_period],
-                "return_path": getattr(params, "return_path", "close_to_close"),
-                "label_return_path": label_path,
-                "tb": {
-                    "dynamic": params.tb_dynamic,
-                    "up": params.tb_up,
-                    "down": params.tb_down,
-                    "vol_multiplier": params.tb_vol_multiplier,
-                    "vol_window": params.tb_vol_window,
-                    "max_holding": params.tb_max_holding,
-                },
-            }
-            signature = json.dumps(signature_parts, ensure_ascii=False, sort_keys=True)
-            FEATURE_STORE.save(cache_key, dataset, feature_columns, pipeline_signature=signature)
-        except Exception:
-            pass
-
-    return dataset, feature_columns
-
-
-def _infer_category(ticker: str) -> str:
-    t = ticker.upper()
-    mega = {"AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA"}
-    etf = {"SPY", "QQQ", "IWM", "TLT", "GLD"}
-    sector = {"XLF", "XLK", "XLE", "XLV", "XLY"}
-    if t in mega:
-        return "mega"
-    if t in etf:
-        return "etf"
-    if t in sector or (len(t) == 3 and t.startswith("XL")):
-        return "sector"
-    # heuristic: symbols with dots (e.g., .SS) often equities; default mega
-    return "mega"
-
-
-def _load_best_ml_config(ticker: str) -> tuple[str | None, dict[str, Any] | None]:
-    """Return (engine, params) from training cache if available for ticker category."""
-    cfg_path = DATA_CACHE_DIR / "training" / "best_ml_config_overall.json"
-    try:
-        with cfg_path.open("r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        cat = _infer_category(ticker)
-        entry = (data or {}).get(cat)
-        if not entry:
-            return None, None
-        engine = entry.get("engine")
-        params = entry.get("params") or {}
-        return engine, params
-    except Exception:
-        return None, None
-
-
-def _simulate_expected_return(
-    signal: pd.Series,
-    returns: pd.Series,
-    cost_rate: float,
-) -> float:
-    signal = signal.fillna(0.0)
-    exposure = signal.shift(fill_value=0.0)
-    pnl = returns.fillna(0.0) * exposure
-    turnover = signal.diff().abs().fillna(signal.abs())
-    cost = turnover * cost_rate
-    total = (pnl - cost).sum()
-    return float(total)
-
-
-def _tune_thresholds_on_validation(
-    proba: pd.Series,
-    returns: pd.Series,
-    cost_rate: float,
-    grid_long: list[float] | None = None,
-    grid_short: list[float] | None = None,
-    n_jobs: int = 1,
-) -> tuple[float, float]:
-    # Default grids
-    n = len(proba.dropna())
-    step_long = 0.02 if n < 150 else 0.015
-    step_short = 0.02 if n < 150 else 0.015
-    grid_long = grid_long or [round(x, 3) for x in np.arange(0.54, 0.71, step_long)]
-    grid_short = grid_short or [round(x, 3) for x in np.arange(0.29, 0.48, step_short)]
-    candidates = [(e, x) for e in grid_long for x in grid_short if 0.0 < x < 0.5 < e < 1.0]
-    if not candidates:
-        return 0.55, 0.45
-    if n_jobs and n_jobs > 1:
-        try:
-            from joblib import Parallel, delayed  # type: ignore
-
-            scores = Parallel(n_jobs=n_jobs)(
-                delayed(_simulate_expected_return)(
-                    pd.Series(np.where(proba >= e, 1.0, np.where(proba <= x, -1.0, 0.0)), index=proba.index),
-                    returns,
-                    cost_rate,
-                )
-                for e, x in candidates
-            )
-            best_idx = int(np.argmax(scores))
-            return float(candidates[best_idx][0]), float(candidates[best_idx][1])
-        except Exception:
-            pass
-    best = (-np.inf, 0.55, 0.45)
-    for e, x in candidates:
-        sig = pd.Series(np.where(proba >= e, 1.0, np.where(proba <= x, -1.0, 0.0)), index=proba.index)
-        score = _simulate_expected_return(sig, returns, cost_rate)
-        if score > best[0]:
-            best = (score, e, x)
-    return float(best[1]), float(best[2])
-
-
-def _scan_threshold_stability(
-    probabilities: pd.Series,
-    future_returns: pd.Series,
-    cost_rate: float,
-    base_entry: float,
-    base_exit: float,
-) -> dict[str, Any]:
-    """Evaluate a grid of thresholds in a vectorized fashion and summarize Sharpe stability."""
-
-    proba = probabilities.dropna()
-    if proba.empty or len(proba) < 40:
-        return {}
-    aligned_returns = future_returns.reindex(proba.index).fillna(0.0)
-    entry_grid = np.linspace(max(0.5, base_entry - 0.05), min(0.95, base_entry + 0.05), 5)
-    exit_grid = np.linspace(max(0.05, base_exit - 0.05), min(0.45, base_exit + 0.05), 5)
-
-    entry_mesh, exit_mesh = np.meshgrid(entry_grid, exit_grid)
-    entry_vec = entry_mesh.flatten()
-    exit_vec = exit_mesh.flatten()
-    valid_mask = exit_vec < (entry_vec - 0.02)
-    entry_vec = entry_vec[valid_mask]
-    exit_vec = exit_vec[valid_mask]
-    if entry_vec.size == 0:
-        return {}
-
-    p_arr = proba.values[:, None]  # shape (n, 1)
-    ret_arr = aligned_returns.values[:, None]
-    entry_mat = entry_vec[None, :]  # shape (1, m)
-    exit_mat = exit_vec[None, :]
-
-    signals = np.where(
-        p_arr >= entry_mat,
-        1.0,
-        np.where(p_arr <= exit_mat, -1.0, 0.0),
-    )
-    exposure = np.vstack([np.zeros((1, signals.shape[1])), signals[:-1, :]])
-    turnover = np.vstack([np.abs(exposure[0, :]), np.abs(np.diff(exposure, axis=0))])
-    pnl = exposure * ret_arr
-    linear_cost = turnover * cost_rate
-    pnl_net = pnl - linear_cost
-
-    # portfolio stats vectorized over columns
-    mean = pnl_net.mean(axis=0)
-    std = pnl_net.std(axis=0)
-    ann_factor = 252.0
-    sharpe = np.where(std > 0, np.sqrt(ann_factor) * mean / std, 0.0)
-
-    best_idx = int(np.argmax(sharpe))
-    worst_idx = int(np.argmin(sharpe))
-    sharpe_arr = sharpe
-    mean_sharpe = float(np.mean(sharpe_arr))
-    q1, q3 = np.percentile(sharpe_arr, [25, 75])
-
-    best = {"entry": float(entry_vec[best_idx]), "exit": float(exit_vec[best_idx]), "sharpe": float(sharpe_arr[best_idx])}
-    worst = {"entry": float(entry_vec[worst_idx]), "exit": float(exit_vec[worst_idx]), "sharpe": float(sharpe_arr[worst_idx])}
-    points = [
-        {"entry": float(e), "exit": float(x), "sharpe": float(s)}
-        for e, x, s in zip(entry_vec.tolist(), exit_vec.tolist(), sharpe_arr.tolist())
-    ]
-
-    return {
-        "grid": {
-            "entry": [round(float(x), 4) for x in entry_grid.tolist()],
-            "exit": [round(float(x), 4) for x in exit_grid.tolist()],
-        },
-        "best": best,
-        "worst": worst,
-        "mean_sharpe": mean_sharpe,
-        "median_sharpe": float(np.median(sharpe_arr)),
-        "iqr_sharpe": float(q3 - q1),
-        "count": len(entry_vec),
-        "points": points,
-        "heatmap_grid": {
-            "entry": entry_vec.tolist(),
-            "exit": exit_vec.tolist(),
-            "sharpe": sharpe_arr.tolist(),
-        },
-    }
-
-
-def _build_threshold_heatmap(scan: dict[str, Any]) -> str | None:
-    """Render a heatmap of Sharpe over entry/exit thresholds."""
-
-    try:
-        points = scan.get("heatmap_grid") or {}
-        entry = np.array(points.get("entry") or [])
-        exit = np.array(points.get("exit") or [])
-        sharpe = np.array(points.get("sharpe") or [])
-        if entry.size == 0 or exit.size == 0 or sharpe.size == 0:
-            return None
-        entry_levels = sorted(set(entry.tolist()))
-        exit_levels = sorted(set(exit.tolist()))
-        grid = np.full((len(exit_levels), len(entry_levels)), np.nan)
-        for e, x, s in zip(entry, exit, sharpe):
-            i = exit_levels.index(float(x))
-            j = entry_levels.index(float(e))
-            grid[i, j] = s
-        fig, ax = plt.subplots(figsize=(5.5, 4))
-        im = ax.imshow(grid, origin="lower", cmap="RdYlGn", aspect="auto")
-        ax.set_xticks(range(len(entry_levels)))
-        ax.set_xticklabels([f"{v:.2f}" for v in entry_levels], rotation=45, ha="right")
-        ax.set_yticks(range(len(exit_levels)))
-        ax.set_yticklabels([f"{v:.2f}" for v in exit_levels])
-        ax.set_xlabel("Entry 阈值")
-        ax.set_ylabel("Exit 阈值")
-        ax.set_title("阈值稳定性热力图（Sharpe）")
-        fig.colorbar(im, ax=ax, label="Sharpe")
-        return fig_to_base64(fig)
-    except Exception:
-        return None
-
-
-def compute_triple_barrier_labels(
-    price: pd.Series,
-    up: float | pd.Series,
-    down: float | pd.Series,
-    max_holding: int,
-) -> tuple[pd.Series, pd.Series]:
-    idx = price.index
-    arr = price.values
-    n = len(arr)
-    binary = np.full(n, np.nan)
-    multi = np.zeros(n)
-    up_arr = np.asarray(up.reindex(idx).ffill().bfill().fillna(up.mean() if isinstance(up, pd.Series) else up)) if isinstance(up, pd.Series) else np.full(n, up)
-    down_arr = np.asarray(down.reindex(idx).ffill().bfill().fillna(down.mean() if isinstance(down, pd.Series) else down)) if isinstance(down, pd.Series) else np.full(n, down)
-    for i in range(n - 1):
-        p0 = arr[i]
-        horizon = min(n - i - 1, max_holding)
-        if horizon <= 0:
-            break
-        future = arr[i + 1 : i + 1 + horizon]
-        rets = future / p0 - 1
-        up_thr = float(up_arr[i]) if i < len(up_arr) else float(up_arr[-1])
-        dn_thr = float(down_arr[i]) if i < len(down_arr) else float(down_arr[-1])
-        hit_up = np.where(rets >= up_thr)[0]
-        hit_dn = np.where(rets <= -dn_thr)[0]
-        t_up = hit_up[0] if hit_up.size else np.inf
-        t_dn = hit_dn[0] if hit_dn.size else np.inf
-        if t_up < t_dn:
-            binary[i] = 1
-            multi[i] = 1
-        elif t_dn < t_up:
-            binary[i] = 0
-            multi[i] = -1
-        else:
-            terminal = 1 if rets[-1] > 0 else 0
-            binary[i] = terminal
-            multi[i] = 0
-    return pd.Series(binary, index=idx), pd.Series(multi, index=idx)
-
-
-def build_labels(frame: pd.DataFrame, params: StrategyInput) -> pd.DataFrame:
-    """
-    Build labels (direction or triple-barrier) and attach to frame for downstream caching/复用.
-    """
-    data = frame.copy()
-    selected_return, label_path = _select_forward_return(data, params)
-    data["forward_return"] = selected_return
-    data["label_return_path"] = label_path
-    # Ensure required columns exist
-    if "forward_return" not in data and "adj close" in data:
-        data["forward_return"] = data["adj close"].pct_change().shift(-1)
-    if params.label_style == "triple_barrier":
-        dynamic_up = params.tb_up
-        dynamic_down = params.tb_down
-        if params.tb_dynamic:
-            try:
-                vol_proxy = data.get("atr_pct")
-                if vol_proxy is None or vol_proxy.isna().all():
-                    daily_ret = data["adj close"].pct_change().abs()
-                    vol_proxy = daily_ret.rolling(window=max(5, params.tb_vol_window)).std()
-                vol_proxy = vol_proxy.ffill().bfill()
-                dynamic_up = np.maximum(params.tb_up, vol_proxy * params.tb_vol_multiplier)
-                dynamic_down = np.maximum(params.tb_down, vol_proxy * params.tb_vol_multiplier)
-            except Exception:
-                dynamic_up = params.tb_up
-                dynamic_down = params.tb_down
-        binary, multiclass = compute_triple_barrier_labels(
-            data["adj close"],
-            up=dynamic_up,
-            down=dynamic_down,
-            max_holding=params.tb_max_holding,
-        )
-        data["target"] = binary
-        data["target_multiclass"] = multiclass
-        data["tb_up_active"] = dynamic_up if isinstance(dynamic_up, pd.Series) else pd.Series(dynamic_up, index=data.index)
-        data["tb_down_active"] = dynamic_down if isinstance(dynamic_down, pd.Series) else pd.Series(dynamic_down, index=data.index)
-    else:
-        fr = selected_return.fillna(0.0)
-        data["target"] = (fr > 0).astype(int)
-    return data
 
 
 def _summarize_series_stats(series: pd.Series) -> dict[str, float]:
@@ -1280,62 +520,6 @@ def _tb_summary_from_dataset(dataset: pd.DataFrame) -> dict[str, Any]:
     return summary
 
 
-def enforce_min_holding(
-    signals: pd.Series,
-    min_days: int,
-    probabilities: Optional[pd.Series] = None,
-) -> pd.Series:
-    """Ensure each position is held for at least `min_days` unless confidence flips strongly."""
-    if min_days <= 1:
-        return signals
-
-    result = []
-    current = 0
-    days_in_trade = 0
-    prob_series = probabilities if probabilities is not None else pd.Series(0.5, index=signals.index)
-    prob_series = prob_series.reindex(signals.index).fillna(0.5)
-
-    for idx, sig in signals.items():
-        desired = int(sig)
-        prob = float(prob_series.loc[idx])
-
-        if current == 0:
-            if desired != 0:
-                current = desired
-                days_in_trade = 1
-            result.append(current)
-            continue
-
-        if desired == current or desired == 0:
-            if desired == 0 and days_in_trade < min_days and 0.35 < prob < 0.65:
-                # Maintain position until minimum holding reached unless conviction is high
-                result.append(current)
-                days_in_trade += 1
-            elif desired == 0 and days_in_trade < min_days and (prob <= 0.35 or prob >= 0.65):
-                # Allow exit when model confidence strongly signals flat positioning
-                current = 0
-                days_in_trade = 0
-                result.append(current)
-            elif desired == 0:
-                current = 0
-                days_in_trade = 0
-                result.append(current)
-            else:
-                result.append(current)
-                days_in_trade += 1
-        else:  # Signal flipped
-            strong_flip = (prob >= 0.65 and desired == 1) or (prob <= 0.35 and desired == -1)
-            if days_in_trade < min_days and not strong_flip:
-                result.append(current)
-                days_in_trade += 1
-            else:
-                current = desired
-                days_in_trade = 1
-                result.append(current)
-
-    return pd.Series(result, index=signals.index, dtype=float)
-
-
 def apply_signal_filters(
     dataset: pd.DataFrame,
     raw_signal: pd.Series,
@@ -1361,296 +545,6 @@ def apply_signal_filters(
 
     constrained = enforce_min_holding(filtered, params.min_holding_days, probs)
     return constrained
-
-
-def enforce_risk_limits(
-    position: pd.Series,
-    leverage: pd.Series,
-    asset_returns: pd.Series,
-    params: StrategyInput,
-) -> tuple[pd.Series, list[str]]:
-    exposure_raw = (position * leverage).fillna(0.0)
-    exposure_limit = max(float(params.daily_exposure_limit or 0.0), 0.0) * max(params.dynamic_exposure_multiplier, 0.5)
-    max_drawdown_stop = max(float(params.max_drawdown_stop or 0.0), 0.0)
-    index = exposure_raw.index
-    adjusted = []
-    limit_hits = 0
-    stop_dates: list[str] = []
-    resumed_dates: list[str] = []
-    stopped = False
-    prev_exposure = 0.0
-    cumulative = 1.0
-    peak = 1.0
-    asset_ret = asset_returns.fillna(0.0).reindex(index).fillna(0.0)
-
-    intraday_limit = max(params.intraday_loss_limit, 0.0)
-    day_start_val = cumulative
-    current_day = index[0].date() if len(index) else None
-
-    for i, ts in enumerate(index):
-        exp = float(exposure_raw.iloc[i])
-        if exposure_limit > 0 and abs(exp) > exposure_limit + 1e-8:
-            exp = float(np.clip(exp, -exposure_limit, exposure_limit))
-            limit_hits += 1
-        if stopped:
-            exp = 0.0
-        adjusted.append(exp)
-
-        ret = float(asset_ret.iloc[i])
-        if current_day and ts.date() != current_day:
-            day_start_val = cumulative
-            current_day = ts.date()
-
-        cumulative = max(1e-9, cumulative * (1 + prev_exposure * ret))
-        peak = max(peak, cumulative)
-        drawdown = cumulative / peak - 1
-
-        intraday_drawdown = cumulative / day_start_val - 1
-        if not stopped and intraday_limit > 0 and intraday_drawdown <= -intraday_limit:
-            stopped = True
-            stop_dates.append(f"{ts.date()}(日内止损)")
-        elif stopped and intraday_drawdown >= -0.01 and drawdown >= -0.05:
-            stopped = False
-            resumed_dates.append(str(ts.date()))
-
-        if not stopped and max_drawdown_stop > 0 and drawdown <= -max_drawdown_stop:
-            stopped = True
-            stop_dates.append(str(ts.date()))
-        elif stopped and drawdown >= -0.02:
-            stopped = False
-            resumed_dates.append(str(ts.date()))
-
-        prev_exposure = exp
-
-    exposure_series = pd.Series(adjusted, index=index)
-    events: list[str] = []
-    if limit_hits:
-        events.append(f"日曝险限制被触发 {limit_hits} 次，系统自动压降仓位。")
-    if stop_dates:
-        latest = stop_dates[-1]
-        if resumed_dates:
-            events.append(f"最大回撤止损在 {latest} 生效，{resumed_dates[-1]} 恢复交易。")
-        else:
-            events.append(f"最大回撤止损在 {latest} 生效，尚未恢复交易。")
-    return exposure_series, events
-
-
-def apply_vol_targeting(
-    exposure: pd.Series,
-    asset_returns: pd.Series,
-    params: StrategyInput,
-) -> tuple[pd.Series, list[str]]:
-    """Scale exposure to align realized volatility with a target when configured."""
-
-    events: list[str] = []
-    target = params.target_vol
-    if target is None or target <= 0:
-        return exposure, events
-    window = max(10, int(params.vol_target_window or 60))
-    rolling_vol = asset_returns.rolling(window).std().fillna(0.0) * np.sqrt(252)
-    current_vol = rolling_vol.reindex(exposure.index).ffill().bfill()
-    scale = target / current_vol.replace(0, np.nan)
-    scale = scale.clip(lower=0.0, upper=3.0).fillna(0.0)
-    scaled = exposure * scale
-    if not scaled.equals(exposure):
-        events.append(f"波动率目标生效：目标 {target:.2f}，窗口 {window} 天，缩放上限 3x。")
-    return scaled, events
-
-
-def apply_execution_model(
-    backtest: pd.DataFrame,
-    price_source: pd.DataFrame,
-    params: StrategyInput,
-) -> tuple[pd.DataFrame, list[str]]:
-    if "volume" not in price_source.columns:
-        return backtest, []
-    price = backtest.get("adj close")
-    if price is None or price.empty:
-        return backtest, []
-    raw_volume = price_source["volume"].reindex(backtest.index).ffill().bfill()
-    dollar_volume = (raw_volume * price).rolling(20).mean()
-    exposure_change = backtest["exposure"].diff().abs().fillna(backtest["exposure"].abs())
-    turnover_value = exposure_change * params.capital
-    liquidity_buffer = max(params.execution_liquidity_buffer, 0.01)
-    liquidity_capacity = dollar_volume * liquidity_buffer
-    # 若缺失成交量数据，直接返回并记录提示，避免虚高的惩罚
-    if liquidity_capacity.isna().all() or liquidity_capacity.fillna(0.0).sum() == 0:
-        return backtest, ["执行模型：缺少成交量数据，已跳过撮合成本估计。"]
-    impact = turnover_value / liquidity_capacity.replace(0, np.nan)
-    impact = impact.clip(lower=0.0, upper=5.0).fillna(0.0)
-    if params.execution_mode == "limit":
-        fill_prob = np.exp(-impact.clip(0, 5))
-        penalty = (1 - fill_prob) * np.abs(backtest["strategy_return_gross"]) + impact * (params.execution_penalty_bps / 10000.0)
-    else:
-        penalty = impact * (params.execution_penalty_bps / 10000.0)
-    backtest["execution_cost"] = penalty
-    backtest["strategy_return"] = backtest["strategy_return"] - penalty
-    events = []
-    if penalty.sum() > 0:
-        avg_impact = float(impact.replace([np.inf, -np.inf], np.nan).mean())
-        events.append(f"执行撮合模型：平均冲击 {avg_impact:.2f}×ADV，额外成本 {penalty.sum():.4f}。")
-    return backtest, events
-
-
-def backtest_sma_strategy(prices: pd.DataFrame, params: StrategyInput) -> tuple[pd.DataFrame, list[dict[str, Any]], dict[str, Any]]:
-    """
-    Run a simple moving average crossover backtest.
-
-    Assumptions: fully invested when short SMA crosses above long SMA,
-    in cash otherwise. Strategy return is calculated on adjusted close prices.
-    """
-    backtest = prices.dropna(subset=["sma_short", "sma_long"]).copy()
-    backtest["signal"] = np.where(backtest["sma_short"] > backtest["sma_long"], 1.0, 0.0)
-    backtest["position"] = enforce_min_holding(
-        pd.Series(backtest["signal"], index=backtest.index), params.min_holding_days
-    )
-
-    asset_returns = _compute_asset_returns(backtest, params)
-    backtest["asset_return"] = asset_returns
-    backtest["volatility"] = asset_returns.rolling(window=20).std().fillna(0.0) * np.sqrt(252)
-    backtest["leverage"] = calculate_target_leverage(
-        backtest["position"], backtest["volatility"], params.volatility_target, params.max_leverage
-    )
-
-    exposure_series, overlay_events = enforce_risk_limits(
-        backtest["position"],
-        backtest["leverage"],
-        asset_returns,
-        params,
-    )
-    backtest["exposure"] = exposure_series
-    with np.errstate(divide="ignore", invalid="ignore"):
-        adj_position = backtest["exposure"] / backtest["leverage"].replace(0, np.nan)
-    backtest["position"] = adj_position.replace([np.inf, -np.inf], 0.0).fillna(0.0)
-    exposure_change = backtest["exposure"].diff().abs().fillna(backtest["exposure"].abs())
-    cost_rate = (params.transaction_cost_bps + params.slippage_bps) / 10000.0
-    # ADV 参与率约束
-    adv_hits = 0
-    if "adv" in backtest and backtest["adv"].notna().any():
-        max_part = max(0.0, min(1.0, params.max_adv_participation or 0.1))
-        adv_limit = backtest["adv"].fillna(0.0) * max_part
-        mask = backtest["exposure"].abs() > adv_limit
-        adv_hits = int(mask.sum())
-        capped = backtest["exposure"].where(~mask, 0.0)
-        if adv_hits > 0:
-            backtest["exposure"] = capped
-            exposure_change = backtest["exposure"].diff().abs().fillna(backtest["exposure"].abs())
-    backtest["transaction_cost"] = exposure_change * cost_rate
-
-    shifted_exposure = (
-        backtest["exposure"]
-        if params.return_path in {"close_to_open", "open_to_close"}
-        else backtest["exposure"].shift(fill_value=0)
-    )
-    backtest["strategy_return_gross"] = asset_returns * shifted_exposure
-    long_daily = float(params.long_borrow_cost_bps or params.borrow_cost_bps) / 10000.0 / 252.0
-    short_daily = float(params.short_borrow_cost_bps or params.borrow_cost_bps) / 10000.0 / 252.0
-    borrow_cost = (
-        backtest["exposure"].clip(lower=0.0) * long_daily
-        + (-backtest["exposure"].clip(upper=0.0)) * short_daily
-    )
-    backtest["borrow_cost"] = borrow_cost
-    backtest["strategy_return"] = backtest["strategy_return_gross"] - backtest["transaction_cost"] - borrow_cost
-    backtest, execution_events = apply_execution_model(backtest, prices, params)
-    backtest["cum_strategy"] = (1 + backtest["strategy_return"]).cumprod()
-    backtest["cum_buy_hold"] = (1 + asset_returns).cumprod()
-
-    metrics, stats = summarize_backtest(
-        backtest,
-        params,
-        include_prediction=False,
-        include_auc=False,
-        feature_columns=[
-            "sma_short",
-            "sma_long",
-            "rsi",
-            "volatility",
-            "position",
-        ],
-    )
-    stats["cost_assumptions"] = {
-        "slippage_model": params.slippage_model,
-        "cost_rate": cost_rate,
-        "long_borrow_bps": params.long_borrow_cost_bps or params.borrow_cost_bps,
-        "short_borrow_bps": params.short_borrow_cost_bps or params.borrow_cost_bps,
-        "adv_participation": params.max_adv_participation,
-        "execution_mode": params.execution_mode,
-    }
-    aggregate_events = []
-    if overlay_events:
-        aggregate_events.extend(overlay_events)
-    if adv_hits > 0:
-        aggregate_events.append(f"因 ADV 参与率上限({params.max_adv_participation:.0%}) 清零 {adv_hits} 次仓位，避免不可成交。")
-    aggregate_events.extend(execution_events)
-    oos_report = _compute_oos_from_backtest(backtest, params)
-    if oos_report:
-        stats["validation_report_detected"] = "sma_pfws"
-        stats["validation_oos_summary"] = oos_report.get("summary")
-        stats["validation_oos_folds"] = oos_report.get("folds")
-        stats["validation_penalized_sharpe"] = oos_report.get("penalized_sharpe")
-        stats["validation_train_window"] = oos_report.get("train_window")
-        stats["validation_test_window"] = oos_report.get("test_window")
-        stats["validation_embargo"] = oos_report.get("embargo")
-    if not oos_report:
-        aggregate_events.append("提示：此策略样本外 PFWS 指标生成失败，当前仅展示全量回测结果。")
-    if aggregate_events:
-        stats["risk_events"] = aggregate_events
-    return backtest, metrics, stats
-
-
-def calculate_max_drawdown(cumulative_returns: pd.Series) -> float:
-    """Calculate maximum drawdown for a cumulative return series."""
-    rolling_max = cumulative_returns.cummax()
-    drawdown = cumulative_returns / rolling_max - 1
-    return drawdown.min()
-
-
-def calculate_drawdown_series(cumulative_returns: pd.Series) -> pd.Series:
-    rolling_max = cumulative_returns.cummax()
-    return cumulative_returns / rolling_max - 1
-
-
-def format_table(backtest: pd.DataFrame) -> list[dict[str, Any]]:
-    """Prepare a concise table for template rendering."""
-    columns = [
-        "signal",
-        "position",
-        "adj close",
-        "sma_short",
-        "sma_long",
-        "rsi",
-        "strategy_return",
-        "leverage",
-        "cum_strategy",
-        "cum_buy_hold",
-    ]
-    if "probability" in backtest.columns:
-        columns.insert(3, "probability")
-    if "transaction_cost" in backtest.columns:
-        columns.append("transaction_cost")
-
-    subset = backtest[columns].tail(30)
-    subset.index = subset.index.date
-    return [
-        {
-            "date": idx.strftime("%Y-%m-%d") if isinstance(idx, datetime) else str(idx),
-            "position": int(row["position"]),
-            "signal": int(row["signal"]),
-            "adj_close": round(float(row["adj close"]), 2),
-            "sma_short": round(float(row["sma_short"]), 2),
-            "sma_long": round(float(row["sma_long"]), 2),
-            "rsi": round(float(row["rsi"]), 2),
-            "daily_return": round(float(row["strategy_return"]), 4),
-            "leverage": round(float(row["leverage"]), 2),
-            "cum_strategy": round(float(row["cum_strategy"]), 4),
-            "cum_buy_hold": round(float(row["cum_buy_hold"]), 4),
-            "probability": round(float(row["probability"]), 3) if "probability" in subset.columns else None,
-            "transaction_cost": round(float(row["transaction_cost"]), 5)
-            if "transaction_cost" in subset.columns
-            else None,
-        }
-        for idx, row in subset.iterrows()
-    ]
 
 
 def _format_chart_time(value: Any) -> str:
@@ -2098,7 +992,7 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
     warnings: list[str] = []
     # Auto-apply best ML config when available
     if params.strategy_engine in {"ml_momentum", "multi_combo", "rl_policy"} and params.auto_apply_best_config:
-        engine, mlp = _load_best_ml_config(params.ticker)
+        engine, mlp = load_best_ml_config(params.ticker)
         if engine:
             try:
                 params = replace(params, ml_model=engine, ml_params=mlp or params.ml_params)
@@ -2164,7 +1058,12 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
         else:
             component_outcomes.append(ml_outcome)
             try:
-                sma_backtest, sma_metrics, sma_stats = backtest_sma_strategy(prices, params)
+                sma_backtest, sma_metrics, sma_stats = backtest_sma_strategy(
+                    prices,
+                    params,
+                    summarize_backtest_fn=summarize_backtest,
+                    compute_oos_report=_compute_oos_from_backtest,
+                )
                 warnings.extend(sma_stats.pop("runtime_warnings", []))
                 component_outcomes.append(StrategyOutcome("传统双均线", sma_backtest, sma_metrics, sma_stats))
             except QuantStrategyError as exc:
@@ -2187,7 +1086,12 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
                 for outcome in component_outcomes
             ]
     else:
-        backtest, metrics, stats = backtest_sma_strategy(prices, params)
+        backtest, metrics, stats = backtest_sma_strategy(
+            prices,
+            params,
+            summarize_backtest_fn=summarize_backtest,
+            compute_oos_report=_compute_oos_from_backtest,
+        )
         component_outcomes.append(StrategyOutcome("传统双均线", backtest, metrics, stats))
 
     warnings.extend(stats.pop("runtime_warnings", []))
@@ -2225,7 +1129,7 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
                 annual_factor = stats["annual_factor"]
                 benchmark_total_return = combined["benchmark_cum"].iloc[-1] - 1
                 benchmark_vol = combined["benchmark_return"].std() * np.sqrt(annual_factor)
-                rf = _get_risk_free_rate_annual()
+                rf = get_risk_free_rate_annual()
                 benchmark_sharpe = calculate_sharpe(
                     combined["benchmark_return"], trading_days=annual_factor, risk_free_rate=rf
                 )
@@ -2720,232 +1624,6 @@ def run_quant_pipeline(params: StrategyInput) -> dict[str, Any]:
     # function end
 
 
-def fig_to_base64(fig: plt.Figure) -> str:
-    buffer = io.BytesIO()
-    fig.tight_layout()
-    # Increase DPI for clarity so charts are readable in smaller cards
-    fig.savefig(buffer, format="png", dpi=220, bbox_inches="tight")
-    buffer.seek(0)
-    encoded = base64.b64encode(buffer.read()).decode("utf-8")
-    plt.close(fig)
-    return encoded
-
-
-def format_percentage(value: float) -> str:
-    """Format a decimal return as percentage string."""
-    if value is None or np.isnan(value):
-        return "N/A"
-    return f"{value:.2%}"
-
-
-def calculate_sharpe(returns: pd.Series, trading_days: int, risk_free_rate: float = 0.0) -> float:
-    excess_returns = returns - risk_free_rate / trading_days
-    std = returns.std()
-    if std == 0:
-        return 0.0
-    return np.sqrt(trading_days) * excess_returns.mean() / std
-
-
-def calculate_sortino(returns: pd.Series, trading_days: int, risk_free_rate: float = 0.0) -> float:
-    downside = returns.copy()
-    downside[downside > 0] = 0
-    downside_std = np.sqrt((downside**2).mean())
-    if downside_std == 0:
-        return 0.0
-    avg_excess = returns.mean() - risk_free_rate / trading_days
-    return np.sqrt(trading_days) * avg_excess / downside_std
-
-
-def _get_risk_free_rate_annual() -> float:
-    try:
-        return float(os.environ.get("RISK_FREE_RATE_ANNUAL", "0.0"))
-    except ValueError:
-        return 0.0
-
-
-def calculate_cagr(cumulative_returns: pd.Series, trading_days: int) -> float:
-    if cumulative_returns.empty:
-        return 0.0
-    total_return = cumulative_returns.iloc[-1]
-    periods = cumulative_returns.shape[0]
-    if periods <= 1 or total_return <= 0:
-        return 0.0
-    return total_return ** (trading_days / periods) - 1
-
-
-def calculate_calmar(cagr: float, max_drawdown: float) -> float:
-    if max_drawdown == 0:
-        return 0.0
-    return cagr / abs(max_drawdown)
-
-
-def calculate_hit_ratio(returns: pd.Series) -> float:
-    positive = (returns > 0).sum()
-    total = (returns != 0).sum()
-    if total == 0:
-        return 0.0
-    return positive / total
-
-
-def calculate_avg_gain_loss(returns: pd.Series) -> tuple[float, float]:
-    positive = returns[returns > 0]
-    negative = returns[returns < 0]
-    avg_gain = positive.mean() if not positive.empty else 0.0
-    avg_loss = negative.mean() if not negative.empty else 0.0
-    return avg_gain, avg_loss
-
-
-def calculate_holding_periods(position: pd.Series) -> float:
-    """Compute the average holding period (in trading days) for non-zero positions."""
-    if position.empty:
-        return 0.0
-    clean = position.fillna(0).round().astype(int)
-    durations: list[int] = []
-    current = clean.iloc[0]
-    length = 1 if current != 0 else 0
-
-    for value in clean.iloc[1:]:
-        if value == current and value != 0:
-            length += 1
-        else:
-            if current != 0 and length > 0:
-                durations.append(length)
-            current = value
-            length = 1 if current != 0 else 0
-    if current != 0 and length > 0:
-        durations.append(length)
-    return float(np.mean(durations)) if durations else 0.0
-
-
-def calculate_beta(strategy_returns: pd.Series, benchmark_returns: pd.Series) -> float:
-    variance = benchmark_returns.var()
-    if variance == 0:
-        return 0.0
-    covariance = strategy_returns.cov(benchmark_returns)
-    return covariance / variance
-
-
-def calculate_target_leverage(
-    position: pd.Series,
-    realized_vol: pd.Series,
-    target_vol: float = 0.15,
-    max_leverage: float = 3.0,
-) -> pd.Series:
-    """Scale exposure to hit target annualized volatility."""
-    vol = realized_vol.replace(0, np.nan)
-    leverage = target_vol / vol
-    leverage = leverage.clip(lower=0, upper=max_leverage).fillna(0)
-    leverage = leverage.where(position != 0, 0)
-    return leverage
-
-
-def calculate_var_cvar(returns: pd.Series, alpha: float = 0.95) -> tuple[float, float]:
-    """Compute daily Value at Risk and Conditional VaR at given confidence."""
-    if returns.empty:
-        return 0.0, 0.0
-    quantile = returns.quantile(1 - alpha)
-    var = min(quantile, 0.0)
-    tail_losses = returns[returns <= quantile]
-    cvar = tail_losses.mean() if not tail_losses.empty else 0.0
-    return var, cvar
-
-
-def build_core_metrics(
-    stats: dict[str, Any],
-    *,
-    include_prediction: bool = False,
-    include_auc: bool = False,
-) -> list[dict[str, str]]:
-    """Render the standard metric cards from a stats dictionary."""
-    def _float(value: Any, default: float = 0.0) -> float:
-        try:
-            if value is None or (isinstance(value, float) and math.isnan(value)):
-                return default
-            return float(value)
-        except (TypeError, ValueError):
-            return default
-
-    metrics = [
-        build_metric("策略累计收益率", format_percentage(_float(stats.get("total_return")))),
-        build_metric("买入持有收益率", format_percentage(_float(stats.get("buy_hold_return")))),
-        build_metric("夏普比率", f"{_float(stats.get('sharpe')):.2f}"),
-        build_metric(
-            "夏普置信区间",
-            f"[{_float(stats.get('sharpe_ci_lower')):.2f}, {_float(stats.get('sharpe_ci_upper')):.2f}]"
-            if stats.get("sharpe_ci_lower") is not None and stats.get("sharpe_ci_upper") is not None
-            else "N/A",
-        ),
-        build_metric(
-            "Deflated Sharpe",
-            f"{_float(stats.get('deflated_sharpe')):.2f}" if stats.get("deflated_sharpe") is not None else "N/A",
-        ),
-        build_metric("最大回撤", format_percentage(_float(stats.get("max_drawdown")))),
-        build_metric("索提诺比率", f"{_float(stats.get('sortino')):.2f}"),
-        build_metric("年化波动率", format_percentage(_float(stats.get("volatility")))),
-        build_metric("年化复合收益率", format_percentage(_float(stats.get("cagr")))),
-        build_metric("卡玛比率", f"{_float(stats.get('calmar')):.2f}"),
-        build_metric("胜率", format_percentage(_float(stats.get("hit_ratio")))),
-        build_metric(
-            "单日平均盈亏",
-            f"{format_percentage(_float(stats.get('avg_gain')))} / {format_percentage(_float(stats.get('avg_loss')))}",
-        ),
-        build_metric("平均持仓比例", format_percentage(_float(stats.get("avg_exposure")))),
-        build_metric("平均杠杆（波动率目标）", f"{_float(stats.get('avg_leverage')):.2f}x"),
-        build_metric("日度95%VaR", format_percentage(-_float(stats.get("var_95")))),
-        build_metric("日度95%CVaR", format_percentage(-_float(stats.get("cvar_95")))),
-        build_metric("最长回撤恢复期(TWR)", f"{_float(stats.get('twr_days')):.0f} 天" if stats.get("twr_days") is not None else "N/A"),
-        build_metric("持续亏损天数", str(int(_float(stats.get("loss_streak"))))),
-        build_metric("最长恢复期", f"{_float(stats.get('recovery_days')):.0f} 天" if stats.get("recovery_days") is not None else "N/A"),
-        build_metric(
-            "White RC 调整p值",
-            f"{_float(stats.get('sharpe_pvalue_adjusted')):.3f}" if stats.get("sharpe_pvalue_adjusted") is not None else "N/A",
-        ),
-    ]
-
-    # OOS（PFWS）指标：显示均值/方差/IQR，帮助识别样本外稳定性
-    validation_summary = (
-        stats.get("validation_summary_compact")
-        or stats.get("validation_oos_summary")
-        or {}
-    )
-    sharpe_oos = validation_summary.get("sharpe") if isinstance(validation_summary, dict) else None
-    if isinstance(sharpe_oos, dict) and sharpe_oos:
-        metrics.append(
-            build_metric(
-                "OOS夏普(均值±std)",
-                f"{_float(sharpe_oos.get('mean')):.2f} ± {_float(sharpe_oos.get('std')):.2f}",
-            )
-        )
-        metrics.append(
-            build_metric(
-                "OOS夏普IQR",
-                f"{_float(sharpe_oos.get('iqr')):.2f}",
-            )
-        )
-
-    if include_prediction and stats.get("prediction_accuracy") is not None:
-        metrics.append(build_metric("预测胜率", format_percentage(_float(stats.get("prediction_accuracy")))))
-    if include_auc and stats.get("auc") is not None:
-        auc = _float(stats.get("auc"), float("nan"))
-        value = "N/A" if math.isnan(auc) else f"{auc:.2f}"
-        metrics.append(build_metric("ROC-AUC", value))
-    if stats.get("calibration"):
-        calib = stats["calibration"]
-        brier = _float(calib.get("brier"), float("nan"))
-        brier_val = "N/A" if math.isnan(brier) else f"{brier:.4f}"
-        metrics.append(build_metric("Brier Score", brier_val))
-
-    metrics.extend(
-        [
-            build_metric("年化换手率", format_percentage(_float(stats.get("annual_turnover")))),
-            build_metric("平均持仓天数", f"{_float(stats.get('average_holding_days')):.1f}"),
-            build_metric("成本占收益比", format_percentage(_float(stats.get("cost_ratio")))),
-            build_metric("交易日数量", str(int(_float(stats.get("trading_days"), 0.0)))),
-        ]
-    )
-    return metrics
-
-
 def summarize_backtest(
     backtest: pd.DataFrame,
     params: StrategyInput,
@@ -2959,7 +1637,7 @@ def summarize_backtest(
         raise QuantStrategyError("回测结果为空，无法生成统计指标。")
 
     annual_factor = 252
-    rf = _get_risk_free_rate_annual()
+    rf = get_risk_free_rate_annual()
 
     net_returns = backtest.get("strategy_return")
     if net_returns is None:
@@ -3328,19 +2006,6 @@ def combine_strategy_outcomes(
     return combined_outcome, weights_map
 
 
-def _compute_validation_metrics(pnl: pd.Series) -> dict[str, float]:
-    pnl = pnl.replace([np.inf, -np.inf], np.nan).dropna()
-    if pnl.empty:
-        return {"sharpe": 0.0, "cagr": 0.0, "max_drawdown": 0.0, "hit_ratio": 0.0}
-    cumulative = (1 + pnl).cumprod()
-    return {
-        "sharpe": float(calculate_sharpe(pnl, 252)),
-        "cagr": float(calculate_cagr(cumulative, 252)),
-        "max_drawdown": float(calculate_max_drawdown(cumulative)),
-        "hit_ratio": float(calculate_hit_ratio(pnl)),
-    }
-
-
 def _compute_oos_from_backtest(backtest: pd.DataFrame, params: StrategyInput) -> dict[str, Any] | None:
     """Compute simple PFWS OOS metrics（可用于传统/确定性/RL 回测）."""
     if backtest.empty or "strategy_return" not in backtest:
@@ -3358,7 +2023,7 @@ def _compute_oos_from_backtest(backtest: pd.DataFrame, params: StrategyInput) ->
         test_returns = backtest["strategy_return"].iloc[test_idx].fillna(0.0)
         if test_returns.empty:
             continue
-        metrics = _compute_validation_metrics(test_returns)
+        metrics = compute_validation_metrics(test_returns)
         metrics.update(
             {
                 "fold": fold_idx + 1,
@@ -3369,7 +2034,7 @@ def _compute_oos_from_backtest(backtest: pd.DataFrame, params: StrategyInput) ->
         slices.append(metrics)
     if not slices:
         return None
-    summary = _aggregate_oos_metrics(slices)
+    summary = aggregate_oos_metrics(slices)
     sharpe_stats = summary.get("sharpe") or {}
     penalized = (sharpe_stats.get("mean") or 0.0) - (sharpe_stats.get("std") or 0.0)
     distributions = {
@@ -3385,35 +2050,6 @@ def _compute_oos_from_backtest(backtest: pd.DataFrame, params: StrategyInput) ->
         "embargo": params.embargo_days,
         "distributions": distributions,
     }
-
-
-def _balanced_sample_weight(labels: pd.Series) -> np.ndarray | None:
-    """Compute balanced sample weights for binary labels if sklearn helper is available."""
-    if compute_sample_weight is None:
-        return None
-    try:
-        return compute_sample_weight("balanced", labels)
-    except Exception:
-        return None
-
-
-def _maybe_get_sample_weight(labels: pd.Series, params: StrategyInput) -> np.ndarray | None:
-    """Return sample weight for imbalance handling (balanced or focal)."""
-    # Triple-barrier 默认启用 balanced，除非显式禁用
-    default_mode = "balanced" if getattr(params, "label_style", "direction") == "triple_barrier" else "none"
-    mode = str(getattr(params, "class_weight_mode", default_mode)).lower()
-    if mode == "balanced":
-        return _balanced_sample_weight(labels)
-    if mode == "focal":
-        try:
-            gamma = float(getattr(params, "focal_gamma", 2.0))
-        except Exception:
-            gamma = 2.0
-        counts = labels.value_counts()
-        total = counts.sum()
-        weights = labels.map(lambda x: (1 - counts.get(x, 0) / max(total, 1)) ** gamma)
-        return weights.to_numpy(dtype=float)
-    return None
 
 
 def _summarize_multiclass_accuracy(target: pd.Series, pred: pd.Series) -> dict[str, Any]:
@@ -3551,7 +2187,7 @@ def _generate_validation_report(
         exposure = pd.Series(signal, index=test_slice.index, dtype=float).shift(fill_value=0.0)
         turnover = exposure.diff().abs().fillna(exposure.abs())
         pnl = exposure * test_slice["future_return"].fillna(0.0) - turnover * cost_rate
-        metrics = _compute_validation_metrics(pnl)
+        metrics = compute_validation_metrics(pnl)
         metrics.update(
             {
                 "fold": fold_idx + 1,
@@ -3567,7 +2203,7 @@ def _generate_validation_report(
             break
     if not slices:
         return None
-    summary = _aggregate_oos_metrics(slices)
+    summary = aggregate_oos_metrics(slices)
     penalized = None
     sharpe_stats = summary.get("sharpe")
     if isinstance(sharpe_stats, dict):
@@ -3581,50 +2217,6 @@ def _generate_validation_report(
         "embargo": params.embargo_days,
         "penalized_sharpe": penalized,
     }
-
-
-def _aggregate_oos_metrics(slices: list[dict[str, Any]]) -> dict[str, Any]:
-    summary: dict[str, Any] = {}
-    if not slices:
-        return summary
-    for key in ("sharpe", "cagr", "max_drawdown", "hit_ratio"):
-        values = [float(entry.get(key, 0.0)) for entry in slices if entry.get(key) is not None]
-        if not values:
-            continue
-        arr = np.array(values, dtype=float)
-        q1, q3 = np.percentile(arr, [25, 75])
-        summary[key] = {
-            "mean": float(arr.mean()),
-            "std": float(arr.std(ddof=0)),
-            "iqr": float(q3 - q1),
-            "min": float(arr.min()),
-            "max": float(arr.max()),
-            "median": float(np.median(arr)),
-        }
-    return summary
-
-
-def _build_oos_boxplot(distributions: dict[str, list[float]], title: str) -> str | None:
-    """Create a simple boxplot (base64) for OOS metrics."""
-    try:
-        metrics = []
-        labels = []
-        for key, values in distributions.items():
-            if not values:
-                continue
-            metrics.append(values)
-            labels.append(key.upper())
-        if not metrics:
-            return None
-        fig, ax = plt.subplots(figsize=(6, 4))
-        ax.boxplot(metrics, tick_labels=labels, patch_artist=True, boxprops=dict(facecolor="#93c5fd", alpha=0.7))
-        ax.set_title(title)
-        ax.grid(axis="y", alpha=0.2)
-        return fig_to_base64(fig)
-    except Exception:
-        return None
-
-
 def run_ml_backtest(
     prices: pd.DataFrame,
     params: StrategyInput,
@@ -3828,7 +2420,7 @@ def run_ml_backtest(
                 except Exception:
                     pass
             val_ret = val_slice["future_return"].fillna(0.0)
-            e_opt, x_opt = _tune_thresholds_on_validation(
+            e_opt, x_opt = tune_thresholds_on_validation(
                 val_proba,
                 val_ret,
                 cost_rate,
@@ -3879,7 +2471,7 @@ def run_ml_backtest(
         exposure_fold = pd.Series(signal_fold, index=test_slice.index, dtype=float).shift(fill_value=0.0)
         turnover = exposure_fold.diff().abs().fillna(exposure_fold.abs())
         pnl_fold = exposure_fold * test_slice["future_return"].fillna(0.0) - turnover * cost_rate
-        fold_metrics = _compute_validation_metrics(pnl_fold)
+        fold_metrics = compute_validation_metrics(pnl_fold)
         fold_metrics.update(
             {
                 "fold": fold_idx + 1,
@@ -3925,7 +2517,7 @@ def run_ml_backtest(
     if not validation_slices:
         raise QuantStrategyError("PFWS 样本外预测不足，无法完成回测，请调整窗口或延长历史区间。")
 
-    summary_oos = _aggregate_oos_metrics(validation_slices)
+    summary_oos = aggregate_oos_metrics(validation_slices)
     penalized = None
     sharpe_stats = summary_oos.get("sharpe")
     if isinstance(sharpe_stats, dict):
@@ -3944,7 +2536,7 @@ def run_ml_backtest(
         },
     }
     # 可视化：OOS 箱线/均值±std 图（base64）
-    oos_chart = _build_oos_boxplot(validation_report["distributions"], "PFWS OOS 统计箱线图")
+    oos_chart = build_oos_boxplot(validation_report["distributions"], "PFWS OOS 统计箱线图")
     if oos_chart:
         validation_report["chart"] = oos_chart
 
@@ -3991,10 +2583,10 @@ def run_ml_backtest(
                 stats["tb_prf"] = {
                     "per_class": per_class,
                     "macro": {"precision": macro_prec, "recall": macro_rec, "f1": macro_f1},
-                }
+            }
             calib_chart = None
             if stats.get("calibration"):
-                calib_chart = _build_calibration_plot(stats["calibration"])
+                calib_chart = build_calibration_plot(stats["calibration"])
             if calib_chart:
                 stats["calibration_chart"] = calib_chart
         except Exception:
@@ -4113,7 +2705,7 @@ def run_ml_backtest(
         feature_columns=list(feature_columns),
         shap_img=shap_img,
     )
-    threshold_scan = _scan_threshold_stability(
+    threshold_scan = scan_threshold_stability(
         probabilities,
         dataset["future_return"],
         cost_rate=(params.transaction_cost_bps + params.slippage_bps) / 10000.0,
@@ -4122,7 +2714,7 @@ def run_ml_backtest(
     )
     if threshold_scan:
         stats["threshold_scan"] = threshold_scan
-        heatmap = _build_threshold_heatmap(threshold_scan)
+        heatmap = build_threshold_heatmap(threshold_scan)
         if heatmap:
             stats["threshold_scan_chart"] = heatmap
     stats["cost_assumptions"] = {
@@ -4136,7 +2728,7 @@ def run_ml_backtest(
     # 概率校准可视化
     if stats.get("calibration") and "calibration_chart" not in stats:
         try:
-            chart = _build_calibration_plot(stats["calibration"])
+            chart = build_calibration_plot(stats["calibration"])
             if chart:
                 stats["calibration_chart"] = chart
         except Exception:
@@ -4372,7 +2964,7 @@ def run_rl_policy_backtest(
     oos_report = _compute_oos_from_backtest(rl_backtest, params)
     if not oos_report:
         # 回退：使用整段序列作为简易 OOS 统计，确保字段存在
-        vm = _compute_validation_metrics(rl_backtest["strategy_return"].fillna(0.0))
+        vm = compute_validation_metrics(rl_backtest["strategy_return"].fillna(0.0))
         oos_report = {
             "slices": [
                 {
@@ -4382,7 +2974,7 @@ def run_rl_policy_backtest(
                     "test_end": str(rl_backtest.index[-1].date()) if len(rl_backtest.index) else "",
                 }
             ],
-            "summary": _aggregate_oos_metrics([vm]),
+            "summary": aggregate_oos_metrics([vm]),
             "folds": 1,
             "penalized_sharpe": vm.get("sharpe", 0.0) - 0.0,
             "train_window": params.train_window,
