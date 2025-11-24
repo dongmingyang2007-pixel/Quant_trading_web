@@ -1876,15 +1876,29 @@ window.addEventListener('load', () => {
         signalsByTime.get(key).push(signal);
     });
     if (signals.length) {
-        candleSeries.setMarkers(
-            signals.map((signal) => ({
-                time: signal.time,
-                position: signal.type === 'buy' ? 'belowBar' : 'aboveBar',
-                color: signal.type === 'buy' ? '#16a34a' : '#dc2626',
-                shape: signal.type === 'buy' ? 'arrowUp' : 'arrowDown',
-                text: signal.type === 'buy' ? 'B' : 'S',
-            })),
-        );
+        // 聚合同一天多笔成交，避免多个图标挤在一起导致文字被遮挡
+        const markerBuckets = new Map();
+        signals.forEach((signal) => {
+            const bucket = markerBuckets.get(signal.time) || { time: signal.time, buys: [], sells: [] };
+            if (signal.type === 'buy') bucket.buys.push(signal);
+            else bucket.sells.push(signal);
+            markerBuckets.set(signal.time, bucket);
+        });
+        const markers = [];
+        markerBuckets.forEach((bucket) => {
+            // 仅保留卖出标记，买入箭头已取消显示，鼠标点击仍可查看对应交易详情
+            if (bucket.sells.length) {
+                markers.push({
+                    time: bucket.time,
+                    position: 'aboveBar',
+                    shape: 'arrowDown',
+                    color: '#dc2626',
+                    size: bucket.sells.length > 1 ? 3 : 2,
+                });
+            }
+        });
+        markers.sort((a, b) => (a.time > b.time ? 1 : a.time < b.time ? -1 : 0));
+        candleSeries.setMarkers(markers);
         displayTradeInfo([signals[signals.length - 1]]);
     } else {
         displayTradeInfo(null);

@@ -10,6 +10,7 @@ from .indicators import *  # noqa: F401,F403
 from .risk import *  # noqa: F401,F403
 from .ma_cross import *  # noqa: F401,F403
 from .ml_engine import *  # noqa: F401,F403
+from .charts import *  # noqa: F401,F403
 from .core import *  # noqa: F401,F403
 
 __all__ = [name for name in globals().keys() if not name.startswith("_")]

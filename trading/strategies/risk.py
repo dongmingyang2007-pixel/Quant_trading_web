@@ -152,6 +152,32 @@ def enforce_risk_limits(
     return exposure_series, events
 
 
+def apply_signal_filters(
+    dataset: pd.DataFrame,
+    raw_signal: pd.Series,
+    probabilities: pd.Series,
+    params: StrategyInput,
+) -> pd.Series:
+    """应用趋势、RSI 过滤及最小持仓规则，生成最终信号。"""
+    filtered = raw_signal.copy()
+    filtered = filtered.reindex(dataset.index).fillna(0.0)
+    probs = probabilities.reindex(dataset.index).fillna(0.5)
+
+    trend_long = dataset["sma_short"] > dataset["sma_long"]
+    trend_short = dataset["sma_short"] < dataset["sma_long"]
+
+    filtered = filtered.where(~((filtered > 0) & (~trend_long)), 0.0)
+    filtered = filtered.where(~((filtered < 0) & (~trend_short)), 0.0)
+
+    overbought = dataset["rsi"] > 75
+    oversold = dataset["rsi"] < 25
+    filtered = filtered.mask((filtered > 0) & overbought & (probs < 0.7), other=0.0)
+    filtered = filtered.mask((filtered < 0) & oversold & (probs > 0.3), other=0.0)
+
+    constrained = enforce_min_holding(filtered, params.min_holding_days, probs)
+    return constrained
+
+
 def calculate_max_drawdown(cumulative_returns: pd.Series) -> float:
     """计算最大回撤。"""
     rolling_max = cumulative_returns.cummax()
@@ -167,6 +193,7 @@ def calculate_drawdown_series(cumulative_returns: pd.Series) -> pd.Series:
 
 __all__ = [
     "apply_vol_targeting",
+    "apply_signal_filters",
     "calculate_drawdown_series",
     "calculate_max_drawdown",
     "calculate_target_leverage",
