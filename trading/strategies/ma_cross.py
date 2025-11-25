@@ -69,6 +69,21 @@ def backtest_sma_strategy(
         pd.Series(backtest["signal"], index=backtest.index), params.min_holding_days
     )
 
+    # Skip trading on ultra-illiquid days (e.g., near-zero ADV or zero volume)
+    liquidity_blocks = 0
+    try:
+        adv_series = backtest["adv"].fillna(0.0) if "adv" in backtest else pd.Series(0.0, index=backtest.index)
+        vol_series = backtest["volume"].fillna(0.0) if "volume" in backtest else pd.Series(0.0, index=backtest.index)
+        adv_median = float(adv_series.median())
+        if adv_median > 0:
+            floor = adv_median * 0.1
+            illiquid_mask = (adv_series < floor) | (vol_series <= 0)
+            liquidity_blocks = int(illiquid_mask.sum())
+            if liquidity_blocks:
+                backtest.loc[illiquid_mask, ["signal", "position"]] = 0.0
+    except Exception:
+        liquidity_blocks = 0
+
     asset_returns = _compute_asset_returns(backtest, params)
     backtest["asset_return"] = asset_returns
     backtest["volatility"] = asset_returns.rolling(window=20).std().fillna(0.0) * np.sqrt(252)
@@ -90,8 +105,10 @@ def backtest_sma_strategy(
     cost_rate = (params.transaction_cost_bps + params.slippage_bps) / 10000.0
     # ADV 参与率约束
     adv_hits = 0
+    adv_participation = None
     if "adv" in backtest and backtest["adv"].notna().any():
         max_part = max(0.0, min(1.0, params.max_adv_participation or 0.1))
+        adv_participation = max_part
         adv_limit = backtest["adv"].fillna(0.0) * max_part
         mask = backtest["exposure"].abs() > adv_limit
         adv_hits = int(mask.sum())
@@ -147,11 +164,15 @@ def backtest_sma_strategy(
         "adv_participation": params.max_adv_participation,
         "execution_mode": params.execution_mode,
     }
+    stats["liquidity_blocks"] = liquidity_blocks
     aggregate_events = []
     if overlay_events:
         aggregate_events.extend(overlay_events)
     if adv_hits > 0:
-        aggregate_events.append(f"因 ADV 参与率上限({params.max_adv_participation:.0%}) 清零 {adv_hits} 次仓位，避免不可成交。")
+        participation = adv_participation if adv_participation is not None else (params.max_adv_participation or 0.1)
+        aggregate_events.append(f"因 ADV 参与率上限({participation:.0%}) 清零 {adv_hits} 次仓位，避免不可成交。")
+    if liquidity_blocks > 0:
+        aggregate_events.append(f"因成交额过低/停牌跳过 {liquidity_blocks} 个交易日的信号。")
     aggregate_events.extend(execution_events)
     oos_report = compute_oos_report(backtest, params) if compute_oos_report else None
     if oos_report:

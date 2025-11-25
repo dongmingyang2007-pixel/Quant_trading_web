@@ -42,6 +42,8 @@ from .metrics import compute_validation_metrics, aggregate_oos_metrics, build_oo
 from ..optimization import PurgedWalkForwardSplit, _build_classifier
 from ..ml_models import build_custom_sequence_model
 from ..observability import record_metric
+from ..validation import compute_cpcv_report, build_stress_report, compute_psi
+from .risk import calculate_max_drawdown
 
 
 def _calibration_summary(probs: pd.Series, labels: pd.Series, bins: int = 10) -> dict[str, Any]:
@@ -374,6 +376,62 @@ def tune_thresholds_on_validation(
         if score > best[0]:
             best = (score, e, x)
     return float(best[1]), float(best[2])
+
+
+def _apply_execution_model(
+    exposure: pd.Series,
+    prices: pd.Series,
+    adv: pd.Series | None,
+    params: StrategyInput,
+) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, dict[str, float]]:
+    """
+    近似分时 VWAP + 参与率冲击 + 部分成交：
+    - 基础点差/滑点：用 ATR_pct 或设定 bps。
+    - 参与率冲击：turnover / (ADV * participation)，超出则部分成交，未成交部分不计入持仓。
+    - 返回调整后的净持仓、交易成本、执行成本、成交覆盖率等。
+    """
+    base_exposure = exposure.fillna(0.0)
+    price = prices.reindex(base_exposure.index).ffill().bfill()
+    adv_series = adv.reindex(base_exposure.index).ffill().fillna(0.0) if adv is not None else pd.Series(0.0, index=base_exposure.index)
+
+    # 参与率与点差基线
+    participation = max(0.01, min(0.5, params.max_adv_participation or 0.1))
+    atr_pct = price.pct_change().abs().rolling(14, min_periods=5).mean().fillna(0.0)
+    spread_bps = (atr_pct * 1e4).clip(lower=2.0, upper=50.0)  # 动态点差区间
+    turnover = base_exposure.diff().abs().fillna(base_exposure.abs())
+    capacity = adv_series * participation
+    # 避免除零
+    impact = turnover / capacity.replace(0, np.nan)
+    impact = impact.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    # 填充率：越高的冲击越低，限制在 [0,1]
+    fill_prob = np.exp(-impact.clip(0, 10))
+    filled_turnover = turnover * fill_prob
+    unfilled = turnover - filled_turnover
+
+    # 成本拆分
+    slip_rate = (spread_bps / 1e4) + (impact * (params.execution_penalty_bps or 5) / 1e4)
+    execution_cost = filled_turnover * slip_rate
+    transaction_cost = filled_turnover * (params.transaction_cost_bps / 10000.0 if hasattr(params, "transaction_cost_bps") else 0.0)
+
+    # 应用部分成交后的持仓路径
+    adjusted_exposure = base_exposure.copy()
+    if filled_turnover.notna().any():
+        deltas = adjusted_exposure.diff().fillna(adjusted_exposure)
+        scaled_deltas = deltas * fill_prob
+        adjusted_exposure = scaled_deltas.cumsum()
+
+    coverage = filled_turnover / turnover.replace(0, np.nan)
+    coverage = coverage.replace([np.inf, -np.inf], np.nan).fillna(1.0)
+
+    stats = {
+        "avg_coverage": float(coverage.mean()) if not coverage.empty else 1.0,
+        "median_coverage": float(coverage.median()) if not coverage.empty else 1.0,
+        "unfilled_ratio": float(unfilled.sum() / turnover.sum()) if turnover.sum() else 0.0,
+        "avg_impact": float(impact.mean()) if not impact.empty else 0.0,
+        "avg_spread_bps": float(spread_bps.mean()) if not spread_bps.empty else 0.0,
+    }
+    return adjusted_exposure, transaction_cost, execution_cost, coverage, stats
 
 
 def scan_threshold_stability(
@@ -831,6 +889,23 @@ def run_ml_backtest(
     probabilities = pfws_proba.combine_first(probabilities)
     raw_signal = pfws_signal.combine_first(raw_signal)
 
+    # Liquidity guard: skip signals on ultra-low ADV or zero volume days
+    liquidity_blocks = 0
+    try:
+        adv_series = dataset["adv"].fillna(0.0) if "adv" in dataset else pd.Series(0.0, index=dataset.index)
+        vol_series = dataset["volume"].fillna(0.0) if "volume" in dataset else pd.Series(0.0, index=dataset.index)
+        adv_median = float(adv_series.median())
+        if adv_median > 0:
+            floor = adv_median * 0.1
+            illiquid_mask = (adv_series < floor) | (vol_series <= 0)
+            liquidity_blocks = int(illiquid_mask.sum())
+            if liquidity_blocks:
+                dataset.loc[illiquid_mask, "signal"] = 0.0
+                raw_signal.loc[illiquid_mask] = 0.0
+                probabilities.loc[illiquid_mask] = probabilities.loc[illiquid_mask]
+    except Exception:
+        liquidity_blocks = 0
+
     threshold_scan = scan_threshold_stability(
         probabilities.dropna(),
         dataset["future_return"],
@@ -847,9 +922,59 @@ def run_ml_backtest(
         df_for_backtest = dataset.copy()
         df_for_backtest["position"] = raw_signal.reindex(dataset.index).fillna(0.0)
 
+    # Construct PnL with交易成本/借贷成本/流动性约束
+    exposure = df_for_backtest["position"].astype(float).fillna(0.0)
+    adv_hits = 0
+    adv_participation = None
+    if "adv" in df_for_backtest and df_for_backtest["adv"].notna().any():
+        adv_participation = max(0.0, min(1.0, params.max_adv_participation or 0.1))
+        adv_limit = df_for_backtest["adv"].fillna(0.0) * adv_participation
+        mask = exposure.abs() > adv_limit
+        adv_hits = int(mask.sum())
+        if adv_hits > 0:
+            exposure = exposure.where(~mask, 0.0)
+
+    adjusted_exposure, txn_cost, exec_cost, coverage, exec_stats = _apply_execution_model(
+        exposure,
+        df_for_backtest["adj close"] if "adj close" in df_for_backtest else df_for_backtest["future_return"].fillna(0.0).cumsum(),
+        df_for_backtest["adv"] if "adv" in df_for_backtest else None,
+        params,
+    )
+    long_daily = float(params.long_borrow_cost_bps or params.borrow_cost_bps) / 10000.0 / 252.0
+    short_daily = float(params.short_borrow_cost_bps or params.borrow_cost_bps) / 10000.0 / 252.0
+    borrow_cost = adjusted_exposure.clip(lower=0.0) * long_daily + (-adjusted_exposure.clip(upper=0.0)) * short_daily
+    strategy_return_gross = df_for_backtest["future_return"].fillna(0.0) * adjusted_exposure.shift(fill_value=0.0)
+    df_for_backtest["position"] = adjusted_exposure
+    df_for_backtest["exposure"] = adjusted_exposure
+    df_for_backtest["transaction_cost"] = txn_cost
+    df_for_backtest["execution_cost"] = exec_cost
+    df_for_backtest["borrow_cost"] = borrow_cost
+    df_for_backtest["strategy_return_gross"] = strategy_return_gross
+    df_for_backtest["strategy_return"] = strategy_return_gross - txn_cost - exec_cost - borrow_cost
+    df_for_backtest["cum_strategy"] = (1 + df_for_backtest["strategy_return"]).cumprod()
+    df_for_backtest["cum_buy_hold"] = (1 + df_for_backtest["future_return"].fillna(0.0)).cumprod()
+    df_for_backtest["leverage"] = 1.0
+
+    perf_total = float(df_for_backtest["cum_strategy"].iloc[-1] - 1) if not df_for_backtest.empty else 0.0
+    ret_series = df_for_backtest["strategy_return"].fillna(0.0)
+    vol_ann = float(ret_series.std() * math.sqrt(252)) if not ret_series.empty else 0.0
+    sharpe = float((ret_series.mean() * 252) / (ret_series.std() * math.sqrt(252) + 1e-12)) if not ret_series.empty else 0.0
+    mdd = calculate_max_drawdown(df_for_backtest["cum_strategy"]) if not df_for_backtest.empty else 0.0
+
     calibration = _calibration_summary(probabilities, dataset["target"])
     calibration_plot = build_calibration_plot(calibration) if calibration else None
 
+    returns_series = df_for_backtest.get("strategy_return")
+    cpcv = compute_cpcv_report(returns_series)
+    stress_report = build_stress_report(returns_series)
+    psi_ret = 0.0
+    psi_proba = 0.0
+    if returns_series is not None and not returns_series.dropna().empty:
+        mid = len(returns_series) // 2
+        psi_ret = compute_psi(returns_series.iloc[:mid], returns_series.iloc[mid:])
+    if probabilities is not None and not probabilities.dropna().empty:
+        mid_p = len(probabilities) // 2
+        psi_proba = compute_psi(probabilities.iloc[:mid_p], probabilities.iloc[mid_p:])
     stats: dict[str, Any] = {
         "validation_report": validation_report,
         "validation_oos_summary": summary_oos,
@@ -862,7 +987,85 @@ def run_ml_backtest(
         "threshold_heatmap": heatmap,
         "runtime_warnings": model_warnings,
         "hyperopt": hyperopt_report,
+        "total_return": perf_total,
+        "volatility": vol_ann,
+        "sharpe": sharpe,
+        "max_drawdown": mdd,
+        "execution": {
+            **exec_stats,
+            "exec_cost_total": float(exec_cost.sum()) if "exec_cost" in locals() else 0.0,
+            "txn_cost_total": float(txn_cost.sum()) if "txn_cost" in locals() else 0.0,
+        },
+        "cpcv": cpcv or {},
+        "stress_test": stress_report or {},
+        "drift": {"psi_returns": psi_ret, "psi_probabilities": psi_proba},
     }
+    # 阈值敏感度：记录分布，若极端差则提示
+    if threshold_scan:
+        stability = {
+            "mean_sharpe": threshold_scan.get("mean_sharpe"),
+            "median_sharpe": threshold_scan.get("median_sharpe"),
+            "iqr_sharpe": threshold_scan.get("iqr_sharpe"),
+            "best": threshold_scan.get("best"),
+            "worst": threshold_scan.get("worst"),
+        }
+        stats["threshold_stability"] = stability
+        try:
+            best_s = float((threshold_scan.get("best") or {}).get("sharpe") or 0.0)
+            worst_s = float((threshold_scan.get("worst") or {}).get("sharpe") or 0.0)
+            if worst_s < 0 and best_s > 0 and (best_s - worst_s) > abs(best_s) * 0.8:
+                stats.setdefault("risk_events", []).append("阈值敏感度高：最佳/最差 Sharpe 差异显著，建议收紧阈值或降低杠杆。")
+        except Exception:
+            pass
+    if adv_hits:
+        stats.setdefault("risk_events", [])
+        stats["risk_events"].append(f"因 ADV 参与率上限({(adv_participation or 0.1):.0%}) 清零 {adv_hits} 次 ML 仓位，避免不可成交。")
+        stats["adv_hits"] = adv_hits
+    if liquidity_blocks:
+        stats.setdefault("risk_events", [])
+        stats["risk_events"].append(f"因成交额过低/停牌，跳过 {liquidity_blocks} 个交易日的 ML 信号。")
+        stats["liquidity_blocks"] = liquidity_blocks
+    if cpcv:
+        worst = cpcv.get("worst_sharpe")
+        p10 = cpcv.get("p10_sharpe")
+        if worst is not None and worst < 0:
+            stats.setdefault("risk_events", []).append(f"CPCV 最差 Sharpe={worst:.2f}，提示策略在部分分段失效。")
+        if p10 is not None and p10 < 0.2:
+            stats.setdefault("risk_events", []).append(f"CPCV 10% 分位 Sharpe={p10:.2f}，建议收紧阈值/降杠杆。")
+    if exec_stats:
+        coverage = exec_stats.get("avg_coverage")
+        if coverage is not None and coverage < 0.7:
+            stats.setdefault("risk_events", []).append(f"执行覆盖率偏低（{coverage:.0%}），建议降低参与率或放宽成交假设。")
+    if stress_report:
+        worst_mdd = stress_report.get("worst_mdd")
+        worst_sharpe = stress_report.get("worst_sharpe")
+        if worst_mdd is not None and worst_mdd < -0.25:
+            stats.setdefault("risk_events", []).append(f"压力测试最差回撤 {worst_mdd:.1%}，需关注极端行情下的仓位韧性。")
+        if worst_sharpe is not None and worst_sharpe < 0:
+            stats.setdefault("risk_events", []).append(f"压力测试最差 Sharpe={worst_sharpe:.2f}，建议降杠杆或收紧阈值。")
+    if psi_ret > 0.25 or psi_proba > 0.25:
+        stats.setdefault("risk_events", []).append(f"检测到分布漂移（PSI: returns={psi_ret:.2f}, prob={psi_proba:.2f}），建议降杠杆或重新训练。")
+
+    # 根据稳健性/漂移/执行给出自动降风险系数
+    safety = 1.0
+    safety_reasons: list[str] = []
+    coverage = exec_stats.get("avg_coverage") if exec_stats else None
+    if coverage is not None and coverage < 0.7:
+        safety *= 0.8
+        safety_reasons.append(f"执行覆盖率 {coverage:.0%} 低")
+    if psi_ret > 0.25 or psi_proba > 0.25:
+        safety *= 0.85
+        safety_reasons.append(f"PSI 漂移 returns={psi_ret:.2f}, prob={psi_proba:.2f}")
+    if stress_report and stress_report.get("worst_mdd", 0) < -0.25:
+        safety *= 0.75
+        safety_reasons.append(f"压力回撤 {stress_report.get('worst_mdd'):.1%}")
+    if cpcv and cpcv.get("worst_sharpe", 1) < 0:
+        safety *= 0.8
+        safety_reasons.append(f"CPCV 最差 Sharpe {cpcv.get('worst_sharpe'):.2f}")
+    safety = max(0.3, min(1.0, safety))
+    stats["safety_multiplier"] = safety
+    stats["safety_reasons"] = safety_reasons
+
     record_metric("ml_backtest_completed", engine=params.ml_model, tuned=bool(params.optimize_thresholds))
     metrics: list[dict[str, Any]] = []
     return df_for_backtest, metrics, stats

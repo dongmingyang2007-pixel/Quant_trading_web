@@ -67,6 +67,10 @@
     const signalLabels = lang.startsWith("zh")
       ? { fresh: "新信号", fallback_cached: "回退信号", light_cached: "快速缓存", failure: "失败", unknown: "未知" }
       : { fresh: "Fresh", fallback_cached: "Fallback", light_cached: "Light cached", failure: "Failure", unknown: "Unknown" };
+    const lastSkip = session.last_skip || null;
+    const skipLabels = lang.startsWith("zh")
+      ? { illiquid: "因流动性跳过", quote_unavailable: "行情缺失跳过", other: "已跳过" }
+      : { illiquid: "Skipped (illiquid)", quote_unavailable: "Skipped (no quote)", other: "Skipped" };
 
     const positions = session.positions || {};
     const posList = Object.keys(positions).length
@@ -115,6 +119,12 @@
         <div class="paper-detail-box">
           <div class="fw-semibold">${lang.startsWith("zh") ? "最近成交" : "Last trade"}</div>
           <div class="text-muted small">${formatTs(session.last_trade_at)}</div>
+        </div>
+        <div class="paper-detail-box">
+          <div class="fw-semibold">${lang.startsWith("zh") ? "最近跳过" : "Last skip"}</div>
+          <div class="text-muted small">
+            ${lastSkip ? `${skipLabels[lastSkip.reason] || skipLabels.other} · ${formatTs(lastSkip.at)}` : (lang.startsWith("zh") ? "暂无" : "None")}
+          </div>
         </div>
         <div class="paper-detail-box">
           <div class="fw-semibold">${lang.startsWith("zh") ? "信号来源" : "Signal source"}</div>

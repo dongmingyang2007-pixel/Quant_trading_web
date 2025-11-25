@@ -54,6 +54,14 @@ def sanitize_price_history(prices: pd.DataFrame) -> tuple[pd.DataFrame, DataQual
         return prices, report
 
     clean = prices.copy().sort_index()
+    # Normalize timezone to UTC-naive to avoid duplicated dates when upstream mixes TZs
+    try:
+        if hasattr(clean.index, "tz") and clean.index.tz is not None:
+            clean.index = clean.index.tz_convert("UTC").tz_localize(None)
+            report.extend_notes("已将含时区的时间索引统一到 UTC，避免跨时区重复/缺口。")
+    except Exception:
+        # Safe-guard for non-datetime indexes
+        pass
 
     duplicated = int(clean.index.duplicated().sum())
     if duplicated:
@@ -94,6 +102,30 @@ def sanitize_price_history(prices: pd.DataFrame) -> tuple[pd.DataFrame, DataQual
     rolling_std = clean["adj close"].rolling(64, min_periods=20).std().replace(0, np.nan)
     clean["price_z"] = ((clean["adj close"] - rolling_mean) / rolling_std).fillna(0.0)
     clean["adv"] = (clean["volume"] * clean["adj close"]).rolling(20, min_periods=5).mean()
+
+    # Flag stale prices (no change) to warn about halts/illiquidity without mutating data
+    try:
+        flat_diff = clean["adj close"].diff().abs()
+        change_groups = (flat_diff >= 1e-9).astype(int).cumsum()
+        flat_runs = (flat_diff < 1e-9).astype(int).groupby(change_groups).cumsum()
+        max_flat = int(flat_runs.max() or 0)
+        if max_flat >= 5:
+            report.extend_notes(f"发现最长 {max_flat} 天价格无变动，可能存在停牌或极度缺乏流动性。")
+    except Exception:
+        pass
+
+    # Liquidity health note: share how many days sit near the bottom of ADV distribution
+    try:
+        adv = clean["adv"].dropna()
+        if not adv.empty:
+            median_adv = float(adv.median())
+            if median_adv > 0:
+                low_adv_mask = adv < median_adv * 0.1
+                low_adv_ratio = low_adv_mask.mean()
+                if low_adv_ratio > 0.05:
+                    report.extend_notes(f"约 {low_adv_ratio*100:.1f}% 的交易日成交额低于中位数的 10%，信号可靠性可能受限。")
+    except Exception:
+        pass
 
     return clean, report
 

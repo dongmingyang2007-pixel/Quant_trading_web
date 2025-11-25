@@ -88,6 +88,17 @@ def _extract_last_signal(config: dict[str, Any] | None) -> tuple[str | None, str
     return last.get("source"), last.get("at")
 
 
+def _record_skip(session: PaperTradingSession, reason: str, payload: dict[str, Any] | None = None) -> None:
+    """Persist the latest跳过原因，便于前端展示。"""
+    cfg = dict(session.config or {})
+    cfg["__last_skip"] = {
+        "reason": reason,
+        "at": timezone.now().isoformat(),
+        **(payload or {}),
+    }
+    PaperTradingSession.objects.filter(pk=session.pk).update(config=cfg, updated_at=timezone.now())
+
+
 def _apply_risk_guard(weight: float, stats: dict[str, Any] | None, confidence: float | None) -> tuple[float, dict[str, Any] | None]:
     """Downscale target weight based on volatility/VaR/confidence."""
     if stats is None:
@@ -189,7 +200,15 @@ def _extract_quote_from_cache(ticker: str, interval: str, cache: dict[str, objec
                 ts = ts.to_pydatetime()
             except Exception:
                 pass
-            return {"price": price, "as_of": ts}
+            quote: dict[str, object] = {"price": price, "as_of": ts}
+            if "Volume" in data.columns:
+                vol = data["Volume"].fillna(0)
+                adv = (vol * series).rolling(20, min_periods=5).mean()
+                if not adv.empty:
+                    quote["adv"] = float(adv.iloc[-1])
+                    quote["adv_median"] = float(adv.median())
+                    quote["volume"] = float(vol.iloc[-1])
+            return quote
         except Exception:
             return {}
     return {}
@@ -376,6 +395,7 @@ def process_session(
     price = quote.get("price")
     if price is None:
         record_metric("paper_session_skipped", session_id=str(session.session_id), reason="quote_unavailable")
+        _record_skip(session, "quote_unavailable")
         return {"skipped": True, "reason": "quote_unavailable"}
     as_of = quote.get("as_of") or now
     if isinstance(as_of, str):
@@ -385,6 +405,25 @@ def process_session(
             as_of = now
     if timezone.is_naive(as_of):
         as_of = timezone.make_aware(as_of, timezone.get_current_timezone())
+
+    # Liquidity guard: skip rebalance when latest ADV is extremely low to avoid unrealistic fills
+    try:
+        adv = float(quote.get("adv") or 0.0)
+        adv_median = float(quote.get("adv_median") or 0.0)
+        volume = float(quote.get("volume") or 0.0)
+    except Exception:
+        adv = adv_median = volume = 0.0
+    if adv_median > 0 and (adv <= adv_median * 0.1 or volume <= 0):
+        record_metric(
+            "paper_session_skipped",
+            session_id=str(session.session_id),
+            reason="illiquid",
+            adv=adv,
+            adv_median=adv_median,
+            volume=volume,
+        )
+        _record_skip(session, "illiquid", {"adv": adv, "adv_median": adv_median, "volume": volume})
+        return {"skipped": True, "reason": "illiquid", "adv": adv, "adv_median": adv_median, "volume": volume}
 
     with transaction.atomic():
         locked = PaperTradingSession.objects.select_for_update().get(pk=session.pk)
@@ -528,6 +567,7 @@ def run_pending_sessions(limit: int = 20, price_cache: dict[str, object] | None 
 def serialize_session(session: PaperTradingSession, *, include_details: bool = False, trades_limit: int = 20) -> dict[str, Any]:
     sig_source, sig_at = _extract_last_signal(session.config or {})
     last_signal = (session.config or {}).get("__last_signal") or {}
+    last_skip = (session.config or {}).get("__last_skip") or {}
     payload = {
         "session_id": str(session.session_id),
         "name": session.name,
@@ -548,6 +588,7 @@ def serialize_session(session: PaperTradingSession, *, include_details: bool = F
         "last_signal_at": sig_at,
         "signal_confidence": last_signal.get("confidence"),
         "risk_guard": last_signal.get("risk_guard"),
+        "last_skip": last_skip or None,
     }
     if include_details:
         curve = session.equity_curve or []
