@@ -45,7 +45,7 @@ from .metrics import build_core_metrics, build_metric, format_percentage
 from .risk import calculate_drawdown_series, calculate_max_drawdown
 from .config import StrategyOutcome, StrategyInput, QuantStrategyError, DEFAULT_STRATEGY_SEED
 from .indicators import compute_indicators
-from .ma_cross import apply_execution_model, backtest_sma_strategy, format_table
+from .ma_cross import backtest_sma_strategy, format_table
 from .ml_engine import (
     _calibration_summary,
     build_calibration_plot,
@@ -62,6 +62,12 @@ from ..optimization import PurgedWalkForwardSplit
 from .charts import build_interactive_chart_payload, generate_charts
 from .store import DATA_CACHE_DIR
 from .risk import apply_signal_filters, apply_vol_targeting, calculate_target_leverage, enforce_risk_limits
+from ..portfolio import (
+    apply_sector_caps,
+    build_target_weights,
+    build_trade_list,
+    cap_turnover,
+)
 from .metrics import (
     calculate_avg_gain_loss,
     calculate_beta,
@@ -270,37 +276,160 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
     charts = generate_charts(prices, backtest, benchmark_series, params) if params.include_plots else []
     if params.include_plots and stats.get("shap_img"):
         charts.append({"title": "特征重要性（SHAP）", "img": stats.get("shap_img")})
-    recommendations = generate_recommendations(stats, benchmark_stats, params, market_context)
-    related_portfolios = build_related_portfolios(params, market_context, params.capital)
-    key_takeaways = build_key_takeaways(stats, benchmark_stats, params)
-    user_guidance = build_user_guidance(stats, benchmark_stats, params)
-    advanced_research = build_flagship_research_bundle(
-        params=params, prices=prices, backtest=backtest, stats=stats, benchmark_stats=benchmark_stats, market_context=market_context or {}, combo_details=combo_details
+
+    def _safe_call(label: str, default: Any, func, *args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as exc:
+            warnings.append(f"{label} 生成失败：{exc}")
+            return default
+
+    recommendations = _safe_call("投资建议", [], generate_recommendations, stats, benchmark_stats, params, market_context)
+    related_portfolios = _safe_call("相关组合", [], build_related_portfolios, params, market_context, params.capital)
+    key_takeaways = _safe_call("关键结论", [], build_key_takeaways, stats, benchmark_stats, params)
+    user_guidance = _safe_call("用户指引", {}, build_user_guidance, stats, benchmark_stats, params)
+    advanced_research = _safe_call(
+        "旗舰研究摘要",
+        {},
+        build_flagship_research_bundle,
+        params=params,
+        prices=prices,
+        backtest=backtest,
+        stats=stats,
+        benchmark_stats=benchmark_stats,
+        market_context=market_context or {},
+        combo_details=combo_details,
     )
     try:
         feature_dataset_for_analysis, feature_columns_for_analysis = build_feature_matrix(prices, params)
     except Exception:
         feature_dataset_for_analysis, feature_columns_for_analysis = None, []
-    statistical_bundle = build_statistical_baselines(prices, params)
-    deep_signal_bundle = run_deep_signal_model(feature_dataset_for_analysis, feature_columns_for_analysis) if feature_dataset_for_analysis is not None and feature_columns_for_analysis else None
-    multimodal_bundle = build_multimodal_bundle(params, feature_dataset_for_analysis, market_context, fundamentals_override=auxiliary.fundamentals, macro_bundle=auxiliary.macro)
-    knowledge_bundle = build_knowledge_graph_bundle(params, market_context, feature_dataset_for_analysis)
-    factor_scorecard = build_factor_scorecard(prices, feature_dataset_for_analysis, auxiliary.fundamentals)
-    factor_effectiveness = analyze_factor_effectiveness(feature_dataset_for_analysis, feature_columns_for_analysis)
-    risk_dashboard = build_risk_dashboard(stats, benchmark_stats)
-    mlops_report = build_mlops_report(params, stats)
-    macro_highlight = summarize_macro_highlight(auxiliary.macro)
-    scenario_simulation = build_scenario_simulation(backtest, stats)
-    opportunity_radar = build_opportunity_radar(params, factor_effectiveness, knowledge_bundle)
-    ensemble_bundle = build_model_ensemble_view(statistical_bundle, stats, deep_signal_bundle, graph_bundle=knowledge_bundle, factor_bundle=factor_effectiveness)
-    model_weights = compute_model_weights(statistical_bundle, stats, deep_signal_bundle, knowledge_bundle, factor_effectiveness)
-    executive_briefing = build_executive_briefing(
-        params, ensemble_bundle, model_weights, risk_dashboard, knowledge_bundle, factor_effectiveness, multimodal_bundle, deep_signal_bundle, scenario_simulation, opportunity_radar
+    statistical_bundle = _safe_call(
+        "统计基线",
+        {"arima": None, "var": None, "diagnostics": []},
+        build_statistical_baselines,
+        prices,
+        params,
     )
-    rl_playbook = build_reinforcement_playbook(backtest, (params.transaction_cost_bps + params.slippage_bps) / 10000.0)
-    user_questions = build_user_questions(stats, recommendations, risk_dashboard, model_weights, ensemble_bundle, scenario_simulation, opportunity_radar)
-    advisor_playbook = build_advisor_playbook(
-        stats, user_guidance, recommendations, scenario_simulation, risk_dashboard, opportunity_radar, macro_highlight
+    deep_signal_bundle = None
+    if feature_dataset_for_analysis is not None and feature_columns_for_analysis:
+        deep_signal_bundle = _safe_call(
+            "深度信号",
+            None,
+            run_deep_signal_model,
+            feature_dataset_for_analysis,
+            feature_columns_for_analysis,
+        )
+    multimodal_bundle = _safe_call(
+        "多模态摘要",
+        {},
+        build_multimodal_bundle,
+        params,
+        feature_dataset_for_analysis,
+        market_context,
+        fundamentals_override=auxiliary.fundamentals,
+        macro_bundle=auxiliary.macro,
+    )
+    knowledge_bundle = _safe_call(
+        "知识图谱",
+        {"available": False, "message": "知识图谱生成失败。"},
+        build_knowledge_graph_bundle,
+        params,
+        market_context,
+        feature_dataset_for_analysis,
+    )
+    factor_scorecard = _safe_call(
+        "因子得分",
+        {"available": False, "message": "因子得分生成失败。"},
+        build_factor_scorecard,
+        prices,
+        feature_dataset_for_analysis,
+        auxiliary.fundamentals,
+    )
+    factor_effectiveness = _safe_call(
+        "因子表现",
+        {"available": False, "message": "因子表现分析失败。"},
+        analyze_factor_effectiveness,
+        feature_dataset_for_analysis,
+        feature_columns_for_analysis,
+    )
+    risk_dashboard = _safe_call("风险看板", {}, build_risk_dashboard, stats, benchmark_stats)
+    mlops_report = _safe_call("MLOps 报告", {}, build_mlops_report, params, stats)
+    macro_highlight = _safe_call("宏观摘要", {}, summarize_macro_highlight, auxiliary.macro)
+    scenario_simulation = _safe_call("情景模拟", {}, build_scenario_simulation, backtest, stats)
+    opportunity_radar = _safe_call(
+        "机会雷达",
+        {},
+        build_opportunity_radar,
+        params,
+        factor_effectiveness,
+        knowledge_bundle,
+    )
+    ensemble_bundle = _safe_call(
+        "模型集成视图",
+        {},
+        build_model_ensemble_view,
+        statistical_bundle,
+        stats,
+        deep_signal_bundle,
+        graph_bundle=knowledge_bundle,
+        factor_bundle=factor_effectiveness,
+    )
+    model_weights = _safe_call(
+        "模型权重",
+        {},
+        compute_model_weights,
+        statistical_bundle,
+        stats,
+        deep_signal_bundle,
+        knowledge_bundle,
+        factor_effectiveness,
+    )
+    executive_briefing = _safe_call(
+        "高管简报",
+        {},
+        build_executive_briefing,
+        params,
+        ensemble_bundle,
+        model_weights,
+        risk_dashboard,
+        knowledge_bundle,
+        factor_effectiveness,
+        multimodal_bundle,
+        deep_signal_bundle,
+        scenario_simulation,
+        opportunity_radar,
+    )
+    rl_playbook = _safe_call(
+        "强化学习策略摘要",
+        {},
+        build_reinforcement_playbook,
+        backtest,
+        (params.transaction_cost_bps + params.slippage_bps) / 10000.0,
+    )
+    user_questions = _safe_call(
+        "用户问题",
+        [],
+        build_user_questions,
+        stats,
+        recommendations,
+        risk_dashboard,
+        model_weights,
+        ensemble_bundle,
+        scenario_simulation,
+        opportunity_radar,
+    )
+    advisor_playbook = _safe_call(
+        "顾问行动手册",
+        {},
+        build_advisor_playbook,
+        stats,
+        user_guidance,
+        recommendations,
+        scenario_simulation,
+        risk_dashboard,
+        opportunity_radar,
+        macro_highlight,
     )
     combo_results: list[dict[str, Any]] = []
     if params.strategy_engine == "multi_combo" and combo_details:
@@ -342,12 +471,24 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
     stats["validation_report"] = {"walk_forward": walk_forward_report, "purged_kfold": purged_schedule}
     stats["tail_risk_summary"] = compute_tail_risk_summary(backtest.get("strategy_return"))
     metadata = collect_repro_metadata(params)
+    data_quality = quality_report.to_dict() if quality_report else {}
+    data_risks: list[str] = []
+    if auxiliary.financials or auxiliary.fundamentals:
+        data_risks.append("基本面/财务数据来自第三方快照，未做 point-in-time 校验，存在未来信息风险。")
+    if data_quality.get("zero_volume_days"):
+        data_risks.append("历史数据存在零成交量交易日，回测执行已自动跳过停牌日。")
+    if data_quality.get("missing_ratio", 0.0) > 0.05:
+        data_risks.append("行情数据缺失比例偏高，已补全但可能影响指标稳定性。")
     risk_controls = {
         "volatility_target": {"target": params.volatility_target, "realized": stats.get("volatility")},
         "tail_risk": stats.get("tail_risk_summary"),
         "max_drawdown_stop": params.max_drawdown_stop,
         "daily_exposure_limit": params.daily_exposure_limit,
     }
+    if data_quality:
+        stats["data_quality"] = data_quality
+    if data_risks:
+        stats["data_risks"] = data_risks
     label_meta = {
         "label_style": params.label_style,
         "tb_up": params.tb_up,
@@ -369,6 +510,57 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
             stats["walk_forward_training"] = walk_forward_training
         else:
             warnings.append("未找到 walk-forward 报告，请运行 trading.mlops.walk_forward_train 生成最新报告。")
+
+    signal_snapshot: dict[str, Any] = {}
+    target_weights: dict[str, float] = {}
+    current_positions = params.current_positions or {}
+    current_weights: dict[str, float] = {}
+    trade_list: list[dict[str, Any]] = []
+    if not backtest.empty:
+        latest = backtest.iloc[-1]
+        last_price = float(latest.get("adj close", np.nan)) if isinstance(latest, pd.Series) else np.nan
+        signal_snapshot = {
+            "as_of": str(backtest.index[-1].date()) if len(backtest.index) else "",
+            "signal": float(latest.get("signal", 0.0)) if isinstance(latest, pd.Series) else 0.0,
+            "position": float(latest.get("position", 0.0)) if isinstance(latest, pd.Series) else 0.0,
+            "exposure": float(latest.get("exposure", latest.get("position", 0.0))) if isinstance(latest, pd.Series) else 0.0,
+            "probability": float(latest.get("probability", np.nan)) if isinstance(latest, pd.Series) else np.nan,
+            "price": None if np.isnan(last_price) else round(last_price, 4),
+        }
+        raw_weight = float(latest.get("exposure", latest.get("position", 0.0))) if isinstance(latest, pd.Series) else 0.0
+        if not params.allow_short and raw_weight < 0:
+            raw_weight = 0.0
+        if params.max_weight is not None:
+            raw_weight = float(np.clip(raw_weight, -abs(params.max_weight), abs(params.max_weight)))
+        if params.min_weight is not None and params.min_weight > 0 and abs(raw_weight) < params.min_weight:
+            raw_weight = 0.0
+        target_weights = {params.ticker.upper(): raw_weight}
+        if current_positions:
+            capital = max(float(params.capital or 0.0), 1.0)
+            if last_price and last_price > 0:
+                current_value = float(current_positions.get(params.ticker.upper(), 0.0)) * last_price
+                current_weights = {params.ticker.upper(): current_value / capital}
+        if params.turnover_cap:
+            target_weights = cap_turnover(current_weights, target_weights, params.turnover_cap)
+        if params.sector_caps:
+            sector_name = auxiliary.fundamentals.get("sector") if isinstance(auxiliary.fundamentals, dict) else None
+            sector_map = {params.ticker.upper(): sector_name} if sector_name else {}
+            target_weights = apply_sector_caps(target_weights, sector_map, params.sector_caps)
+        if last_price and last_price > 0:
+            trade_list = build_trade_list(
+                target_weights,
+                current_positions,
+                {params.ticker.upper(): last_price},
+                capital=float(params.capital or 0.0),
+                lot_size=int(params.lot_size or 1),
+            )
+    target_portfolio = {
+        "target_weights": target_weights,
+        "current_weights": current_weights,
+        "gross_exposure": float(sum(abs(v) for v in target_weights.values())) if target_weights else 0.0,
+        "net_exposure": float(sum(target_weights.values())) if target_weights else 0.0,
+        "turnover": float(sum(abs(target_weights.get(k, 0.0) - current_weights.get(k, 0.0)) for k in set(target_weights) | set(current_weights))),
+    }
     interactive_chart = build_interactive_chart_payload(prices, backtest, params)
     result_payload = {
         "ticker": params.ticker.upper(),
@@ -391,6 +583,11 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
         "capital": params.capital,
         "engine": params.strategy_engine,
         "engine_label": engine_label,
+        "data_quality": data_quality,
+        "data_risks": data_risks,
+        "signal_snapshot": signal_snapshot,
+        "target_portfolio": target_portfolio,
+        "trade_list": trade_list,
         "params": {
             "ticker": params.ticker.upper(),
             "benchmark": params.benchmark_ticker,
@@ -417,6 +614,7 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
             "out_of_sample_ratio": params.out_of_sample_ratio,
             "execution_liquidity_buffer": params.execution_liquidity_buffer,
             "execution_penalty_bps": params.execution_penalty_bps,
+            "execution_delay_days": getattr(params, "execution_delay_days", 1),
             "return_path": params.return_path,
             "slippage_model": params.slippage_model,
             "borrow_cost_bps": params.borrow_cost_bps,
@@ -428,6 +626,14 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
             "tb_dynamic": params.tb_dynamic,
             "tb_vol_multiplier": params.tb_vol_multiplier,
             "tb_vol_window": params.tb_vol_window,
+            "lot_size": params.lot_size,
+            "max_weight": params.max_weight,
+            "min_weight": params.min_weight,
+            "max_holdings": params.max_holdings,
+            "sector_caps": params.sector_caps,
+            "turnover_cap": params.turnover_cap,
+            "allow_short": params.allow_short,
+            "limit_move_threshold": params.limit_move_threshold,
             "include_walk_forward_report": params.include_walk_forward_report,
             "walk_forward_horizon_days": params.walk_forward_horizon_days,
             "walk_forward_step_days": params.walk_forward_step_days,

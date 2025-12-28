@@ -47,7 +47,7 @@ class ExecutionModelTests(SimpleTestCase):
         exposure = pd.Series([0, 0.2, 0.4, 0.6, 0.8], index=idx, dtype=float)
         prices = pd.Series([50, 50.5, 51, 51.5, 52], index=idx, dtype=float)
         # High ADV to allow fills
-        adv = pd.Series([1000] * 5, index=idx, dtype=float)
+        adv = pd.Series([100_000_000] * 5, index=idx, dtype=float)
         params = self._params()
         adjusted, txn, exec_cost, coverage, stats = _apply_execution_model(exposure, prices, adv, params)
 
@@ -56,3 +56,13 @@ class ExecutionModelTests(SimpleTestCase):
         self.assertTrue((adjusted.abs() <= exposure.abs() + 1e-9).all())
         self.assertGreaterEqual(exec_cost.sum(), 0.0)
         self.assertEqual(len(txn), len(exposure))
+
+    def test_execution_model_blocks_limit_moves(self):
+        idx = pd.date_range("2024-03-01", periods=4, freq="D")
+        exposure = pd.Series([0.0, 1.0, 1.0, 1.0], index=idx, dtype=float)
+        prices = pd.Series([100, 111, 90, 91], index=idx, dtype=float)
+        adv = pd.Series([1_000_000] * 4, index=idx, dtype=float)
+        params = self._params()
+        params.limit_move_threshold = 0.08
+        _, _, _, _, stats = _apply_execution_model(exposure, prices, adv, params)
+        self.assertGreaterEqual(stats.get("limit_days", 0), 1)

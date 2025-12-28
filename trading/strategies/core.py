@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace, asdict
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from typing import Any, Optional, Tuple
 import os
 import textwrap
@@ -100,13 +101,15 @@ from .metrics import (
     format_percentage,
     get_risk_free_rate_annual,
 )
-from .ma_cross import apply_execution_model, backtest_sma_strategy, format_table
+from .event_engine import compute_realized_returns, run_event_backtest
+from .ma_cross import backtest_sma_strategy, format_table
 from .risk import (
     apply_signal_filters,
     apply_vol_targeting,
     calculate_drawdown_series,
     calculate_max_drawdown,
     calculate_target_leverage,
+    enforce_min_holding,
     enforce_risk_limits,
 )
 from .market import fetch_market_context
@@ -450,6 +453,7 @@ def fetch_price_data(ticker: str, start: date, end: date) -> Tuple[pd.DataFrame,
             data.columns = data.columns.get_level_values(0)
     data = data.rename(columns=str.lower)
     data.index = pd.to_datetime(data.index)
+    data, start, end = _apply_listing_window(data, ticker, start, end, warnings)
     if "adj close" not in data.columns and "close" in data.columns:
         data["adj close"] = data["close"]
     if "close" not in data.columns and "adj close" in data.columns:
@@ -493,6 +497,74 @@ def fetch_price_data(ticker: str, start: date, end: date) -> Tuple[pd.DataFrame,
     if "volume" not in data.columns:
         data["volume"] = 0.0
     return data[base_cols].dropna(subset=["adj close"]), warnings
+
+
+@lru_cache(maxsize=1)
+def _load_listing_status() -> pd.DataFrame:
+    path = DATA_CACHE_DIR / "alpha_listing_status.csv"
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+    df.columns = [str(col).strip().lower() for col in df.columns]
+    if "symbol" in df.columns:
+        df["symbol"] = df["symbol"].astype(str).str.upper()
+    return df
+
+
+def _parse_listing_date(value: Any) -> date | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "null"}:
+        return None
+    try:
+        return datetime.fromisoformat(text).date()
+    except ValueError:
+        try:
+            parsed = pd.to_datetime(text, errors="coerce")  # type: ignore[call-arg]
+        except Exception:
+            return None
+        if pd.isna(parsed):
+            return None
+        return parsed.date()
+
+
+def _apply_listing_window(
+    data: pd.DataFrame,
+    ticker: str,
+    start: date,
+    end: date,
+    warnings: list[str],
+) -> tuple[pd.DataFrame, date, date]:
+    listing = _load_listing_status()
+    if listing.empty or "symbol" not in listing.columns:
+        warnings.append("缺少上市/退市信息缓存，无法校验幸存者偏差。")
+        return data, start, end
+    rows = listing[listing["symbol"] == ticker.upper()]
+    if rows.empty:
+        warnings.append(f"未找到 {ticker.upper()} 的上市/退市记录，无法校验幸存者偏差。")
+        return data, start, end
+    row = rows.iloc[0]
+    ipo_date = _parse_listing_date(row.get("ipodate"))
+    delist_date = _parse_listing_date(row.get("delistingdate"))
+    status = str(row.get("status") or "").strip().lower()
+    effective_start = start
+    effective_end = end
+    if ipo_date and start < ipo_date:
+        effective_start = ipo_date
+        warnings.append(f"{ticker.upper()} IPO 日期为 {ipo_date.isoformat()}，已将回测起点调整到上市日。")
+    if delist_date and end > delist_date:
+        effective_end = delist_date
+        warnings.append(f"{ticker.upper()} 已于 {delist_date.isoformat()} 退市，回测截止日已相应截断。")
+    if status and status != "active":
+        warnings.append(f"{ticker.upper()} 当前状态为 {row.get('status') or status}，需注意退市/合并风险。")
+    if effective_start > effective_end:
+        raise QuantStrategyError("上市/退市日期导致回测区间无有效交易日，请调整开始/结束日期。")
+    trimmed = data.loc[(data.index.date >= effective_start) & (data.index.date <= effective_end)]
+    return trimmed, effective_start, effective_end
 
 
 def _load_latest_walk_forward_report(params: StrategyInput) -> dict[str, Any] | None:
@@ -613,7 +685,8 @@ def run_rl_policy_backtest(
     rl_backtest = base_backtest.copy()
     rl_backtest["signal"] = raw_signal
     rl_backtest["position"] = position
-    asset_returns = rl_backtest["asset_return"].fillna(0.0)
+    asset_returns = compute_realized_returns(prices, params).reindex(rl_backtest.index).fillna(0.0)
+    rl_backtest["asset_return"] = asset_returns
     rl_backtest["volatility"] = asset_returns.rolling(20).std().fillna(0.0) * np.sqrt(252)
     rl_backtest["leverage"] = calculate_target_leverage(
         rl_backtest["position"], rl_backtest["volatility"], params.volatility_target, params.max_leverage
@@ -624,41 +697,16 @@ def run_rl_policy_backtest(
         asset_returns,
         params,
     )
-    rl_backtest["exposure"] = exposure_series
-    exposure_change = exposure_series.diff().abs().fillna(exposure_series.abs())
-
-    # ADV 参与率约束（与 ML/传统回测保持一致）
-    adv_hits = 0
-    adv_max_part = max(0.0, min(1.0, params.max_adv_participation or 0.1))
-    if "adv" in rl_backtest and rl_backtest["adv"].notna().any():
-        adv_limit = rl_backtest["adv"].fillna(0.0) * adv_max_part
-        mask = rl_backtest["exposure"].abs() > adv_limit
-        adv_hits = int(mask.sum())
-        capped = rl_backtest["exposure"].where(~mask, 0.0)
-        if adv_hits > 0:
-            rl_backtest["exposure"] = capped
-            exposure_change = rl_backtest["exposure"].diff().abs().fillna(rl_backtest["exposure"].abs())
-
-    rl_backtest["transaction_cost"] = exposure_change * cost_rate
-    rl_backtest["strategy_return_gross"] = (
-        rl_backtest["exposure"] * asset_returns
-        if params.return_path in {"close_to_open", "open_to_close"}
-        else rl_backtest["exposure"].shift(fill_value=0.0) * asset_returns
-    )
-    long_daily = float(params.long_borrow_cost_bps or params.borrow_cost_bps) / 10000.0 / 252.0
-    short_daily = float(params.short_borrow_cost_bps or params.borrow_cost_bps) / 10000.0 / 252.0
-    borrow_cost = (
-        rl_backtest["exposure"].clip(lower=0.0) * long_daily
-        + (-rl_backtest["exposure"].clip(upper=0.0)) * short_daily
-    )
-    rl_backtest["strategy_return"] = rl_backtest["strategy_return_gross"] - rl_backtest["transaction_cost"] - borrow_cost
-    try:
+    if "volume" not in rl_backtest and "volume" in prices:
         rl_backtest["volume"] = prices["volume"].reindex(rl_backtest.index).ffill().bfill()
-    except Exception:
-        rl_backtest["volume"] = np.nan
-    rl_backtest, rl_execution_events = apply_execution_model(rl_backtest, prices, params)
-    rl_backtest["cum_strategy"] = (1 + rl_backtest["strategy_return"]).cumprod()
-    rl_backtest["cum_buy_hold"] = (1 + rl_backtest["asset_return"]).cumprod()
+    if "adv" not in rl_backtest and "adv" in prices:
+        rl_backtest["adv"] = prices["adv"].reindex(rl_backtest.index).ffill().bfill()
+    rl_backtest, exec_stats, rl_execution_events = run_event_backtest(
+        rl_backtest,
+        exposure_series,
+        params,
+        leverage=rl_backtest["leverage"],
+    )
 
     metrics, stats = summarize_backtest(
         rl_backtest,
@@ -671,8 +719,9 @@ def run_rl_policy_backtest(
     stats["rl_playbook"] = agent.playbook
     events = list(stats.get("risk_events", []))
     events.extend(overlay_events)
+    adv_hits = int(exec_stats.get("adv_hard_cap_hits") or 0)
     if adv_hits > 0:
-        events.append(f"RL 回测：ADV 参与率上限({adv_max_part:.0%}) 触发 {adv_hits} 次，超额仓位已清零。")
+        events.append(f"RL 回测：ADV 参与率上限({(params.max_adv_participation or 0.1):.0%}) 压缩 {adv_hits} 次仓位。")
     events.extend(rl_execution_events)
     stats["risk_events"] = events
     runtime_notes = list(stats.get("runtime_warnings", []))
@@ -723,3 +772,32 @@ def run_rl_policy_backtest(
         stats["risk_events"] = events
     metrics = build_core_metrics(stats, include_prediction=True, include_auc=True)
     return rl_backtest, metrics, stats
+
+
+def summarize_backtest(
+    backtest: pd.DataFrame,
+    params: StrategyInput,
+    *,
+    include_prediction: bool = False,
+    include_auc: bool = False,
+    feature_columns: Optional[list[str]] = None,
+    shap_img: Optional[str] = None,
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    """Proxy to pipeline.summarize_backtest for legacy imports without a hard module dependency."""
+    from . import pipeline as _pipeline
+
+    return _pipeline.summarize_backtest(
+        backtest,
+        params,
+        include_prediction=include_prediction,
+        include_auc=include_auc,
+        feature_columns=feature_columns,
+        shap_img=shap_img,
+    )
+
+
+def _compute_oos_from_backtest(backtest: pd.DataFrame, params: StrategyInput) -> dict[str, Any] | None:
+    """Proxy to pipeline._compute_oos_from_backtest for legacy imports."""
+    from . import pipeline as _pipeline
+
+    return _pipeline._compute_oos_from_backtest(backtest, params)

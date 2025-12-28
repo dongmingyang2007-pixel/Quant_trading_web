@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 
 from .config import StrategyInput
-from .indicators import _compute_asset_returns
+from .execution import apply_execution_model as execute_orders
+from .event_engine import compute_realized_returns, run_event_backtest
 from .risk import (
     calculate_target_leverage,
     enforce_min_holding,
@@ -23,33 +24,33 @@ def apply_execution_model(
     price_source: pd.DataFrame,
     params: StrategyInput,
 ) -> tuple[pd.DataFrame, list[str]]:
-    """根据成交量估算执行冲击成本。"""
-    if "volume" not in price_source.columns:
-        return backtest, []
+    """根据成交量与参与率估算执行冲击成本（统一模型）。"""
     price = backtest.get("adj close")
     if price is None or price.empty:
         return backtest, []
-    raw_volume = price_source["volume"].reindex(backtest.index).ffill().bfill()
-    dollar_volume = (raw_volume * price).rolling(20).mean()
-    exposure_change = backtest["exposure"].diff().abs().fillna(backtest["exposure"].abs())
-    turnover_value = exposure_change * params.capital
-    liquidity_buffer = max(params.execution_liquidity_buffer, 0.01)
-    liquidity_capacity = dollar_volume * liquidity_buffer
-    if liquidity_capacity.isna().all() or liquidity_capacity.fillna(0.0).sum() == 0:
-        return backtest, ["执行模型：缺少成交量数据，已跳过撮合成本估计。"]
-    impact = turnover_value / liquidity_capacity.replace(0, np.nan)
-    impact = impact.clip(lower=0.0, upper=5.0).fillna(0.0)
-    if params.execution_mode == "limit":
-        fill_prob = np.exp(-impact.clip(0, 5))
-        penalty = (1 - fill_prob) * np.abs(backtest["strategy_return_gross"]) + impact * (params.execution_penalty_bps / 10000.0)
-    else:
-        penalty = impact * (params.execution_penalty_bps / 10000.0)
-    backtest["execution_cost"] = penalty
-    backtest["strategy_return"] = backtest["strategy_return"] - penalty
+    volume = price_source["volume"].reindex(backtest.index).ffill().bfill() if "volume" in price_source.columns else None
+    adjusted, txn_cost, exec_cost, coverage, stats = execute_orders(
+        backtest["exposure"],
+        price,
+        volume=volume,
+        adv=backtest.get("adv"),
+        params=params,
+    )
+    backtest["exposure"] = adjusted
+    if "leverage" in backtest:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            adj_position = adjusted / backtest["leverage"].replace(0, np.nan)
+        backtest["position"] = adj_position.replace([np.inf, -np.inf], 0.0).fillna(0.0)
+    backtest["transaction_cost"] = txn_cost
+    backtest["execution_cost"] = exec_cost
+    backtest["strategy_return"] = backtest["strategy_return_gross"] - txn_cost - exec_cost - backtest.get("borrow_cost", 0.0)
     events = []
-    if penalty.sum() > 0:
-        avg_impact = float(impact.replace([np.inf, -np.inf], np.nan).mean())
-        events.append(f"执行撮合模型：平均冲击 {avg_impact:.2f}×ADV，额外成本 {penalty.sum():.4f}。")
+    if stats.get("avg_coverage") is not None and stats.get("avg_coverage", 1.0) < 0.95:
+        events.append(f"执行撮合模型：成交覆盖率 {stats['avg_coverage']:.0%}，存在部分未成交。")
+    if stats.get("halt_days", 0.0) > 0:
+        events.append(f"执行撮合模型：检测到 {int(stats['halt_days'])} 天停牌/无成交，未执行交易。")
+    if stats.get("limit_days", 0.0) > 0:
+        events.append(f"执行撮合模型：检测到 {int(stats['limit_days'])} 天触及涨跌幅限制，未执行交易。")
     return backtest, events
 
 
@@ -84,7 +85,7 @@ def backtest_sma_strategy(
     except Exception:
         liquidity_blocks = 0
 
-    asset_returns = _compute_asset_returns(backtest, params)
+    asset_returns = compute_realized_returns(backtest, params)
     backtest["asset_return"] = asset_returns
     backtest["volatility"] = asset_returns.rolling(window=20).std().fillna(0.0) * np.sqrt(252)
     backtest["leverage"] = calculate_target_leverage(
@@ -97,44 +98,13 @@ def backtest_sma_strategy(
         asset_returns,
         params,
     )
-    backtest["exposure"] = exposure_series
-    with np.errstate(divide="ignore", invalid="ignore"):
-        adj_position = backtest["exposure"] / backtest["leverage"].replace(0, np.nan)
-    backtest["position"] = adj_position.replace([np.inf, -np.inf], 0.0).fillna(0.0)
-    exposure_change = backtest["exposure"].diff().abs().fillna(backtest["exposure"].abs())
     cost_rate = (params.transaction_cost_bps + params.slippage_bps) / 10000.0
-    # ADV 参与率约束
-    adv_hits = 0
-    adv_participation = None
-    if "adv" in backtest and backtest["adv"].notna().any():
-        max_part = max(0.0, min(1.0, params.max_adv_participation or 0.1))
-        adv_participation = max_part
-        adv_limit = backtest["adv"].fillna(0.0) * max_part
-        mask = backtest["exposure"].abs() > adv_limit
-        adv_hits = int(mask.sum())
-        capped = backtest["exposure"].where(~mask, 0.0)
-        if adv_hits > 0:
-            backtest["exposure"] = capped
-            exposure_change = backtest["exposure"].diff().abs().fillna(backtest["exposure"].abs())
-    backtest["transaction_cost"] = exposure_change * cost_rate
-
-    shifted_exposure = (
-        backtest["exposure"]
-        if params.return_path in {"close_to_open", "open_to_close"}
-        else backtest["exposure"].shift(fill_value=0)
+    backtest, exec_stats, execution_events = run_event_backtest(
+        backtest,
+        exposure_series,
+        params,
+        leverage=backtest["leverage"],
     )
-    backtest["strategy_return_gross"] = asset_returns * shifted_exposure
-    long_daily = float(params.long_borrow_cost_bps or params.borrow_cost_bps) / 10000.0 / 252.0
-    short_daily = float(params.short_borrow_cost_bps or params.borrow_cost_bps) / 10000.0 / 252.0
-    borrow_cost = (
-        backtest["exposure"].clip(lower=0.0) * long_daily
-        + (-backtest["exposure"].clip(upper=0.0)) * short_daily
-    )
-    backtest["borrow_cost"] = borrow_cost
-    backtest["strategy_return"] = backtest["strategy_return_gross"] - backtest["transaction_cost"] - borrow_cost
-    backtest, execution_events = apply_execution_model(backtest, prices, params)
-    backtest["cum_strategy"] = (1 + backtest["strategy_return"]).cumprod()
-    backtest["cum_buy_hold"] = (1 + asset_returns).cumprod()
 
     if summarize_backtest_fn is None or compute_oos_report is None:
         # 延迟导入以避免循环依赖
@@ -168,9 +138,10 @@ def backtest_sma_strategy(
     aggregate_events = []
     if overlay_events:
         aggregate_events.extend(overlay_events)
+    adv_hits = int(exec_stats.get("adv_hard_cap_hits") or 0)
     if adv_hits > 0:
-        participation = adv_participation if adv_participation is not None else (params.max_adv_participation or 0.1)
-        aggregate_events.append(f"因 ADV 参与率上限({participation:.0%}) 清零 {adv_hits} 次仓位，避免不可成交。")
+        participation = params.max_adv_participation or 0.1
+        aggregate_events.append(f"因 ADV 参与率上限({participation:.0%}) 压缩 {adv_hits} 次仓位，避免不可成交。")
     if liquidity_blocks > 0:
         aggregate_events.append(f"因成交额过低/停牌跳过 {liquidity_blocks} 个交易日的信号。")
     aggregate_events.extend(execution_events)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Mapping
 
 import numpy as np
 import pandas as pd
@@ -116,3 +116,127 @@ def portfolio_stats(pnl: pd.Series) -> dict[str, float]:
         "recovery_days": recovery_days,
         "loss_streak": loss_streak,
     }
+
+
+def build_target_weights(
+    scores: Mapping[str, float],
+    *,
+    allow_short: bool = True,
+    max_weight: float | None = None,
+    min_weight: float | None = None,
+    max_holdings: int | None = None,
+) -> dict[str, float]:
+    """Map raw scores into normalized portfolio weights."""
+    if not scores:
+        return {}
+    items = [(k, float(v)) for k, v in scores.items() if v is not None]
+    if max_holdings:
+        items = sorted(items, key=lambda x: abs(x[1]), reverse=True)[: max(1, int(max_holdings))]
+    longs = {k: max(0.0, v) for k, v in items}
+    shorts = {k: min(0.0, v) for k, v in items} if allow_short else {}
+    long_sum = sum(longs.values())
+    short_sum = sum(abs(v) for v in shorts.values())
+    weights: dict[str, float] = {}
+    if long_sum > 0:
+        for k, v in longs.items():
+            weights[k] = v / long_sum
+    if short_sum > 0:
+        for k, v in shorts.items():
+            weights[k] = weights.get(k, 0.0) - (abs(v) / short_sum)
+    if not weights:
+        return {}
+    if max_weight is not None:
+        max_weight = abs(float(max_weight))
+        for k, v in list(weights.items()):
+            weights[k] = float(np.clip(v, -max_weight, max_weight))
+    if min_weight is not None and min_weight > 0:
+        min_weight = float(min_weight)
+        for k, v in list(weights.items()):
+            if v > 0 and v < min_weight:
+                weights[k] = 0.0
+            if v < 0 and abs(v) < min_weight:
+                weights[k] = 0.0
+    # Re-normalize to keep total gross exposure at 1.0
+    gross = sum(abs(v) for v in weights.values())
+    if gross > 0:
+        weights = {k: v / gross for k, v in weights.items()}
+    return weights
+
+
+def apply_sector_caps(
+    weights: Mapping[str, float],
+    sector_map: Mapping[str, str] | None,
+    sector_caps: Mapping[str, float] | None,
+) -> dict[str, float]:
+    if not weights or not sector_map or not sector_caps:
+        return dict(weights)
+    capped = dict(weights)
+    for sector, cap in sector_caps.items():
+        members = [s for s, sec in sector_map.items() if sec == sector and s in capped]
+        if not members:
+            continue
+        total = sum(capped[m] for m in members)
+        if abs(total) <= cap:
+            continue
+        scale = cap / abs(total) if total else 1.0
+        for sym in members:
+            capped[sym] = capped[sym] * scale
+    return capped
+
+
+def cap_turnover(
+    previous: Mapping[str, float],
+    target: Mapping[str, float],
+    turnover_cap: float | None,
+) -> dict[str, float]:
+    if turnover_cap is None or turnover_cap <= 0:
+        return dict(target)
+    keys = set(previous) | set(target)
+    prev = {k: float(previous.get(k, 0.0)) for k in keys}
+    tgt = {k: float(target.get(k, 0.0)) for k in keys}
+    turnover = sum(abs(tgt[k] - prev[k]) for k in keys)
+    if turnover <= turnover_cap or turnover == 0:
+        return tgt
+    scale = turnover_cap / turnover
+    return {k: prev[k] + (tgt[k] - prev[k]) * scale for k in keys}
+
+
+def build_trade_list(
+    target_weights: Mapping[str, float],
+    current_positions: Mapping[str, float] | None,
+    prices: Mapping[str, float],
+    *,
+    capital: float,
+    lot_size: int = 1,
+    min_trade_value: float = 0.0,
+) -> list[dict[str, float | str]]:
+    """Translate target weights into executable trade list."""
+    trades: list[dict[str, float | str]] = []
+    positions = {k: float(v) for k, v in (current_positions or {}).items()}
+    capital = max(float(capital), 0.0)
+    lot_size = max(int(lot_size), 1)
+    for symbol, weight in target_weights.items():
+        price = float(prices.get(symbol, 0.0) or 0.0)
+        if price <= 0:
+            continue
+        target_value = float(weight) * capital
+        current_qty = float(positions.get(symbol, 0.0))
+        current_value = current_qty * price
+        delta_value = target_value - current_value
+        if abs(delta_value) < min_trade_value:
+            continue
+        raw_qty = delta_value / price
+        qty = int(abs(raw_qty) // lot_size) * lot_size
+        if qty <= 0:
+            continue
+        side = "BUY" if raw_qty > 0 else "SELL"
+        trades.append(
+            {
+                "symbol": symbol,
+                "side": side,
+                "quantity": float(qty),
+                "price": round(price, 4),
+                "notional": round(price * qty, 2),
+            }
+        )
+    return trades

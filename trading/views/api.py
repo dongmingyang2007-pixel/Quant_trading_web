@@ -427,7 +427,8 @@ def ai_chat_stream(request):
         event_queue: "queue.Queue[tuple[str, dict[str, Any]]]" = queue.Queue()
 
         def _emit(stage: str, payload: dict[str, Any]) -> None:
-            event_queue.put(("progress", {"stage": stage, **payload, "request_id": request_id}))
+            event_name = "delta" if stage == "delta" else "progress"
+            event_queue.put((event_name, {"stage": stage, **payload, "request_id": request_id}))
 
         def _worker() -> None:
             try:
@@ -444,6 +445,10 @@ def ai_chat_stream(request):
                     model_name=model_name,
                     progress_callback=_progress,
                 )
+                # 推送成本提示（如有）
+                if result.get("profile"):
+                    cost_payload = {"profile": result["profile"], "request_id": request_id}
+                    _emit("progress", {"stage": "cost", **cost_payload})
                 event_queue.put(("message", {**result, "request_id": request_id}))
                 record_metric(
                     "ai.chat.stream.response",

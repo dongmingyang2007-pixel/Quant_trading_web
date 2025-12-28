@@ -22,12 +22,32 @@ class DataQualityReport:
     dropped_duplicates: int = 0
     filled_gaps: int = 0
     clipped_outliers: int = 0
+    total_rows: int = 0
+    start_date: str = ""
+    end_date: str = ""
+    missing_ratio: float = 0.0
+    zero_volume_days: int = 0
+    stale_price_days: int = 0
     notes: list[str] = field(default_factory=list)
 
     def extend_notes(self, *entries: str) -> None:
         for entry in entries:
             if entry:
                 self.notes.append(entry)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "dropped_duplicates": self.dropped_duplicates,
+            "filled_gaps": self.filled_gaps,
+            "clipped_outliers": self.clipped_outliers,
+            "total_rows": self.total_rows,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "missing_ratio": round(self.missing_ratio, 4),
+            "zero_volume_days": self.zero_volume_days,
+            "stale_price_days": self.stale_price_days,
+            "notes": self.notes,
+        }
 
 
 def _winsorize_extreme_returns(returns: pd.Series, threshold: float) -> pd.Series:
@@ -54,6 +74,10 @@ def sanitize_price_history(prices: pd.DataFrame) -> tuple[pd.DataFrame, DataQual
         return prices, report
 
     clean = prices.copy().sort_index()
+    report.total_rows = int(clean.shape[0])
+    if not clean.empty and hasattr(clean.index[0], "date"):
+        report.start_date = str(clean.index[0].date())
+        report.end_date = str(clean.index[-1].date())
     # Normalize timezone to UTC-naive to avoid duplicated dates when upstream mixes TZs
     try:
         if hasattr(clean.index, "tz") and clean.index.tz is not None:
@@ -71,10 +95,13 @@ def sanitize_price_history(prices: pd.DataFrame) -> tuple[pd.DataFrame, DataQual
 
     ohlc_cols = ["open", "high", "low", "close", "adj close"]
     price_block = clean[ohlc_cols]
+    missing_ratio = float(price_block.isna().mean().mean())
+    report.missing_ratio = missing_ratio
     missing_before = int(price_block.isna().sum().sum())
     clean[ohlc_cols] = price_block.ffill().bfill()
     volume_before = int(clean["volume"].isna().sum())
     clean["volume"] = clean["volume"].ffill().bfill().fillna(0.0)
+    report.zero_volume_days = int((clean["volume"] <= 0).sum())
     missing_after = int(clean[ohlc_cols].isna().sum().sum())
     filled = max(0, missing_before + volume_before - missing_after - int(clean["volume"].isna().sum()))
     if filled:
@@ -109,6 +136,7 @@ def sanitize_price_history(prices: pd.DataFrame) -> tuple[pd.DataFrame, DataQual
         change_groups = (flat_diff >= 1e-9).astype(int).cumsum()
         flat_runs = (flat_diff < 1e-9).astype(int).groupby(change_groups).cumsum()
         max_flat = int(flat_runs.max() or 0)
+        report.stale_price_days = int((flat_diff < 1e-9).sum())
         if max_flat >= 5:
             report.extend_notes(f"发现最长 {max_flat} 天价格无变动，可能存在停牌或极度缺乏流动性。")
     except Exception:

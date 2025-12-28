@@ -1,0 +1,327 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}{% bilingual "Screen Wave Analyzer" "屏幕波型分析" %}{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{% static 'trading/css/screen_analyzer.css' %}">
+<meta name="screen-analyzer-api" content="{% url analyzer_api %}">
+<meta name="screen-analyzer-sample-api" content="{% url 'trading:screen_analyzer_sample_api' %}">
+<meta name="screen-analyzer-train-api" content="{% url 'trading:screen_analyzer_train_api' %}">
+<meta name="screen-analyzer-interval" content="{{ analysis_interval|default:'1200' }}">
+<meta name="screen-analyzer-ocr" content="{{ ocr_enabled|yesno:'1,0' }}">
+<meta name="csrf-token" content="{{ csrf_token }}">
+{% endblock %}
+
+{% block content %}
+<div class="screen-analyzer">
+    <header class="screen-hero">
+        <div>
+            <p class="screen-kicker">{% bilingual "TradingView Screen Intake" "TradingView 屏幕解析" %}</p>
+            <h1 class="screen-title">{% bilingual "Screen Wave Analyzer" "屏幕波型分析" %}</h1>
+            <p class="screen-subtitle">{% bilingual "Grant screen access, crop the chart area, and let the local analyzer infer wave patterns in real time." "在本地授权屏幕共享，框选图表区域后实时解析波型。仅在本机处理，不会上传到外网。" %}</p>
+        </div>
+        <div class="screen-disclaimer">
+            <strong>{% bilingual "Notice:" "提示：" %}</strong>
+            {% bilingual "This feature provides model hints only and is not financial advice." "本功能仅提供模型提示，不构成投资建议。" %}
+        </div>
+    </header>
+
+    <section class="screen-grid">
+        <article class="screen-card">
+            <div class="screen-card-head">
+                <div>
+                    <h2>{% bilingual "Capture Control" "捕获控制" %}</h2>
+                    <p>{% bilingual "Select the TradingView window or screen after clicking start." "点击开始后选择 TradingView 窗口或屏幕。" %}</p>
+                </div>
+                <div class="screen-status" data-role="status" data-state="idle">
+                    {% bilingual "Idle" "空闲" %}
+                </div>
+            </div>
+            <div class="screen-controls">
+                <button class="btn btn-primary" type="button" data-action="start">{% bilingual "Start Capture" "开始捕获" %}</button>
+                <button class="btn btn-outline-secondary" type="button" data-action="stop" disabled>{% bilingual "Stop" "停止" %}</button>
+                <button class="btn btn-outline-primary" type="button" data-action="analyze" disabled>{% bilingual "Analyze Once" "单次分析" %}</button>
+                <button class="btn btn-outline-dark" type="button" data-action="toggle" disabled>{% bilingual "Auto Analyze" "自动分析" %}</button>
+                <button class="btn btn-link" type="button" data-action="clear" disabled>{% bilingual "Clear Crop" "清除选区" %}</button>
+                <div class="screen-control-field">
+                    <label for="screen-interval">{% bilingual "Interval" "分析间隔" %}</label>
+                    <select id="screen-interval">
+                        <option value="800">0.8s</option>
+                        <option value="1200" selected>1.2s</option>
+                        <option value="1800">1.8s</option>
+                        <option value="2400">2.4s</option>
+                    </select>
+                </div>
+                <div class="screen-control-field">
+                    <label for="screen-quality">{% bilingual "Quality" "质量" %}</label>
+                    <select id="screen-quality">
+                        <option value="0.55">Low</option>
+                        <option value="0.7" selected>Med</option>
+                        <option value="0.85">High</option>
+                    </select>
+                </div>
+                <div class="screen-control-field">
+                    <label for="screen-mode">{% bilingual "Mode" "模式" %}</label>
+                    <select id="screen-mode">
+                        <option value="auto">{% bilingual "Auto" "自动" %}</option>
+                        <option value="line">{% bilingual "Line" "折线" %}</option>
+                        <option value="candlestick">{% bilingual "Candlestick" "K线" %}</option>
+                    </select>
+                </div>
+                <div class="screen-control-field screen-control-toggle">
+                    <label class="screen-toggle">
+                        <input type="checkbox" id="screen-ocr" {% if ocr_enabled %}checked{% endif %}>
+                        <span>{% bilingual "OCR" "OCR" %}</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="screen-preview">
+                <canvas id="screen-preview" width="960" height="540" aria-label="{% bilingual 'Screen preview' '屏幕预览' %}"></canvas>
+                <div class="screen-preview-hint">{% bilingual "Drag to crop the chart area. Avoid including volume bars for better detection." "拖拽框选图表区域，尽量避开成交量柱以提升识别度。" %}</div>
+            </div>
+            <div class="screen-calibration">
+                <div class="screen-calibration-head">
+                    <h3>{% bilingual "Calibration Wizard" "颜色/风格校准" %}</h3>
+                    <p>{% bilingual "Click a button then pick the color from the preview." "点击按钮后在预览中取色，适配不同主题与线条。" %}</p>
+                </div>
+                <div class="screen-calibration-grid">
+                    <div class="calibration-row">
+                        <button type="button" class="btn btn-outline-primary" data-pick="line">{% bilingual "Pick Line Color" "选择折线颜色" %}</button>
+                        <span class="color-swatch" data-swatch="line"></span>
+                        <span class="color-label" data-label="line">—</span>
+                    </div>
+                    <div class="calibration-row">
+                        <button type="button" class="btn btn-outline-success" data-pick="candle_up">{% bilingual "Pick Bull Candle" "选择阳线颜色" %}</button>
+                        <span class="color-swatch" data-swatch="candle_up"></span>
+                        <span class="color-label" data-label="candle_up">—</span>
+                    </div>
+                    <div class="calibration-row">
+                        <button type="button" class="btn btn-outline-danger" data-pick="candle_down">{% bilingual "Pick Bear Candle" "选择阴线颜色" %}</button>
+                        <span class="color-swatch" data-swatch="candle_down"></span>
+                        <span class="color-label" data-label="candle_down">—</span>
+                    </div>
+                </div>
+            </div>
+            <div class="screen-hints">
+                <div>{% bilingual "Tip:" "提示：" %} {% bilingual "Use TradingView line chart for the first run." "首次建议使用折线图模式。" %}</div>
+                <div>{% bilingual "Safari may only allow full-screen or window capture." "Safari 可能只支持屏幕或窗口级捕获。" %}</div>
+                <div>{% bilingual "Local analysis runs in Django; keep this page open." "分析在本机 Django 中完成，请保持页面打开。" %}</div>
+                <div>{% bilingual "OCR requires Tesseract (brew install tesseract)." "OCR 需安装 Tesseract（brew install tesseract）。" %}</div>
+            </div>
+        </article>
+
+        <article class="screen-card">
+            <div class="screen-card-head">
+                <div>
+                    <h2>{% bilingual "Wave Result" "波型结果" %}</h2>
+                    <p>{% bilingual "Pattern name, confidence, and bias probabilities." "输出波型名称、置信度与方向概率。" %}</p>
+                </div>
+                <div class="screen-meta">
+                    <span data-role="request-id"></span>
+                    <span data-role="timestamp"></span>
+                </div>
+            </div>
+
+            <div class="screen-result">
+                <div class="screen-pattern-meta">
+                    <span data-role="symbol">—</span>
+                    <span data-role="timeframe">—</span>
+                    <span data-role="analysis-mode">—</span>
+                </div>
+                <div class="screen-result-main">
+                    <div class="screen-pattern-name" data-role="pattern-name">—</div>
+                    <div class="screen-pattern-confidence" data-role="pattern-confidence">—</div>
+                    <div class="screen-pattern-bias" data-role="pattern-bias">—</div>
+                    <div class="screen-pattern-suggestion" data-role="pattern-suggestion">—</div>
+                </div>
+                <div class="screen-probabilities">
+                    <div class="prob-row">
+                        <span>{% bilingual "Up" "上涨" %}</span>
+                        <div class="prob-bar"><div data-role="prob-up"></div></div>
+                        <span data-role="prob-up-label">—</span>
+                    </div>
+                    <div class="prob-row">
+                        <span>{% bilingual "Down" "下跌" %}</span>
+                        <div class="prob-bar"><div data-role="prob-down"></div></div>
+                        <span data-role="prob-down-label">—</span>
+                    </div>
+                    <div class="prob-row">
+                        <span>{% bilingual "Sideways" "震荡" %}</span>
+                        <div class="prob-bar"><div data-role="prob-neutral"></div></div>
+                        <span data-role="prob-neutral-label">—</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="screen-overlay">
+                <img id="screen-overlay-img" alt="{% bilingual 'Overlay' '叠加图' %}">
+                <div class="screen-overlay-empty">{% bilingual "Overlay will appear here." "识别后会在此展示叠加图。" %}</div>
+            </div>
+
+            <div class="screen-diagnostics" data-role="diagnostics"></div>
+        </article>
+    </section>
+
+    <section class="screen-training">
+        <article class="screen-card">
+            <div class="screen-card-head">
+                <div>
+                    <h2>{% bilingual "Pattern Library & Training" "模式库与训练" %}</h2>
+                    <p>{% bilingual "Label the current frame, save samples, and train a local classifier." "为当前帧标注标签，保存样本并训练本地模型。" %}</p>
+                </div>
+                <div class="screen-meta">
+                    <span data-role="training-status"></span>
+                </div>
+            </div>
+            <div class="training-controls">
+                <label for="pattern-label">{% bilingual "Pattern Label" "形态标签" %}</label>
+                <select id="pattern-label">
+                    <option value="">{% bilingual "Select label..." "选择标签…" %}</option>
+                    <option value="rising_wedge">{% bilingual "Rising Wedge" "上升楔形" %}</option>
+                    <option value="falling_wedge">{% bilingual "Falling Wedge" "下降楔形" %}</option>
+                    <option value="ascending_triangle">{% bilingual "Ascending Triangle" "上升三角形" %}</option>
+                    <option value="descending_triangle">{% bilingual "Descending Triangle" "下降三角形" %}</option>
+                    <option value="sym_triangle">{% bilingual "Sym Triangle" "对称三角形" %}</option>
+                    <option value="channel_up">{% bilingual "Channel Up" "上升通道" %}</option>
+                    <option value="channel_down">{% bilingual "Channel Down" "下降通道" %}</option>
+                    <option value="range">{% bilingual "Range" "震荡区间" %}</option>
+                    <option value="trend_up">{% bilingual "Trend Up" "趋势向上" %}</option>
+                    <option value="trend_down">{% bilingual "Trend Down" "趋势向下" %}</option>
+                    <option value="trend_flat">{% bilingual "Trend Flat" "横盘整理" %}</option>
+                    <option value="converging">{% bilingual "Converging" "收敛形态" %}</option>
+                    <option value="rising_converging">{% bilingual "Rising Converging" "上行收敛" %}</option>
+                    <option value="falling_converging">{% bilingual "Falling Converging" "下行收敛" %}</option>
+                </select>
+                <button type="button" class="btn btn-outline-primary" data-action="save-sample">{% bilingual "Save Sample" "保存样本" %}</button>
+                <button type="button" class="btn btn-outline-dark" data-action="train-model">{% bilingual "Train Model" "训练模型" %}</button>
+                <div class="training-summary" data-role="training-summary">—</div>
+            </div>
+        </article>
+    </section>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script id="pattern-copy" type="application/json">
+{
+    "rising_wedge": {
+        "name": "上升楔形",
+        "bias": "偏空",
+        "suggestion": "模型提示：上涨动能趋缓，关注回撤风险，谨慎控制仓位。"
+    },
+    "falling_wedge": {
+        "name": "下降楔形",
+        "bias": "偏多",
+        "suggestion": "模型提示：下跌动能放缓，等待突破确认后再考虑试探。"
+    },
+    "ascending_triangle": {
+        "name": "上升三角形",
+        "bias": "偏多",
+        "suggestion": "模型提示：若突破上沿则偏多，未突破前注意节奏与仓位。"
+    },
+    "descending_triangle": {
+        "name": "下降三角形",
+        "bias": "偏空",
+        "suggestion": "模型提示：跌破下沿风险增加，注意保护和止损。"
+    },
+    "sym_triangle": {
+        "name": "对称三角形",
+        "bias": "观望",
+        "suggestion": "模型提示：等待方向选择，放量突破后再跟随。"
+    },
+    "channel_up": {
+        "name": "上升通道",
+        "bias": "偏多",
+        "suggestion": "模型提示：趋势向上，回踩支撑时关注机会。"
+    },
+    "channel_down": {
+        "name": "下降通道",
+        "bias": "偏空",
+        "suggestion": "模型提示：趋势向下，反弹需谨慎。"
+    },
+    "range": {
+        "name": "震荡区间",
+        "bias": "观望",
+        "suggestion": "模型提示：以区间震荡为主，等待突破信号。"
+    },
+    "trend_up": {
+        "name": "趋势向上",
+        "bias": "偏多",
+        "suggestion": "模型提示：短线偏多但波动较大，注意止损与节奏。"
+    },
+    "trend_down": {
+        "name": "趋势向下",
+        "bias": "偏空",
+        "suggestion": "模型提示：短线偏空，谨慎追涨。"
+    },
+    "trend_flat": {
+        "name": "横盘整理",
+        "bias": "观望",
+        "suggestion": "模型提示：方向不明，等待放量或突破信号。"
+    },
+    "converging": {
+        "name": "收敛形态",
+        "bias": "观望",
+        "suggestion": "模型提示：短线震荡，等待方向选择。"
+    },
+    "rising_converging": {
+        "name": "上行收敛",
+        "bias": "偏多",
+        "suggestion": "模型提示：价格上行但空间收敛，注意节奏与风控。"
+    },
+    "falling_converging": {
+        "name": "下行收敛",
+        "bias": "偏空",
+        "suggestion": "模型提示：下行收敛，注意破位风险。"
+    },
+    "unknown": {
+        "name": "未识别",
+        "bias": "观望",
+        "suggestion": "模型提示：暂未识别出稳定形态，可调整视图后再试。"
+    }
+}
+</script>
+<script id="screen-analyzer-labels" type="application/json">
+{
+    "status_idle": "空闲",
+    "status_active": "捕获中",
+    "status_analyzing": "分析中",
+    "status_updated": "已更新",
+    "status_stopped": "已停止",
+    "status_error": "异常",
+    "status_pick": "取色中",
+    "msg_capture_unsupported": "浏览器不支持屏幕捕获",
+    "msg_permission_denied": "授权失败或被取消",
+    "msg_frame_missing": "未获取到图像",
+    "msg_analysis_failed": "分析失败",
+    "msg_network_error": "网络或服务异常",
+    "msg_pick_prompt": "请在预览中点击取色",
+    "msg_need_label": "请选择标签",
+    "msg_sample_start": "正在保存",
+    "msg_sample_saved": "样本已保存",
+    "msg_train_start": "训练中",
+    "msg_train_success": "训练完成",
+    "msg_train_fail": "训练失败",
+    "msg_missing_capture": "请先开始捕获",
+    "msg_need_candle_color": "请先取样K线颜色",
+    "toggle_on": "停止自动",
+    "toggle_off": "自动分析",
+    "bias_prefix": "方向：",
+    "confidence_prefix": "置信度：",
+    "request_id_prefix": "ID ",
+    "diagnostic_coverage": "覆盖率",
+    "diagnostic_range": "像素跨度",
+    "diagnostic_extrema": "极值点",
+    "label_symbol": "品种",
+    "label_timeframe": "周期",
+    "label_mode": "模式",
+    "ocr_on": "OCR 开启",
+    "ocr_off": "OCR 关闭",
+    "model_on": "模型启用",
+    "model_off": "模型未启用"
+}
+</script>
+<script src="{% static 'trading/js/screen_analyzer.js' %}"></script>
+{% endblock %}

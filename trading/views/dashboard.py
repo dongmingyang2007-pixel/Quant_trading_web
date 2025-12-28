@@ -94,6 +94,15 @@ ADVANCED_STRATEGY_DEFAULTS = {
     "investment_horizon": "medium",
     "experience_level": "advanced",
     "primary_goal": "growth",
+    "lot_size": 1,
+    "max_weight": None,
+    "min_weight": None,
+    "max_holdings": None,
+    "sector_caps": None,
+    "turnover_cap": None,
+    "allow_short": True,
+    "limit_move_threshold": None,
+    "execution_delay_days": 1,
 }
 
 
@@ -127,7 +136,20 @@ def _ollama_model_choices() -> list[str]:
         "llama3.2:3b",
         "qwen2:7b",
     ]
+    gemini_candidates = [
+        os.environ.get("GEMINI_MODEL"),
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-latest",
+        "gemini-3.0-pro",
+    ]
+    ai_provider = (os.environ.get("AI_PROVIDER") or "").strip().lower()
+    if ai_provider == "gemini":
+        gemini_candidates = [os.environ.get("GEMINI_MODEL", "gemini-3.0-pro")] + gemini_candidates
     for candidate in fallbacks:
+        if candidate and candidate.strip() and candidate not in choices:
+            choices.append(candidate.strip())
+    for candidate in gemini_candidates:
         if candidate and candidate.strip() and candidate not in choices:
             choices.append(candidate.strip())
     return choices
@@ -147,7 +169,12 @@ def _ensure_ai_model_metadata(payload: dict[str, Any]) -> None:
     for candidate in base_choices:
         if candidate and candidate not in merged:
             merged.append(candidate)
-    default_model = os.environ.get("OLLAMA_MODEL", "deepseek-r1:8b")
+    provider = (os.environ.get("AI_PROVIDER") or "").strip().lower()
+    default_model = (
+        os.environ.get("GEMINI_MODEL", "gemini-3.0-pro")
+        if provider == "gemini"
+        else os.environ.get("OLLAMA_MODEL", "deepseek-r1:8b")
+    )
     selected = str(payload.get("ai_model") or "").strip()
     if not selected:
         selected = merged[0] if merged else default_model
@@ -240,6 +267,15 @@ def build_strategy_input(cleaned: dict[str, Any], *, request_id: str, user) -> t
         user_id=user_id,
         model_version=config["ml_model"],
         data_version=os.environ.get("MARKET_DATA_VERSION"),
+        lot_size=config.get("lot_size", 1),
+        max_weight=config.get("max_weight"),
+        min_weight=config.get("min_weight"),
+        max_holdings=config.get("max_holdings"),
+        sector_caps=config.get("sector_caps"),
+        turnover_cap=config.get("turnover_cap"),
+        allow_short=config.get("allow_short", True),
+        limit_move_threshold=config.get("limit_move_threshold"),
+        execution_delay_days=config.get("execution_delay_days", 1),
     )
     return strategy_params, config
 

@@ -29,6 +29,16 @@ class ReportContext:
     user_name: str
     ticker: str
     benchmark: str
+    params: dict[str, Any]
+    data_quality: dict[str, Any]
+    data_risks: list[str]
+    signal_snapshot: dict[str, Any]
+    target_portfolio: dict[str, Any]
+    trade_list: list[dict[str, Any]]
+    warnings: list[str]
+    quick_summary: list[str]
+    risk_alerts: list[str]
+    disclaimer: str
 
 
 def load_snapshot(raw: Any) -> dict[str, Any]:
@@ -51,6 +61,16 @@ def build_report_context(snapshot: dict[str, Any], *, user) -> ReportContext:
     generated_at = timezone.now().strftime("%Y-%m-%d %H:%M UTC")
     ticker = snapshot.get("ticker") or ""
     benchmark = snapshot.get("benchmark_ticker") or snapshot.get("benchmark") or ""
+    params = snapshot.get("params") or {}
+    data_quality = snapshot.get("data_quality") or stats.get("data_quality") or {}
+    data_risks = snapshot.get("data_risks") or stats.get("data_risks") or []
+    signal_snapshot = snapshot.get("signal_snapshot") or {}
+    target_portfolio = snapshot.get("target_portfolio") or {}
+    trade_list = snapshot.get("trade_list") or []
+    warnings = snapshot.get("warnings") or []
+    quick_summary = snapshot.get("quick_summary") or []
+    risk_alerts = snapshot.get("risk_alerts") or []
+    disclaimer = snapshot.get("disclaimer") or ""
     return ReportContext(
         snapshot=snapshot,
         metrics=metrics if isinstance(metrics, list) else [],
@@ -60,6 +80,16 @@ def build_report_context(snapshot: dict[str, Any], *, user) -> ReportContext:
         user_name=getattr(user, "get_username", lambda: "")(),
         ticker=ticker,
         benchmark=benchmark,
+        params=params if isinstance(params, dict) else {},
+        data_quality=data_quality if isinstance(data_quality, dict) else {},
+        data_risks=list(data_risks) if isinstance(data_risks, list) else [],
+        signal_snapshot=signal_snapshot if isinstance(signal_snapshot, dict) else {},
+        target_portfolio=target_portfolio if isinstance(target_portfolio, dict) else {},
+        trade_list=trade_list if isinstance(trade_list, list) else [],
+        warnings=list(warnings) if isinstance(warnings, list) else [],
+        quick_summary=list(quick_summary) if isinstance(quick_summary, list) else [],
+        risk_alerts=list(risk_alerts) if isinstance(risk_alerts, list) else [],
+        disclaimer=str(disclaimer or ""),
     )
 
 
@@ -93,6 +123,25 @@ def render_report_csv(context: ReportContext) -> str:
             ]
         )
     writer.writerow([])
+    if context.data_quality:
+        writer.writerow(["Data Quality"])
+        for key, value in context.data_quality.items():
+            writer.writerow([key, value])
+        writer.writerow([])
+    if context.trade_list:
+        writer.writerow(["Trade List"])
+        writer.writerow(["symbol", "side", "quantity", "price", "notional"])
+        for trade in context.trade_list:
+            writer.writerow(
+                [
+                    trade.get("symbol"),
+                    trade.get("side"),
+                    trade.get("quantity"),
+                    trade.get("price"),
+                    trade.get("notional"),
+                ]
+            )
+        writer.writerow([])
     writer.writerow(["Statistic", "Value"])
     for key, value in context.stats.items():
         writer.writerow([key, value])

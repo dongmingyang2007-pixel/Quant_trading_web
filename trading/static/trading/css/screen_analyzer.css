@@ -1,0 +1,354 @@
+.screen-analyzer {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.screen-hero {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: #ffffff;
+    border-radius: 18px;
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    padding: 20px 24px;
+    box-shadow: 0 16px 32px rgba(15, 23, 42, 0.08);
+}
+
+.screen-kicker {
+    margin: 0;
+    font-size: 0.82rem;
+    color: #64748b;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.screen-title {
+    margin: 6px 0 8px;
+    font-size: clamp(1.8rem, 2.8vw, 2.4rem);
+    color: #0f172a;
+    font-weight: 700;
+}
+
+.screen-subtitle {
+    margin: 0;
+    color: #475569;
+    font-size: 0.96rem;
+    line-height: 1.6;
+}
+
+.screen-disclaimer {
+    background: rgba(248, 113, 113, 0.12);
+    border: 1px solid rgba(248, 113, 113, 0.3);
+    color: #991b1b;
+    border-radius: 12px;
+    padding: 10px 14px;
+    font-size: 0.88rem;
+}
+
+.screen-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+    gap: 20px;
+}
+
+.screen-card {
+    background: #ffffff;
+    border-radius: 18px;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    padding: 18px 20px;
+    box-shadow: 0 16px 30px rgba(15, 23, 42, 0.06);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.screen-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+}
+
+.screen-card-head h2 {
+    margin: 0 0 4px;
+    font-size: 1.2rem;
+    color: #0f172a;
+}
+
+.screen-card-head p {
+    margin: 0;
+    font-size: 0.88rem;
+    color: #64748b;
+}
+
+.screen-status {
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    background: rgba(15, 23, 42, 0.06);
+    color: #475569;
+}
+
+.screen-status[data-state="active"] {
+    background: rgba(14, 116, 144, 0.16);
+    color: #0f766e;
+}
+
+.screen-status[data-state="error"] {
+    background: rgba(248, 113, 113, 0.16);
+    color: #b91c1c;
+}
+
+.screen-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.screen-control-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+    color: #475569;
+}
+
+.screen-control-field select {
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    padding: 4px 8px;
+    font-size: 0.85rem;
+}
+
+.screen-preview {
+    position: relative;
+    border-radius: 14px;
+    border: 1px dashed rgba(148, 163, 184, 0.6);
+    overflow: hidden;
+    background: #f8fafc;
+}
+
+#screen-preview {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+.screen-preview-hint {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    right: 12px;
+    background: rgba(15, 23, 42, 0.72);
+    color: #f8fafc;
+    padding: 8px 12px;
+    border-radius: 10px;
+    font-size: 0.82rem;
+}
+
+.screen-hints {
+    display: grid;
+    gap: 6px;
+    font-size: 0.84rem;
+    color: #475569;
+}
+
+.screen-calibration {
+    border-radius: 14px;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    padding: 14px 16px;
+    background: rgba(248, 250, 252, 0.8);
+}
+
+.screen-calibration-head h3 {
+    margin: 0 0 4px;
+    font-size: 1rem;
+    color: #0f172a;
+}
+
+.screen-calibration-head p {
+    margin: 0 0 12px;
+    font-size: 0.84rem;
+    color: #64748b;
+}
+
+.screen-calibration-grid {
+    display: grid;
+    gap: 10px;
+}
+
+.calibration-row {
+    display: grid;
+    grid-template-columns: auto 22px 1fr;
+    align-items: center;
+    gap: 10px;
+}
+
+.color-swatch {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    background: #e2e8f0;
+    border: 1px solid rgba(148, 163, 184, 0.5);
+}
+
+.color-label {
+    font-size: 0.82rem;
+    color: #475569;
+}
+
+.screen-result {
+    display: grid;
+    gap: 14px;
+}
+
+.screen-pattern-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 0.82rem;
+    color: #64748b;
+}
+
+.screen-result-main {
+    display: grid;
+    gap: 6px;
+}
+
+.screen-pattern-name {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.screen-pattern-confidence,
+.screen-pattern-bias {
+    font-size: 0.9rem;
+    color: #0f766e;
+}
+
+.screen-pattern-suggestion {
+    font-size: 0.9rem;
+    color: #475569;
+    line-height: 1.55;
+}
+
+.screen-probabilities {
+    display: grid;
+    gap: 8px;
+}
+
+.prob-row {
+    display: grid;
+    grid-template-columns: 52px 1fr 48px;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82rem;
+    color: #475569;
+}
+
+.prob-bar {
+    height: 8px;
+    background: rgba(148, 163, 184, 0.2);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.prob-bar div {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #0ea5e9, #10b981);
+    border-radius: 999px;
+    transition: width 0.2s ease;
+}
+
+.screen-overlay {
+    border-radius: 14px;
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    background: #f8fafc;
+    min-height: 220px;
+    position: relative;
+    overflow: hidden;
+}
+
+.screen-overlay img {
+    width: 100%;
+    display: none;
+}
+
+.screen-overlay.has-image img {
+    display: block;
+}
+
+.screen-overlay-empty {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: #94a3b8;
+    font-size: 0.86rem;
+}
+
+.screen-overlay.has-image .screen-overlay-empty {
+    display: none;
+}
+
+.screen-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.75rem;
+    color: #94a3b8;
+    text-align: right;
+}
+
+.screen-diagnostics {
+    font-size: 0.78rem;
+    color: #64748b;
+    background: rgba(15, 23, 42, 0.04);
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+
+.screen-training {
+    margin-top: 10px;
+}
+
+.training-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+.training-controls label {
+    font-size: 0.85rem;
+    color: #475569;
+}
+
+.training-controls select {
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    padding: 6px 10px;
+    font-size: 0.85rem;
+}
+
+.training-summary {
+    font-size: 0.82rem;
+    color: #64748b;
+    padding-left: 6px;
+}
+
+.screen-control-toggle input {
+    margin-right: 6px;
+}
+
+@media (max-width: 992px) {
+    .screen-grid {
+        grid-template-columns: 1fr;
+    }
+}

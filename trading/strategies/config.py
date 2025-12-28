@@ -68,6 +68,7 @@ class StrategyInput:
     execution_liquidity_buffer: float = 0.05
     execution_penalty_bps: float = 6.0
     execution_mode: str = "adv"  # 'adv' or 'limit'
+    execution_delay_days: int = 1
     class_weight_mode: str = "balanced"  # imbalance handling
     focal_gamma: float = 2.0
     dynamic_exposure_multiplier: float = 1.0
@@ -112,6 +113,17 @@ class StrategyInput:
     enforce_pfws_only: bool = False  # 若为 True，禁止非 PFWS 切分的训练/验证
     random_seed: int = DEFAULT_STRATEGY_SEED
     threshold_jobs: int = 1
+    # portfolio / execution controls
+    lot_size: int = 1
+    max_weight: float | None = None
+    min_weight: float | None = None
+    max_holdings: int | None = None
+    sector_caps: dict[str, float] | None = None
+    turnover_cap: float | None = None
+    allow_short: bool = True
+    current_positions: dict[str, float] | None = None
+    cash: float | None = None
+    limit_move_threshold: float | None = None
 
 
 @dataclass(slots=True)

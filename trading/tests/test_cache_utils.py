@@ -47,3 +47,15 @@ class CacheUtilsTests(SimpleTestCase):
         restored = cache_utils.cache_get_object("series")
         self.assertTrue(isinstance(restored, pd.Series))
         self.assertTrue(series.equals(restored))
+
+    def test_cache_alias_scopes_keys(self):
+        cache_utils.cache_set_object("shared", {"value": "alpha"}, 30, cache_alias="alpha")
+        cache_utils.cache_set_object("shared", {"value": "beta"}, 30, cache_alias="beta")
+        self.assertEqual(
+            cache_utils.cache_get_object("shared", cache_alias="alpha"),
+            {"value": "alpha"},
+        )
+        self.assertEqual(
+            cache_utils.cache_get_object("shared", cache_alias="beta"),
+            {"value": "beta"},
+        )

@@ -14,6 +14,7 @@ from django.utils.safestring import mark_safe
 from .config import StrategyInput
 from .metrics import (
     build_metric,
+    format_currency,
     format_percentage,
     calculate_cagr,
     calculate_sharpe,
@@ -27,11 +28,42 @@ from .risk import calculate_max_drawdown, calculate_drawdown_series
 from ..security import sanitize_html_fragment
 from ..headlines import estimate_readers
 
+try:  # optional baselines
+    from statsmodels.tsa.arima.model import ARIMA  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    ARIMA = None  # type: ignore
+
+try:  # optional baselines
+    from statsmodels.tsa.vector_ar.var_model import VAR  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    VAR = None  # type: ignore
+
+try:  # optional data source
+    import yfinance as yf  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    yf = None  # type: ignore
+
+try:  # optional graph analytics
+    import networkx as nx  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    nx = None  # type: ignore
+
 RISK_PROFILE_LABELS = {
     "conservative": _("保守"),
     "balanced": _("平衡"),
     "aggressive": _("进取"),
 }
+
+
+def normal_cdf(value: float) -> float:
+    """Standard normal CDF with safe fallback."""
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return 0.5
+    if not math.isfinite(x):
+        return 0.5
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
 def generate_recommendations(
@@ -2141,4 +2173,3 @@ def build_user_guidance(
         "primary_goal_label": goal_text,
         "disclaimer": disclaimer,
     }
-

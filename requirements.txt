@@ -12,6 +12,9 @@ duckduckgo-search>=5.1.0
 scikit-learn>=1.3
 whitenoise>=6.6
 APScheduler>=3.10
+# Backtest insights / baselines
+statsmodels>=0.14
+networkx>=3.2
 # Task queue / caching (可选)
 celery>=5.3
 redis>=5.0
@@ -23,9 +26,7 @@ Pillow>=10.3.0
 lightgbm>=4.0
 catboost>=1.2
 shap>=0.45
-statsmodels>=0.14
 vaderSentiment>=3.3
-networkx>=3.2
 torch>=2.2
 optuna>=3.6
 # Optional RL engines（如需启用 FinRL/SB3，请另行安装）
@@ -36,3 +37,4 @@ gunicorn>=21.2
 python-dotenv>=1.0
 mlflow>=2.14
 pdfplumber>=0.11
+pytesseract>=0.3.10

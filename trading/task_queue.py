@@ -103,8 +103,20 @@ def submit_rl_task(payload: Dict[str, Any]) -> Any:
 
 
 def get_task_status(task_id: str) -> Dict[str, Any]:
+    if task_id.startswith("pending-"):
+        return {
+            "task_id": task_id,
+            "state": "FAILURE",
+            "error": "Task submission failed before a job id was created.",
+        }
     if task_id.startswith("sync-"):
         return {"task_id": task_id, "state": "SUCCESS"}
+    if getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False) and not getattr(settings, "CELERY_TASK_STORE_EAGER_RESULT", False):
+        return {
+            "task_id": task_id,
+            "state": "FAILURE",
+            "error": "Task results are not stored when eager mode is enabled.",
+        }
     if AsyncResult is None:
         return {"task_id": task_id, "state": "UNKNOWN"}
     result = AsyncResult(task_id)

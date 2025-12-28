@@ -130,7 +130,7 @@ def append_history(record: BacktestRecord) -> None:
     try:
         user = user_model.objects.get(pk=record.user_id)
     except user_model.DoesNotExist:
-        append_log(BacktestLogEntry(**record.to_dict()))
+        append_log(_build_log_entry(record))
         return
 
     try:

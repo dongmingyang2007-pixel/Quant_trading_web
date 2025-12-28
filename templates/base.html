@@ -28,6 +28,9 @@
                         <a class="nav-link{% if request.resolver_match.url_name == 'market_insights' %} active{% endif %}" href="{% url 'trading:market_insights' %}">{% bilingual "Market Insights" "股市信息" %}</a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link{% if request.resolver_match.url_name == 'screen_analyzer' %} active{% endif %}" href="{% url 'trading:screen_analyzer' %}">{% bilingual "Screen Analyzer" "屏幕波型" %}</a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link{% if request.resolver_match.url_name == 'paper_trading' %} active{% endif %}" href="{% url 'trading:paper_trading' %}">{% bilingual "Paper Trading" "模拟实盘" %}</a>
                     </li>
                     <li class="nav-item">
@@ -94,6 +97,14 @@
             "shortcut": "M",
             "type": "route",
             "href": "{% url 'trading:market_insights' %}"
+        },
+        {
+            "id": "screen-analyzer",
+            "label": "{% if lang_prefix == 'zh' %}{{ "屏幕波型"|escapejs }}{% else %}{{ "Screen Analyzer"|escapejs }}{% endif %}",
+            "description": "{% if lang_prefix == 'zh' %}{{ "屏幕解析波型与概率图谱"|escapejs }}{% else %}{{ "Analyze screen wave patterns"|escapejs }}{% endif %}",
+            "shortcut": "S",
+            "type": "route",
+            "href": "{% url 'trading:screen_analyzer' %}"
         },
         {
             "id": "learning",

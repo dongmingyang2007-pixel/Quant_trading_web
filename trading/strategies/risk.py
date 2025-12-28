@@ -92,6 +92,12 @@ def enforce_risk_limits(
     exposure = (position * leverage).fillna(0.0)
     exposure = exposure.clip(lower=-params.max_leverage, upper=params.max_leverage)
     exposure, vol_events = apply_vol_targeting(exposure, asset_returns, params)
+    daily_limit = max(params.daily_exposure_limit or 0.0, 0.0)
+    limit_hits = 0
+    if daily_limit > 0:
+        capped = exposure.clip(lower=-daily_limit, upper=daily_limit)
+        limit_hits = int((capped != exposure).sum())
+        exposure = capped
 
     intraday_limit = max(params.intraday_loss_limit or 0.0, 0.0)
     max_drawdown_stop = max(params.max_drawdown_stop or 0.0, 0.0)
@@ -103,7 +109,6 @@ def enforce_risk_limits(
     stopped = False
     stop_dates: list[str] = []
     resumed_dates: list[str] = []
-    limit_hits = 0
     adjusted = []
     index = exposure.index
     for i, exp in enumerate(exposure):

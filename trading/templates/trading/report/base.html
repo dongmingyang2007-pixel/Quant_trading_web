@@ -16,14 +16,118 @@
     </style>
 </head>
 <body>
-    <h1>旗舰策略分析报告</h1>
+    <h1>量化策略分析报告</h1>
     <p class="meta">
         标的：{{ report.ticker|default:"-" }}{% if report.benchmark %} ｜ 基准：{{ report.benchmark }}{% endif %}<br>
         生成时间：{{ report.generated_at }} ｜ 用户：{{ report.user_name|default:"-" }}
     </p>
 
+    <h2>摘要</h2>
+    {% if report.quick_summary %}
+    <ul>
+        {% for item in report.quick_summary %}
+        <li>{{ item }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+    {% if report.ai_summary %}
+    <div class="ai-summary">
+        <h3>AI 投研摘要</h3>
+        <p>{{ report.ai_summary }}</p>
+    </div>
+    {% endif %}
+    {% if report.risk_alerts %}
+    <h3>风险提示</h3>
+    <ul>
+        {% for item in report.risk_alerts %}
+        <li>{{ item }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+
+    <h2>市场与数据</h2>
+    <table>
+        <tbody>
+            <tr><th>回测区间</th><td>{{ report.params.start_date }} ~ {{ report.params.end_date }}</td></tr>
+            <tr><th>数据版本</th><td>{{ report.snapshot.metadata.data_version|default:"-" }}</td></tr>
+            <tr><th>模型版本</th><td>{{ report.snapshot.metadata.model_version|default:"-" }}</td></tr>
+        </tbody>
+    </table>
+    {% if report.data_quality %}
+    <h3>数据质量摘要</h3>
+    <table>
+        <tbody>
+            <tr><th>样本量</th><td>{{ report.data_quality.total_rows }}</td></tr>
+            <tr><th>缺失比例</th><td>{{ report.data_quality.missing_ratio }}</td></tr>
+            <tr><th>零成交日</th><td>{{ report.data_quality.zero_volume_days }}</td></tr>
+            <tr><th>价格停滞日</th><td>{{ report.data_quality.stale_price_days }}</td></tr>
+            <tr><th>补缺数量</th><td>{{ report.data_quality.filled_gaps }}</td></tr>
+            <tr><th>异常修正</th><td>{{ report.data_quality.clipped_outliers }}</td></tr>
+        </tbody>
+    </table>
+    {% endif %}
+    {% if report.data_risks %}
+    <h3>数据风险</h3>
+    <ul>
+        {% for item in report.data_risks %}
+        <li>{{ item }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+
+    <h2>信号与解释</h2>
+    <table>
+        <tbody>
+            <tr><th>最新信号日期</th><td>{{ report.signal_snapshot.as_of|default:"-" }}</td></tr>
+            <tr><th>信号</th><td>{{ report.signal_snapshot.signal }}</td></tr>
+            <tr><th>持仓</th><td>{{ report.signal_snapshot.position }}</td></tr>
+            <tr><th>曝险</th><td>{{ report.signal_snapshot.exposure }}</td></tr>
+            <tr><th>模型概率</th><td>{{ report.signal_snapshot.probability|default:"-" }}</td></tr>
+            <tr><th>价格</th><td>{{ report.signal_snapshot.price|default:"-" }}</td></tr>
+        </tbody>
+    </table>
+
+    <h2>目标组合</h2>
+    <table>
+        <tbody>
+            <tr><th>目标权重</th><td>{{ report.target_portfolio.target_weights }}</td></tr>
+            <tr><th>当前权重</th><td>{{ report.target_portfolio.current_weights }}</td></tr>
+            <tr><th>总曝险</th><td>{{ report.target_portfolio.gross_exposure }}</td></tr>
+            <tr><th>净曝险</th><td>{{ report.target_portfolio.net_exposure }}</td></tr>
+            <tr><th>换手估计</th><td>{{ report.target_portfolio.turnover }}</td></tr>
+        </tbody>
+    </table>
+
+    <h2>交易清单</h2>
+    {% if report.trade_list %}
+    <table>
+        <thead>
+            <tr>
+                <th>标的</th>
+                <th>方向</th>
+                <th>数量</th>
+                <th>参考价格</th>
+                <th>预计金额</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for trade in report.trade_list %}
+            <tr>
+                <td>{{ trade.symbol }}</td>
+                <td>{{ trade.side }}</td>
+                <td>{{ trade.quantity }}</td>
+                <td>{{ trade.price }}</td>
+                <td>{{ trade.notional }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="meta">当前持仓与目标权重一致，无需交易。</p>
+    {% endif %}
+
     {% if report.metrics %}
-    <h2>核心指标</h2>
+    <h2>回测与归因</h2>
     <table>
         <thead>
             <tr>
@@ -44,31 +148,43 @@
     </table>
     {% endif %}
 
-    {% if report.stats %}
-    <h2>统计摘要</h2>
+    <h2>附录</h2>
+    {% if report.params %}
+    <h3>配置参数</h3>
     <table>
-        <thead>
-            <tr>
-                <th>指标</th>
-                <th>数值</th>
-            </tr>
-        </thead>
         <tbody>
-            {% for key, value in report.stats.items %}
+            {% for key, value in report.params.items %}
             <tr>
-                <td>{{ key }}</td>
+                <th>{{ key }}</th>
                 <td>{{ value }}</td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
     {% endif %}
-
-    {% if report.ai_summary %}
-    <div class="ai-summary">
-        <h3>AI 投研摘要</h3>
-        <p>{{ report.ai_summary }}</p>
-    </div>
+    {% if report.stats %}
+    <h3>统计摘要</h3>
+    <table>
+        <tbody>
+            {% for key, value in report.stats.items %}
+            <tr>
+                <th>{{ key }}</th>
+                <td>{{ value }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+    {% if report.warnings %}
+    <h3>运行警告</h3>
+    <ul>
+        {% for item in report.warnings %}
+        <li>{{ item }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+    {% if report.disclaimer %}
+    <p class="meta">{{ report.disclaimer }}</p>
     {% endif %}
 </body>
 </html>

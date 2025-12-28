@@ -105,6 +105,12 @@ def build_cache_key(*parts: Any) -> str:
     return ":".join(normalized)
 
 
+def _scoped_cache_key(key: str, cache_alias: str | None) -> str:
+    if not cache_alias or cache_alias == "default":
+        return key
+    return f"{cache_alias}:{key}"
+
+
 def _is_json_safe(value: Any) -> bool:
     """Allow only primitive/structured JSON types; reject everything else."""
     if isinstance(value, (str, int, float, bool)) or value is None:
@@ -182,23 +188,25 @@ def _decode_value(payload: bytes | None) -> Any | None:
         return None
 
 
-def cache_get_object(key: str) -> Any | None:
-    payload = get_cache().get(key)
+def cache_get_object(key: str, *, cache_alias: str | None = None) -> Any | None:
+    scoped_key = _scoped_cache_key(key, cache_alias)
+    payload = get_cache().get(scoped_key)
     return _decode_value(payload)
 
 
-def cache_set_object(key: str, value: Any, ttl: int) -> None:
+def cache_set_object(key: str, value: Any, ttl: int, *, cache_alias: str | None = None) -> None:
     payload = _encode_value(value)
     if payload is None:
         return
-    get_cache().set(key, payload, ttl)
+    scoped_key = _scoped_cache_key(key, cache_alias)
+    get_cache().set(scoped_key, payload, ttl)
 
 
-def cache_memoize(key: str, builder: Callable[[], Any], ttl: int) -> Any:
-    cached = cache_get_object(key)
+def cache_memoize(key: str, builder: Callable[[], Any], ttl: int, *, cache_alias: str | None = None) -> Any:
+    cached = cache_get_object(key, cache_alias=cache_alias)
     if cached is not None:
         return cached
     value = builder()
     if value is not None:
-        cache_set_object(key, value, ttl)
+        cache_set_object(key, value, ttl, cache_alias=cache_alias)
     return value

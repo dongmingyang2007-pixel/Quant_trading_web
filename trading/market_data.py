@@ -5,12 +5,11 @@ from typing import Any, Iterable
 from pathlib import Path
 import json
 import time
-from datetime import datetime
 import hashlib
 import os
-import functools
 import threading
 import logging
+from collections import deque
 
 MAX_RETRIES = int(os.environ.get("MARKET_FETCH_MAX_RETRIES", "2") or 0)
 RETRY_BACKOFF_SECONDS = float(os.environ.get("MARKET_FETCH_RETRY_BACKOFF", "1.0") or 0)
@@ -18,7 +17,7 @@ RATE_LIMIT_PER_WINDOW = int(os.environ.get("MARKET_FETCH_RATE_LIMIT", "120") or 
 RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("MARKET_FETCH_RATE_WINDOW", "60") or 0)
 
 _RATE_LOCK = threading.Lock()
-_RATE_BUCKET: list[float] = []
+_RATE_BUCKET: deque[float] = deque()
 LOGGER = logging.getLogger(__name__)
 
 import pandas as pd
@@ -65,7 +64,7 @@ def _rate_limited() -> bool:
     with _RATE_LOCK:
         # drop old
         while _RATE_BUCKET and _RATE_BUCKET[0] < window_start:
-            _RATE_BUCKET.pop(0)
+            _RATE_BUCKET.popleft()
         if len(_RATE_BUCKET) >= RATE_LIMIT_PER_WINDOW:
             LOGGER.warning("market_data rate limit hit: %s in %ss", len(_RATE_BUCKET), RATE_LIMIT_WINDOW_SECONDS)
             record_metric("market_rate_limited", count=len(_RATE_BUCKET), window=RATE_LIMIT_WINDOW_SECONDS)
@@ -97,24 +96,33 @@ def fetch(
         base = digest[:24]
         return DISK_CACHE_DIR / f"{base}.parquet", DISK_CACHE_DIR / f"{base}.json"
 
+    def _candidate_cache_paths(key: str) -> list[tuple[Path, Path]]:
+        hashed = _cache_paths(key)
+        legacy = (DISK_CACHE_DIR / f"{key}.parquet", DISK_CACHE_DIR / f"{key}.json")
+        if hashed == legacy:
+            return [hashed]
+        return [hashed, legacy]
+
     def _load_disk_cache() -> pd.DataFrame:
-        path, meta_path = _cache_paths(cache_key)
-        if not path.exists() or not meta_path.exists():
-            return pd.DataFrame()
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            ts = float(meta.get("timestamp", 0))
-            if time.time() - ts > DISK_CACHE_TTL_SECONDS:
-                try:
-                    path.unlink(missing_ok=True)
-                    meta_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-                return pd.DataFrame()
-            df = pd.read_parquet(path)
-            return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
-        except Exception:
-            return pd.DataFrame()
+        for path, meta_path in _candidate_cache_paths(cache_key):
+            if not path.exists() or not meta_path.exists():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                ts = float(meta.get("timestamp", 0))
+                if time.time() - ts > DISK_CACHE_TTL_SECONDS:
+                    try:
+                        path.unlink(missing_ok=True)
+                        meta_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    continue
+                df = pd.read_parquet(path)
+                if isinstance(df, pd.DataFrame):
+                    return df
+            except Exception:
+                continue
+        return pd.DataFrame()
 
     def _persist_disk_cache(df: pd.DataFrame) -> None:
         if not isinstance(df, pd.DataFrame) or df.empty:

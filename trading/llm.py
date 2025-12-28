@@ -34,6 +34,35 @@ def _env_bool(name: str, default: bool) -> bool:
         return default
     return str(val).strip().lower() in ("1", "true", "yes", "y", "on")
 
+def _default_enable_web(provider: str, user_pref: bool | None) -> bool:
+    """
+    Decide whether to enable web search by default.
+    - user_pref has highest priority
+    - gemini 默认开启（可通过 GEMINI_ENABLE_WEB_DEFAULT=0 关闭）
+    - ollama 按原有环境变量 OLLAMA_ENABLE_WEB
+    """
+    if user_pref is not None:
+        return user_pref
+    if provider == "gemini":
+        return _env_bool("GEMINI_ENABLE_WEB_DEFAULT", True)
+    return _env_bool("OLLAMA_ENABLE_WEB", False)
+
+def _resolve_provider(model_hint: str | None = None) -> str:
+    """
+    Pick the LLM provider based on environment or model name.
+
+    Priority:
+      1) AI_PROVIDER env (e.g. "ollama" / "gemini")
+      2) model hint starting with "gemini" -> gemini
+      3) default to ollama
+    """
+    env_provider = (os.environ.get("AI_PROVIDER") or "").strip().lower()
+    if env_provider:
+        return env_provider
+    if model_hint and str(model_hint).lower().startswith("gemini"):
+        return "gemini"
+    return "ollama"
+
 def _build_ollama_options(is_secondary: bool) -> dict[str, Any]:
     temperature = _env_float("OLLAMA_TEMPERATURE", 0.6)
     # Cap output tokens to avoid long blocking on large models
@@ -486,6 +515,229 @@ def _prepare_chat_messages(
     return messages
 
 
+def _call_gemini_chat(
+    model: str,
+    messages: list[dict[str, str]],
+    *,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise LLMIntegrationError("缺少 GEMINI_API_KEY 环境变量，无法调用 Gemini。")
+    base_url = os.environ.get("GEMINI_API_BASE", "https://generativelanguage.googleapis.com").rstrip("/")
+    url = f"{base_url}/v1beta/models/{model}:generateContent?key={api_key}"
+
+    contents: list[dict[str, Any]] = []
+    system_parts: list[dict[str, str]] = []
+    for msg in messages:
+        role = msg.get("role") or "user"
+        text = (msg.get("content") or "").strip()
+        if not text:
+            continue
+        part = {"text": text}
+        if role == "system":
+            system_parts.append(part)
+            continue
+        normalized_role = "user" if role == "user" else "model"
+        contents.append({"role": normalized_role, "parts": [part]})
+
+    payload: dict[str, Any] = {"contents": contents}
+    if system_parts:
+        payload["system_instruction"] = {"parts": system_parts}
+
+    generation_config: dict[str, Any] = {
+        "temperature": _env_float("GEMINI_TEMPERATURE", 0.35),
+    }
+    max_tokens = _env_int("GEMINI_MAX_TOKENS", 900)
+    if max_tokens > 0:
+        generation_config["maxOutputTokens"] = max_tokens
+    payload["generationConfig"] = generation_config
+
+    try:
+        response = http_client.post(url, json=payload, timeout=timeout_seconds, retries=0)
+        data = response.json()
+    except HttpClientError as exc:
+        raise LLMIntegrationError(f"Gemini 请求失败：{exc}")
+    except ValueError:
+        raise LLMIntegrationError("Gemini 返回了无法解析的响应")
+
+    candidates = data.get("candidates") or []
+    texts: list[str] = []
+    for candidate in candidates:
+        parts = (candidate.get("content") or {}).get("parts") or []
+        for part in parts:
+            txt = (part.get("text") or "").strip()
+            if txt:
+                texts.append(txt)
+        if texts:
+            break
+
+    answer = "\n\n".join(texts).strip()
+    if not answer:
+        raise LLMIntegrationError("Gemini 未返回有效内容，请稍后重试。")
+
+    return {"status": "ok", "answer": answer, "raw": data, "thoughts": []}
+
+
+def _call_gemini_generate(
+    model: str,
+    prompt: str,
+    *,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    """
+    Simpler单轮生成接口，用于非对话模式（报告生成）。
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise LLMIntegrationError("缺少 GEMINI_API_KEY 环境变量，无法调用 Gemini。")
+    base_url = os.environ.get("GEMINI_API_BASE", "https://generativelanguage.googleapis.com").rstrip("/")
+    url = f"{base_url}/v1beta/models/{model}:generateContent?key={api_key}"
+    payload: dict[str, Any] = {
+        "contents": [
+            {"role": "user", "parts": [{"text": prompt}]},
+        ],
+        "generationConfig": {
+            "temperature": _env_float("GEMINI_TEMPERATURE", 0.35),
+            "maxOutputTokens": _env_int("GEMINI_MAX_TOKENS", 1200),
+        },
+    }
+    try:
+        response = http_client.post(url, json=payload, timeout=timeout_seconds, retries=0)
+        data = response.json()
+    except HttpClientError as exc:
+        raise LLMIntegrationError(f"Gemini 请求失败：{exc}")
+    except ValueError:
+        raise LLMIntegrationError("Gemini 返回了无法解析的响应")
+
+    candidates = data.get("candidates") or []
+    texts: list[str] = []
+    for candidate in candidates:
+        parts = (candidate.get("content") or {}).get("parts") or []
+        for part in parts:
+            txt = (part.get("text") or "").strip()
+            if txt:
+                texts.append(txt)
+        if texts:
+            break
+    answer = "\n\n".join(texts).strip()
+    if not answer:
+        raise LLMIntegrationError("Gemini 未返回有效内容，请稍后重试。")
+    return {"status": "ok", "answer": answer, "raw": data, "thoughts": []}
+
+def _build_cost_profile(start_ts: float, end_ts: float, *, streaming: bool = False) -> dict[str, Any]:
+    return {
+        "total_sec": round(max(0.0, end_ts - start_ts), 3),
+        "streaming": streaming,
+    }
+
+def _usage_from_raw(raw: Any) -> dict[str, int]:
+    """Extract token usage if provider返回 usageMetadata 或类似字段。"""
+    if not isinstance(raw, dict):
+        return {}
+    usage = raw.get("usage") or raw.get("usageMetadata") or {}
+    prompt = usage.get("promptTokenCount") or usage.get("prompt_tokens")
+    output = usage.get("candidatesTokenCount") or usage.get("completion_tokens") or usage.get("output_tokens")
+    total = usage.get("totalTokenCount") or usage.get("total_tokens")
+    tokens: dict[str, int] = {}
+    if isinstance(prompt, int):
+        tokens["prompt"] = prompt
+    if isinstance(output, int):
+        tokens["output"] = output
+    if isinstance(total, int):
+        tokens["total"] = total
+    return tokens
+
+def _call_gemini_stream(
+    model: str,
+    messages: list[dict[str, str]],
+    *,
+    timeout_seconds: int,
+) -> tuple[str, list[str]]:
+    """
+    Stream responses from Gemini (:streamGenerateContent). Returns (answer, thoughts).
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise LLMIntegrationError("缺少 GEMINI_API_KEY 环境变量，无法调用 Gemini。")
+    base_url = os.environ.get("GEMINI_API_BASE", "https://generativelanguage.googleapis.com").rstrip("/")
+    url = f"{base_url}/v1beta/models/{model}:streamGenerateContent?key={api_key}"
+    contents: list[dict[str, Any]] = []
+    system_parts: list[dict[str, str]] = []
+    for msg in messages:
+        role = msg.get("role") or "user"
+        text = (msg.get("content") or "").strip()
+        if not text:
+            continue
+        part = {"text": text}
+        if role == "system":
+            system_parts.append(part)
+            continue
+        normalized_role = "user" if role == "user" else "model"
+        contents.append({"role": normalized_role, "parts": [part]})
+    payload: dict[str, Any] = {"contents": contents}
+    if system_parts:
+        payload["system_instruction"] = {"parts": system_parts}
+    payload["generationConfig"] = {
+        "temperature": _env_float("GEMINI_TEMPERATURE", 0.35),
+        "maxOutputTokens": _env_int("GEMINI_MAX_TOKENS", 1200),
+    }
+    try:
+        resp = http_client.post(url, json=payload, timeout=timeout_seconds, retries=0, stream=True)
+    except HttpClientError as exc:
+        raise LLMIntegrationError(f"Gemini 流式请求失败：{exc}")
+    buffer: list[str] = []
+    thoughts: list[str] = []
+    for raw_line in resp.iter_lines(decode_unicode=True):
+        if not raw_line:
+            continue
+        try:
+            data = json.loads(raw_line)
+        except Exception:
+            continue
+        candidates = data.get("candidates") or []
+        for cand in candidates:
+            parts = (cand.get("content") or {}).get("parts") or []
+            for part in parts:
+                txt = (part.get("text") or "").strip()
+                if txt:
+                    buffer.append(txt)
+            if cand.get("thinking"):
+                if isinstance(cand["thinking"], str):
+                    thoughts.append(cand["thinking"])
+                elif isinstance(cand["thinking"], list):
+                    for t in cand["thinking"]:
+                        if isinstance(t, str):
+                            thoughts.append(t)
+        # short-circuit if stop reason appears
+        if buffer and (data.get("finishReason") or data.get("finish_reason")):
+            break
+    answer = "\n".join(buffer).strip()
+    if not answer:
+        raise LLMIntegrationError("Gemini 流式未返回有效内容，请稍后重试。")
+    return answer, thoughts
+
+
+def _emit_streaming_deltas(answer: str, progress_callback: Callable[[str, dict[str, Any]], None] | None, *, segment_chars: int = 200) -> None:
+    """Split answer into small chunks and send as incremental deltas."""
+    if not progress_callback or not answer:
+        return
+    text = answer.strip()
+    if not text:
+        return
+    chunks = []
+    idx = 0
+    step = max(80, segment_chars)
+    while idx < len(text):
+        chunks.append(text[idx : idx + step])
+        idx += step
+    for chunk in chunks:
+        try:
+            progress_callback("delta", {"text": chunk})
+        except Exception:
+            break
+
+
 def _call_ollama_chat(
     endpoint: str,
     model: str,
@@ -612,13 +864,22 @@ def generate_ai_commentary(
     emit("stage", message="开始整理回测上下文")
 
     selected_model = (model_name or result.get("ai_model") or "").strip()
-    primary_model = selected_model or os.environ.get("OLLAMA_MODEL", "deepseek-r1:8b")
-    endpoint = os.environ.get("OLLAMA_ENDPOINT", "http://localhost:11434/api/generate")
-    secondary_model = os.environ.get("OLLAMA_SECONDARY_MODEL", "qwen3:8b")
-    secondary_endpoint = os.environ.get("OLLAMA_SECONDARY_ENDPOINT", endpoint)
-    # Build options per model
-    primary_options = _build_ollama_options(is_secondary=False)
-    secondary_options = _build_ollama_options(is_secondary=True)
+    provider = _resolve_provider(selected_model)
+    if provider == "gemini":
+        primary_model = selected_model or os.environ.get("GEMINI_MODEL", "gemini-3.0-pro")
+        endpoint = os.environ.get("GEMINI_API_BASE", "https://generativelanguage.googleapis.com")
+        secondary_model = ""
+        secondary_endpoint = ""
+        primary_options = {}
+        secondary_options = {}
+    else:
+        primary_model = selected_model or os.environ.get("OLLAMA_MODEL", "deepseek-r1:8b")
+        endpoint = os.environ.get("OLLAMA_ENDPOINT", "http://localhost:11434/api/generate")
+        secondary_model = os.environ.get("OLLAMA_SECONDARY_MODEL", "qwen3:8b")
+        secondary_endpoint = os.environ.get("OLLAMA_SECONDARY_ENDPOINT", endpoint)
+        # Build options per model
+        primary_options = _build_ollama_options(is_secondary=False)
+        secondary_options = _build_ollama_options(is_secondary=True)
 
     if isinstance(result, dict):
         result["ai_model"] = primary_model
@@ -634,7 +895,7 @@ def generate_ai_commentary(
     t0 = time.time()
 
     # (Optional) Build web context using Web Search
-    enable_web_final = enable_web if enable_web is not None else _env_bool("OLLAMA_ENABLE_WEB", False)
+    enable_web_final = _default_enable_web(provider, enable_web)
     web_note: str | None = None
     web_results: list[dict[str, Any]] = []
     timeframe_hint = _extract_timeframe_months(user_message or "")
@@ -697,46 +958,101 @@ def generate_ai_commentary(
     # Decide mode: report vs Q&A
     is_question = bool((user_message or "").strip())
     if is_question:
-        chat_endpoint = _resolve_chat_endpoint(endpoint)
         messages = _prepare_chat_messages(result, history, user_message)
-        chat_timeout = _env_int("OLLAMA_CHAT_TIMEOUT_SECONDS", _env_int("OLLAMA_TIMEOUT_SECONDS", 60))
-        chat_retries = _env_int("OLLAMA_CHAT_RETRIES", _env_int("OLLAMA_RETRIES", 2))
-        keep_alive_val = os.environ.get("OLLAMA_KEEP_ALIVE")
         t_chat0 = time.time()
-        emit("stage", message="调用主模型", model=primary_model)
-        chat_response = _call_ollama_chat(
-            chat_endpoint,
-            primary_model,
-            messages,
-            primary_options,
-            timeout_seconds=chat_timeout,
-            retries=chat_retries,
-            keep_alive=keep_alive_val,
-        )
-        t_chat1 = time.time()
-        if chat_response.get("status") != "ok":
-            raise LLMIntegrationError(chat_response.get("error") or "AI 服务暂不可用，请稍后重试。")
+        stream_segment_chars = _env_int("AI_STREAM_SEGMENT_CHARS", 200)
+        chat_timeout_base = _env_int("OLLAMA_CHAT_TIMEOUT_SECONDS", _env_int("OLLAMA_TIMEOUT_SECONDS", 60))
+        stream_timeout = _env_int("AI_STREAM_CHAT_TIMEOUT_SECONDS", chat_timeout_base)
+        soft_timeout = _env_int("AI_STREAM_SOFT_TIMEOUT_SECONDS", max(5, min(stream_timeout, 15)))
+        hard_timeout = _env_int("AI_STREAM_HARD_TIMEOUT_SECONDS", stream_timeout)
 
-        message_payload = chat_response.get("message") or {}
-        answer_text, reasoning_segments = _parse_chat_message(message_payload)
+        def _run_chat_call(curr_provider: str, model: str, options: dict[str, Any] | None, streaming: bool = False) -> tuple[str, list[str], str, dict[str, Any]]:
+            if curr_provider == "gemini":
+                chat_timeout = _env_int("GEMINI_TIMEOUT_SECONDS", stream_timeout)
+                if streaming and progress_callback:
+                    try:
+                        answer, thoughts = _call_gemini_stream(model, messages, timeout_seconds=chat_timeout)
+                        return answer, thoughts, "ok", {}
+                    except LLMIntegrationError as exc:
+                        emit("progress", stage="fallback", message=f"Gemini 流式失败，改用非流式：{exc}")
+                resp = _call_gemini_chat(model, messages, timeout_seconds=chat_timeout)
+                answer = (resp.get("answer") or "").strip()
+                return answer, resp.get("thoughts") or [], resp.get("status", "ok"), resp.get("raw", {})
+            chat_endpoint_local = _resolve_chat_endpoint(endpoint)
+            chat_timeout = stream_timeout
+            chat_retries = _env_int("OLLAMA_CHAT_RETRIES", _env_int("OLLAMA_RETRIES", 2))
+            keep_alive_val = os.environ.get("OLLAMA_KEEP_ALIVE")
+            if streaming and progress_callback:
+                answer, thoughts = _call_ollama_stream(
+                    chat_endpoint_local,
+                    model,
+                    messages,
+                    options or {},
+                    timeout_seconds=chat_timeout,
+                    keep_alive=keep_alive_val,
+                )
+                return answer, thoughts, "ok", {}
+            resp = _call_ollama_chat(
+                chat_endpoint_local,
+                model,
+                messages,
+                options or {},
+                timeout_seconds=chat_timeout,
+                retries=chat_retries,
+                keep_alive=keep_alive_val,
+            )
+            if resp.get("status") != "ok":
+                raise LLMIntegrationError(resp.get("error") or "AI 服务暂不可用，请稍后重试。")
+            msg_payload = resp.get("message") or {}
+            answer, thoughts = _parse_chat_message(msg_payload)
+            if not answer:
+                fallback_response = (resp.get("data") or {}).get("response", "")
+                answer = (fallback_response or "抱歉，目前无法给出明确的建议，请稍后再试。").strip()
+            return answer, thoughts, resp.get("status", "ok"), resp.get("data", {})
+
+        emit("stage", message="调用主模型", model=primary_model, provider=provider)
+        try:
+            answer_text, reasoning_segments, chat_status, raw_payload = _run_chat_call(provider, primary_model, primary_options, streaming=bool(progress_callback))
+            t_chat1 = time.time()
+        except LLMIntegrationError as exc:
+            fallback_used = False
+            if provider == "gemini":
+                emit("stage", message="主模型失败，回退至本地模型", fallback=os.environ.get("OLLAMA_MODEL", "deepseek-r1:8b"))
+                fallback_model = os.environ.get("OLLAMA_MODEL", "deepseek-r1:8b")
+                try:
+                    answer_text, reasoning_segments, chat_status, raw_payload = _run_chat_call("ollama", fallback_model, primary_options, streaming=bool(progress_callback))
+                    t_chat1 = time.time()
+                    fallback_used = True
+                    provider = "ollama"
+                    primary_model = fallback_model
+                except LLMIntegrationError:
+                    raise exc
+            else:
+                raise exc
+
         if not answer_text:
-            fallback_response = (chat_response.get("data") or {}).get("response", "")
-            answer_text = (fallback_response or "抱歉，目前无法给出明确的建议，请稍后再试。").strip()
+            raise LLMIntegrationError("AI 服务未返回有效内容，请稍后重试。")
 
         chat_entry = {
             "model": primary_model,
-            "status": chat_response.get("status", "ok"),
+            "provider": provider,
+            "status": chat_status,
             "thoughts": reasoning_segments,
             "answer": answer_text,
-            "raw": chat_response.get("data", {}),
+            "raw": raw_payload,
         }
 
         answer_text = _prepend_web_digest(answer_text, web_results)
+        # 优先使用真实流式，否则退回分段推送
+        if progress_callback:
+            if chat_status == "ok" and answer_text:
+                _emit_streaming_deltas(answer_text, progress_callback, segment_chars=stream_segment_chars)
 
+        tokens = _usage_from_raw(raw_payload)
         ret: dict[str, Any] = {
             "answer": answer_text,
             "models": [
-                {"name": primary_model, "status": chat_response.get("status", "ok")},
+                {"name": primary_model, "status": chat_status, "provider": provider},
             ],
         }
         ret["selected_model"] = primary_model
@@ -757,11 +1073,55 @@ def generate_ai_commentary(
                 "secondary_sec": 0.0,
                 "web_search_sec": round((t_web_end - t0), 3) if enable_web_final else 0.0,
             }
+            if tokens:
+                ret["profile"]["tokens"] = tokens
 
-        emit("done", message="AI 解读完成", model=primary_model)
+        emit("done", message="AI 解读完成", model=primary_model, provider=provider)
         return ret
 
     prompt_primary = build_prompt(result, show_thoughts=True, user_message=user_message, history=history)
+    if provider == "gemini":
+        primary_timeout = _env_int("GEMINI_TIMEOUT_SECONDS", _env_int("OLLAMA_TIMEOUT_SECONDS", 60))
+        t_p0 = time.time()
+        primary = _call_gemini_generate(primary_model, prompt_primary, timeout_seconds=primary_timeout)
+        t_p1 = time.time()
+        tokens = _usage_from_raw(primary.get("raw", {}))
+        thinking_log.append({
+            "model": primary_model,
+            "provider": provider,
+            "status": primary.get("status", "ok"),
+            "thoughts": primary.get("thoughts", []),
+            "answer": primary.get("answer", ""),
+            "raw": primary.get("raw", ""),
+        })
+        final_answer = primary.get("answer", "")
+        final_answer = _prepend_web_digest(final_answer, web_results)
+        compact = _format_compact_answer(final_answer, context=result)
+        ret: dict[str, Any] = {
+            "answer": compact,
+            "thinking": thinking_log if show_thoughts else [],
+            "models": [
+                {"name": primary_model, "status": primary.get("status", "ok"), "provider": provider},
+            ],
+        }
+        ret["selected_model"] = primary_model
+        ret["web_used"] = bool(enable_web_final)
+        if web_note:
+            ret["web_note"] = web_note
+        if web_results:
+            ret["web_results"] = web_results
+        if profile_final:
+            ret["profile"] = {
+                "web_search_sec": round((t_web_end - t0), 3) if 't_web_end' in locals() else 0.0,
+                "primary_sec": round((t_p1 - t_p0), 3),
+                "secondary_sec": 0.0,
+                "total_sec": round((t_p1 - t0), 3),
+            }
+            if tokens:
+                ret["profile"]["tokens"] = tokens
+        emit("done", message="AI 解读完成", model=primary_model, provider=provider)
+        return ret
+
     primary_timeout = _env_int("OLLAMA_TIMEOUT_SECONDS", 60)
     primary_retries = _env_int("OLLAMA_RETRIES", 2)
     t_p0 = time.time()
@@ -868,6 +1228,58 @@ def _call_ollama(endpoint: str, model: str, prompt: str, options: dict[str, Any]
         "answer": "",
         "error": str(last_exc) if last_exc else "unknown error",
     }
+
+
+def _call_ollama_stream(
+    endpoint: str,
+    model: str,
+    messages: list[dict[str, str]],
+    options: dict[str, Any] | None,
+    *,
+    timeout_seconds: int,
+    keep_alive: str | None = None,
+) -> tuple[str, list[str]]:
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+    }
+    if options:
+        payload["options"] = options
+    if keep_alive:
+        payload["keep_alive"] = keep_alive
+    try:
+        resp = http_client.post(
+            endpoint,
+            json=payload,
+            timeout=timeout_seconds,
+            retries=0,
+            stream=True,
+        )
+    except HttpClientError as exc:
+        raise LLMIntegrationError(f"Ollama 流式请求失败：{exc}")
+    buffer: list[str] = []
+    thoughts: list[str] = []
+    for raw_line in resp.iter_lines(decode_unicode=True):
+        if not raw_line:
+            continue
+        line = raw_line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            data = json.loads(line)
+        except Exception:
+            continue
+        msg = data.get("message") or data.get("delta") or {}
+        content = msg.get("content") or ""
+        if content:
+            buffer.append(content)
+        if data.get("done"):
+            break
+    answer = "".join(buffer).strip()
+    if not answer:
+        raise LLMIntegrationError("Ollama 流式未返回有效内容，请稍后重试。")
+    return answer, thoughts
 
 
 def _split_thoughts_and_answer(text: str) -> tuple[list[str], str]:
@@ -1002,9 +1414,26 @@ def build_prompt(
     risk_insight = risk_dashboard.get("insight", "")
 
     macro_bundle = result.get("macro_bundle") or {}
+
+    def _format_macro_line(entry: dict[str, Any]) -> str:
+        label = entry.get("label") or ""
+        short = entry.get("short") or ""
+        if label and short:
+            name = f"{label} ({short})"
+        else:
+            name = label or short or "宏观指标"
+        if not entry.get("available"):
+            detail = entry.get("message") or "—"
+        else:
+            latest = entry.get("latest", "—")
+            change = entry.get("change_21d", "—")
+            detail = f"最新 {latest} | 21日 {change}%"
+        return f"- {name}: {detail}"
+
     macro_lines = "\n".join(
-        f"- {entry.get('label')} ({entry.get('short')}): {entry.get('message', '—') if not entry.get('available') else f'最新 {entry.get('latest')} | 21日 {entry.get('change_21d', '—')}%'}"
+        _format_macro_line(entry)
         for entry in macro_bundle.values()
+        if isinstance(entry, dict)
     ) or "- 无宏观数据"
 
     scenario_bundle = result.get("scenario_simulation") or {}
@@ -1271,7 +1700,13 @@ def _format_compact_answer(text: str, *, context: dict[str, Any] | None = None) 
     max_bullets = _env_int("AI_MAX_BULLETS_PER_SECTION", 3)
     max_bullet_chars = _env_int("AI_MAX_BULLET_CHARS", 120)
 
-    allowed = ["盈利机会", "操作计划", "风险盲区", "额外关注"]
+    allowed = ["盈利空间", "操作路线", "风险防守", "下一步"]
+    aliases = {
+        "盈利机会": "盈利空间",
+        "操作计划": "操作路线",
+        "风险盲区": "风险防守",
+        "额外关注": "下一步",
+    }
     sections: dict[str, list[str]] = {name: [] for name in allowed}
     current: str | None = None
 
@@ -1290,7 +1725,8 @@ def _format_compact_answer(text: str, *, context: dict[str, Any] | None = None) 
             continue
         if line.startswith("### "):
             title = line[4:].strip()
-            current = title if title in sections else None
+            canonical = aliases.get(title, title)
+            current = canonical if canonical in sections else None
             continue
         if current is None:
             continue
@@ -1304,29 +1740,29 @@ def _format_compact_answer(text: str, *, context: dict[str, Any] | None = None) 
     # If any section lacks bullets, fill from structured context as fallback
     if context:
         try:
-            if not sections["盈利机会"]:
+            if not sections["盈利空间"]:
                 src = context.get("key_takeaways") or context.get("quick_summary") or []
                 for s in src:
-                    push_bullet("盈利机会", str(s))
-            if not sections["操作计划"]:
+                    push_bullet("盈利空间", str(s))
+            if not sections["操作路线"]:
                 for step in context.get("action_plan", []) or []:
-                    push_bullet("操作计划", str(step.get("detail") or step.get("title") or ""))
-            if not sections["风险盲区"]:
+                    push_bullet("操作路线", str(step.get("detail") or step.get("title") or ""))
+            if not sections["风险防守"]:
                 for s in context.get("risk_alerts", []) or []:
-                    push_bullet("风险盲区", str(s))
-            if not sections["额外关注"]:
+                    push_bullet("风险防守", str(s))
+            if not sections["下一步"]:
                 tips = context.get("education_tips", []) or []
                 if tips:
                     for s in tips:
-                        push_bullet("额外关注", str(s))
+                        push_bullet("下一步", str(s))
                 else:
                     mc = context.get("market_context") or {}
                     if isinstance(mc, dict):
                         if mc.get("analysis"):
-                            push_bullet("额外关注", str(mc.get("analysis")))
+                            push_bullet("下一步", str(mc.get("analysis")))
                         for item in (mc.get("news") or [])[:3]:
                             t = item.get("title") or "相关新闻"
-                            push_bullet("额外关注", str(t))
+                            push_bullet("下一步", str(t))
         except Exception:
             pass
 

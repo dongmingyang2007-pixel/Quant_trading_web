@@ -1500,6 +1500,7 @@
 
                                     <section class="ai-chat-surface">
                                         <div id="ai-status" class="ai-status-chip ai-status-info">AI 正在准备分析，请稍候…</div>
+                                        <div id="ai-meta" class="ai-meta"></div>
                                         <div id="ai-messages" class="ai-chat-log"></div>
                                         <div id="ai-thinking" class="accordion ai-thinking-panel d-none"></div>
                                     </section>
@@ -1510,15 +1511,18 @@
                                                 <h4 class="ai-form-title">自定义问题</h4>
                                                 <div class="ai-toolbar-controls">
                                                     <label for="ai-model-input" class="ai-model-label">模型</label>
-                                                    <input id="ai-model-input" class="ai-model-input" type="text" autocomplete="off" placeholder="如 llama3.2" list="ai-model-options">
-                                                    <datalist id="ai-model-options"></datalist>
-                                                    <button type="button" class="hero-button ghost xsmall" id="ai-toggle-web" aria-pressed="false" title="开启/关闭：联网搜索">🌐 联网：关</button>
-                                                    <button type="button" class="hero-button ghost xsmall" id="ai-clear-history" title="清空本页 AI 对话记录">🗑 清空记录</button>
-                                                </div>
-                                                <p class="ai-toggle-hint">默认关闭联网，若需要实时资讯可手动开启上方按钮。</p>
+                                                    <select id="ai-model-input" class="ai-model-input select">
+                                                        <option value="" disabled selected>请选择模型</option>
+                                                    </select>
+                                                <button type="button" class="hero-button ghost xsmall" id="ai-toggle-web" aria-pressed="false" title="开启/关闭：联网搜索">🌐 联网：关</button>
+                                                <button type="button" class="hero-button ghost xsmall" id="ai-clear-history" title="清空本页 AI 对话记录">🗑 清空记录</button>
+                                                <button type="button" class="hero-button ghost xsmall" id="ai-abort" title="中断当前生成">⏹ 中断</button>
+                                                <button type="button" class="hero-button ghost xsmall" id="ai-continue" title="续写/追加生成">↻ 续写</button>
                                             </div>
-                                            <textarea id="ai-input" class="form-control" rows="3" placeholder="写下你的问题，例如：我现在应当怎么分批建仓？" required></textarea>
-                                            <div class="ai-form-actions">
+                                            <p class="ai-toggle-hint">默认关闭联网，若需要实时资讯可手动开启上方按钮。</p>
+                                        </div>
+                                        <textarea id="ai-input" class="form-control" rows="3" placeholder="写下你的问题，例如：我现在应当怎么分批建仓？" required></textarea>
+                                        <div class="ai-form-actions">
                                                 <button type="submit" class="hero-button solid small">发送问题</button>
                                             </div>
                                         </form>
@@ -2295,6 +2299,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const HISTORY_WINDOW = 8;
     const aiStatus = document.getElementById('ai-status');
+    const aiMeta = document.getElementById('ai-meta');
     const aiMessages = document.getElementById('ai-messages');
     const aiThinking = document.getElementById('ai-thinking');
     const aiForm = document.getElementById('ai-chat-form');
@@ -2355,7 +2360,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!aiStreamSupported || !aiStreamEndpoint) {
             return legacyAiRequest(payload);
         }
-        const { fetchPromise } = beginAiFetch(aiStreamEndpoint, payload);
+        const { fetchPromise, controller } = beginAiFetch(aiStreamEndpoint, payload);
+        const softTimeoutMs = AI_FETCH_TIMEOUT_MS * 0.5;
+        const hardTimeoutMs = AI_FETCH_TIMEOUT_MS;
+        let softTimer = null;
+        let hardTimer = null;
         return fetchPromise.then((response) => {
             if (!response.ok) {
                 return readAiResponse(response);
@@ -2368,17 +2377,30 @@ document.addEventListener('DOMContentLoaded', () => {
             let buffer = '';
             let finalPayload = null;
             return new Promise((resolve, reject) => {
+                const clearTimers = () => {
+                    if (softTimer) window.clearTimeout(softTimer);
+                    if (hardTimer) window.clearTimeout(hardTimer);
+                    softTimer = null;
+                    hardTimer = null;
+                };
                 const handleEvent = (eventType, payload) => {
                     if (eventType === 'progress') {
                         if (options.onProgress && payload) {
+                            options.onProgress(payload);
+                        }
+                    } else if (eventType === 'delta') {
+                        if (options.onProgress && payload) {
+                            payload.stage = 'delta';
                             options.onProgress(payload);
                         }
                     } else if (eventType === 'message') {
                         finalPayload = payload || finalPayload;
                     } else if (eventType === 'error') {
                         const message = (payload && payload.error) || aiText.statusUnavailable;
+                        clearTimers();
                         reject(new Error(message));
                     } else if (eventType === 'end') {
+                        clearTimers();
                         resolve(finalPayload || payload || {});
                     }
                 };
@@ -2426,8 +2448,21 @@ document.addEventListener('DOMContentLoaded', () => {
                             parseBuffer();
                             pump();
                         })
-                        .catch((error) => reject(error));
+                        .catch((error) => {
+                            clearTimers();
+                            reject(error);
+                        });
                 };
+                softTimer = window.setTimeout(() => {
+                    handleEvent('progress', { message: aiText.statusAnalyzing });
+                }, softTimeoutMs);
+                hardTimer = window.setTimeout(() => {
+                    try {
+                        controller.abort();
+                    } catch (error) {
+                        // ignore
+                    }
+                }, hardTimeoutMs);
                 pump();
             });
         });
@@ -2440,6 +2475,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // 🌐 Web Search toggle (globe button)
     const aiToggle = document.getElementById('ai-toggle-web');
     const aiClearBtn = document.getElementById('ai-clear-history');
+    const aiAbortBtn = document.getElementById('ai-abort');
+    const aiContinueBtn = document.getElementById('ai-continue');
     let webEnabled;
     if (reportContext && typeof reportContext.enable_web === 'boolean') {
         webEnabled = !!reportContext.enable_web;
@@ -2452,7 +2489,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const MODEL_STORAGE_KEY = 'quant-ai-preferred-model';
     const HARDCODED_DEFAULT_MODEL = 'deepseek-r1:8b';
     const modelInput = document.getElementById('ai-model-input');
-    const modelOptions = document.getElementById('ai-model-options');
+    const modelOptions = document.getElementById('ai-model-input');
     let availableModels = Array.isArray(reportContext.ai_model_choices)
         ? reportContext.ai_model_choices.filter((item, index, arr) => item && arr.indexOf(item) === index)
         : [];
@@ -2579,11 +2616,18 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!existing) {
             const option = document.createElement('option');
             option.value = value;
+            option.textContent = value;
             modelOptions.appendChild(option);
         }
     }
     if (modelOptions) {
         modelOptions.innerHTML = '';
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = langIsZh ? '请选择模型' : 'Select model';
+        placeholder.disabled = true;
+        placeholder.selected = !defaultModel;
+        modelOptions.appendChild(placeholder);
         availableModels.forEach((model) => {
             ensureModelOption(model);
         });
@@ -2595,7 +2639,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const handleModelInput = () => {
             const value = modelInput.value.trim();
             reportContext.ai_model = value;
-            ensureModelOption(value);
             try {
                 if (value) {
                     window.sessionStorage.setItem(MODEL_STORAGE_KEY, value);
@@ -2607,7 +2650,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
         modelInput.addEventListener('change', handleModelInput);
-        modelInput.addEventListener('input', handleModelInput);
     }
 
     function setWebToggleUi() {
@@ -2627,11 +2669,66 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    if (aiAbortBtn) {
+        aiAbortBtn.addEventListener('click', () => {
+            if (activeAiController) {
+                try {
+                    activeAiController.abort();
+                    setAiStatus('warn', aiText.statusTimeout);
+                } catch (error) {
+                    // ignore
+                }
+            }
+        });
+    }
+
+    if (aiContinueBtn) {
+        aiContinueBtn.addEventListener('click', () => {
+            if (!lastAiAnswer) return;
+            if (!aiInput) return;
+            aiInput.value = langIsZh ? '继续' : 'continue';
+            aiForm?.dispatchEvent(new Event('submit'));
+        });
+    }
+
     function setAiStatus(kind, message) {
         if (!aiStatus) return;
         aiStatus.textContent = message || '';
         const variant = kind ? ` ai-status-${kind}` : '';
         aiStatus.className = `ai-status-chip${variant}`;
+    }
+
+    function setAiMeta(data = {}) {
+        if (!aiMeta) return;
+        const model = (Array.isArray(data.models) && data.models[0]) || null;
+        const modelName = (model && model.name) || data.selected_model || reportContext.ai_model || '';
+        const provider = (model && model.provider) || reportContext.ai_provider || (modelName && modelName.toLowerCase().includes('gemini') ? 'gemini' : 'ollama');
+        const web = data.web_used ? (langIsZh ? '联网' : 'Online') : (langIsZh ? '离线' : 'Offline');
+        const profile = data.profile || {};
+        const costHint = [];
+        if (profile.total_sec !== undefined) {
+            costHint.push(`耗时 ${profile.total_sec}s`);
+        }
+        if (profile.tokens) {
+            const t = profile.tokens;
+            const parts = [];
+            if (t.prompt !== undefined) parts.push(`in ${t.prompt}`);
+            if (t.output !== undefined) parts.push(`out ${t.output}`);
+            if (parts.length) {
+                costHint.push(`tokens ${parts.join(' / ')}`);
+            } else if (t.total !== undefined) {
+                costHint.push(`tokens ${t.total}`);
+            }
+        }
+        const metaParts = [
+            modelName ? `${langIsZh ? '模型' : 'Model'}: ${escapeHtml(modelName)}` : '',
+            provider ? `${langIsZh ? '供应商' : 'Provider'}: ${escapeHtml(provider)}` : '',
+            `${langIsZh ? '模式' : 'Mode'}: ${web}`,
+            costHint.join(' · '),
+        ].filter(Boolean);
+        aiMeta.innerHTML = metaParts.length
+            ? `<span class="ai-meta-pill">${metaParts.join(' · ')}</span>`
+            : '';
     }
 
     function syncHistory() {
@@ -2893,8 +2990,11 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>`;
     }
 
+    let streamingBuffer = '';
+    let streamingBubble = null;
+
     function appendMessage(role, content, options = {}) {
-        if (!aiMessages || !content) return;
+        if (!aiMessages || content === undefined || content === null) return null;
         const wrapper = document.createElement('article');
         wrapper.className = `ai-message ai-message-${role}`;
         const card = document.createElement('div');
@@ -2940,6 +3040,11 @@ document.addEventListener('DOMContentLoaded', () => {
         wrapper.appendChild(card);
         aiMessages.appendChild(wrapper);
         aiMessages.scrollTop = aiMessages.scrollHeight;
+        if (role === 'assistant' && options.trackStreaming) {
+            streamingBubble = body;
+            streamingBuffer = content || '';
+        }
+        return { wrapper, body };
     }
 
     function renderHistory(animate = true) {
@@ -3073,6 +3178,18 @@ document.addEventListener('DOMContentLoaded', () => {
             setAiStatus('warn', payload.error);
             return;
         }
+        if (payload.stage === 'delta' && payload.text) {
+            // incremental append
+            if (!streamingBubble) {
+                appendMessage('assistant', '', { animate: false, trackStreaming: true, webUsed: webEnabled });
+            }
+            streamingBuffer += String(payload.text);
+            if (streamingBubble) {
+                streamingBubble.textContent = streamingBuffer;
+                aiMessages.scrollTop = aiMessages.scrollHeight;
+            }
+            return;
+        }
         if (payload.message) {
             setAiStatus('info', payload.message);
         }
@@ -3080,6 +3197,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function applyAiResponse(data) {
         stopThinkingAnimation();
+        // finalize streaming bubble if exists
+        if (streamingBubble) {
+            streamingBubble.innerHTML = formatAiAnswer(data.answer || streamingBuffer || '');
+            streamingBubble = null;
+            streamingBuffer = '';
+        }
         let historySupplied = false;
         if (Array.isArray(data.history) && data.history.length) {
             chatHistory = data.history;
@@ -3094,7 +3217,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!historySupplied) {
                 chatHistory.push({ role: 'assistant', content: answer, web_used: webUsed, web_results: data.web_results });
                 syncHistory();
-                appendMessage('assistant', answer, { webUsed, webResults: data.web_results });
+                if (!streamingBubble) {
+                    appendMessage('assistant', answer, { webUsed, webResults: data.web_results });
+                }
             }
         }
         if (Array.isArray(data.thinking)) {
@@ -3125,6 +3250,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // ignore storage errors
             }
         }
+        setAiMeta(data);
     }
 
     document.querySelectorAll('.ai-preset').forEach((btn) => {
@@ -3162,6 +3288,8 @@ document.addEventListener('DOMContentLoaded', () => {
             appendMessage('user', message);
             chatHistory.push({ role: 'user', content: message });
             syncHistory();
+            streamingBuffer = '';
+            streamingBubble = null;
             aiInput.value = '';
             const keywordRegex = /联网|上网|搜索|查网|找新闻|实时|news|资讯|internet|web|look up|fetch/gi;
             const shouldUseWeb = webEnabled || keywordRegex.test(message);

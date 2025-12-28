@@ -14,6 +14,8 @@ except Exception:  # pragma: no cover
         gym = None  # type: ignore
         spaces = None  # type: ignore
 
+IS_GYMNASIUM = bool(gym and getattr(gym, "__name__", "").startswith("gymnasium"))
+
 SIGNAL_MAP = {
     0: -1.0,
     1: 0.0,
@@ -51,6 +53,8 @@ class TradingHistoryEnv:
         self.pointer = 1
         self.position = 0.0
         obs = self._build_obs(self.pointer - 1)
+        if IS_GYMNASIUM:
+            return obs.astype(np.float32), {}
         return obs.astype(np.float32)
 
     def step(self, action: int):
@@ -63,6 +67,8 @@ class TradingHistoryEnv:
         done = self.pointer >= self.length - 1
         obs = self._build_obs(min(self.pointer - 1, self.length - 1)).astype(np.float32)
         info: dict[str, Any] = {}
+        if IS_GYMNASIUM:
+            return obs, reward, done, False, info
         return obs, reward, done, info
 
     def action_to_signal(self, action: int) -> float:

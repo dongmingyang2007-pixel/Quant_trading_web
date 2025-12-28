@@ -29,6 +29,12 @@ from .learning import learning_center, learning_module_detail
 from .observability_dashboard import observability_dashboard
 from .history_compare import history_compare
 from .paper import paper_trading
+from .screen_analyzer import (
+    screen_analyzer,
+    screen_analyzer_api,
+    screen_analyzer_sample_api,
+    screen_analyzer_train_api,
+)
 
 __all__ = [
     "backtest",
@@ -60,4 +66,8 @@ __all__ = [
     "learning_module_detail",
     "observability_dashboard",
     "history_compare",
+    "screen_analyzer",
+    "screen_analyzer_api",
+    "screen_analyzer_sample_api",
+    "screen_analyzer_train_api",
 ]

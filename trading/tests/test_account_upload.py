@@ -24,7 +24,10 @@ def _make_image(color: str = "red") -> bytes:
 
 
 @override_settings(
-    STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage",
+    STORAGES={
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    },
     MEDIA_ROOT=TEMP_MEDIA_ROOT,
 )
 class AccountUploadTests(TestCase):

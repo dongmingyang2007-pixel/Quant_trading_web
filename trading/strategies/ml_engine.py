@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
@@ -37,13 +38,20 @@ except Exception:  # pragma: no cover
 
 from .config import StrategyInput, QuantStrategyError, DEFAULT_STRATEGY_SEED
 from .indicators import _normalized_open_prices, _select_forward_return, _attach_forward_returns
+from .event_engine import compute_realized_returns, run_event_backtest
 from .store import DATA_CACHE_DIR, FEATURE_STORE
 from .metrics import compute_validation_metrics, aggregate_oos_metrics, build_oos_boxplot, fig_to_base64
 from ..optimization import PurgedWalkForwardSplit, _build_classifier
 from ..ml_models import build_custom_sequence_model
 from ..observability import record_metric
 from ..validation import compute_cpcv_report, build_stress_report, compute_psi
-from .risk import calculate_max_drawdown
+from .risk import (
+    apply_signal_filters,
+    calculate_max_drawdown,
+    calculate_target_leverage,
+    enforce_risk_limits,
+)
+from .execution import apply_execution_model
 
 
 def _calibration_summary(probs: pd.Series, labels: pd.Series, bins: int = 10) -> dict[str, Any]:
@@ -384,54 +392,8 @@ def _apply_execution_model(
     adv: pd.Series | None,
     params: StrategyInput,
 ) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, dict[str, float]]:
-    """
-    近似分时 VWAP + 参与率冲击 + 部分成交：
-    - 基础点差/滑点：用 ATR_pct 或设定 bps。
-    - 参与率冲击：turnover / (ADV * participation)，超出则部分成交，未成交部分不计入持仓。
-    - 返回调整后的净持仓、交易成本、执行成本、成交覆盖率等。
-    """
-    base_exposure = exposure.fillna(0.0)
-    price = prices.reindex(base_exposure.index).ffill().bfill()
-    adv_series = adv.reindex(base_exposure.index).ffill().fillna(0.0) if adv is not None else pd.Series(0.0, index=base_exposure.index)
-
-    # 参与率与点差基线
-    participation = max(0.01, min(0.5, params.max_adv_participation or 0.1))
-    atr_pct = price.pct_change().abs().rolling(14, min_periods=5).mean().fillna(0.0)
-    spread_bps = (atr_pct * 1e4).clip(lower=2.0, upper=50.0)  # 动态点差区间
-    turnover = base_exposure.diff().abs().fillna(base_exposure.abs())
-    capacity = adv_series * participation
-    # 避免除零
-    impact = turnover / capacity.replace(0, np.nan)
-    impact = impact.replace([np.inf, -np.inf], np.nan).fillna(0.0)
-
-    # 填充率：越高的冲击越低，限制在 [0,1]
-    fill_prob = np.exp(-impact.clip(0, 10))
-    filled_turnover = turnover * fill_prob
-    unfilled = turnover - filled_turnover
-
-    # 成本拆分
-    slip_rate = (spread_bps / 1e4) + (impact * (params.execution_penalty_bps or 5) / 1e4)
-    execution_cost = filled_turnover * slip_rate
-    transaction_cost = filled_turnover * (params.transaction_cost_bps / 10000.0 if hasattr(params, "transaction_cost_bps") else 0.0)
-
-    # 应用部分成交后的持仓路径
-    adjusted_exposure = base_exposure.copy()
-    if filled_turnover.notna().any():
-        deltas = adjusted_exposure.diff().fillna(adjusted_exposure)
-        scaled_deltas = deltas * fill_prob
-        adjusted_exposure = scaled_deltas.cumsum()
-
-    coverage = filled_turnover / turnover.replace(0, np.nan)
-    coverage = coverage.replace([np.inf, -np.inf], np.nan).fillna(1.0)
-
-    stats = {
-        "avg_coverage": float(coverage.mean()) if not coverage.empty else 1.0,
-        "median_coverage": float(coverage.median()) if not coverage.empty else 1.0,
-        "unfilled_ratio": float(unfilled.sum() / turnover.sum()) if turnover.sum() else 0.0,
-        "avg_impact": float(impact.mean()) if not impact.empty else 0.0,
-        "avg_spread_bps": float(spread_bps.mean()) if not spread_bps.empty else 0.0,
-    }
-    return adjusted_exposure, transaction_cost, execution_cost, coverage, stats
+    """Compatibility wrapper around unified execution model."""
+    return apply_execution_model(exposure, prices, adv=adv, params=params)
 
 
 def scan_threshold_stability(
@@ -502,6 +464,105 @@ def scan_threshold_stability(
             "exit": exit_vec.tolist(),
             "sharpe": sharpe.tolist(),
         },
+    }
+
+
+def _scan_threshold_stability(
+    probabilities: pd.Series,
+    future_returns: pd.Series,
+    cost_rate: float,
+    base_entry: float,
+    base_exit: float,
+) -> dict[str, Any]:
+    return scan_threshold_stability(probabilities, future_returns, cost_rate, base_entry, base_exit)
+
+
+def _generate_validation_report(
+    dataset: pd.DataFrame,
+    feature_columns: list[str],
+    params: StrategyInput,
+) -> dict[str, Any] | None:
+    if dataset is None or dataset.empty or not feature_columns:
+        return None
+    if "target" not in dataset or "future_return" not in dataset:
+        return None
+
+    test_window = params.test_window if params.test_window is not None else 5
+    splitter = PurgedWalkForwardSplit(
+        train_window=params.train_window,
+        test_window=max(int(test_window), 5),
+        embargo=max(0, params.embargo_days),
+    )
+    cost_rate = (params.transaction_cost_bps + params.slippage_bps) / 10000.0
+    validation_slices: list[dict[str, Any]] = []
+    model_params = params.ml_params or {}
+    model_engine = (params.ml_model or "sk_gbdt").lower()
+    if model_engine in {"lstm", "transformer", "seq_hybrid", "hybrid_seq", "fusion"}:
+        model_engine = "sk_gbdt"
+    labels_for_weight = dataset["target_multiclass"] if ("target_multiclass" in dataset and params.label_style == "triple_barrier") else dataset["target"]
+    sample_weight = _maybe_get_sample_weight(labels_for_weight, params)
+
+    for fold_idx, (train_idx, test_idx) in enumerate(splitter.split(len(dataset))):
+        train_slice = dataset.iloc[train_idx]
+        test_slice = dataset.iloc[test_idx]
+        if train_slice["target"].nunique() < 2 or test_slice.empty:
+            continue
+        try:
+            clf = _build_classifier(model_engine, model_params, feature_columns, params)
+        except Exception:
+            clf = _build_classifier("sk_gbdt", {}, feature_columns, params)
+        fit_kwargs: dict[str, Any] = {}
+        if sample_weight is not None:
+            if isinstance(clf, Pipeline):
+                fit_kwargs["model__sample_weight"] = sample_weight[train_idx]
+            else:
+                fit_kwargs["sample_weight"] = sample_weight[train_idx]
+        try:
+            clf.fit(train_slice[feature_columns], train_slice["target"], **fit_kwargs)
+            raw_proba = clf.predict_proba(test_slice[feature_columns])
+            if isinstance(raw_proba, np.ndarray) and raw_proba.ndim > 1 and raw_proba.shape[1] > 1:
+                proba = raw_proba[:, 1]
+            else:
+                proba = np.array(raw_proba).ravel()
+        except Exception:
+            continue
+        signal = np.where(
+            proba >= params.entry_threshold,
+            1.0,
+            np.where(proba <= params.exit_threshold, -1.0, 0.0),
+        )
+        exposure = pd.Series(signal, index=test_slice.index, dtype=float).shift(fill_value=0.0)
+        turnover = exposure.diff().abs().fillna(exposure.abs())
+        pnl = exposure * test_slice["future_return"].fillna(0.0) - turnover * cost_rate
+        fold_metrics = compute_validation_metrics(pnl)
+        fold_metrics.update(
+            {
+                "fold": fold_idx + 1,
+                "train_start": str(train_slice.index[0].date()) if hasattr(train_slice.index[0], "date") else str(train_slice.index[0]),
+                "train_end": str(train_slice.index[-1].date()) if hasattr(train_slice.index[-1], "date") else str(train_slice.index[-1]),
+                "test_start": str(test_slice.index[0].date()) if hasattr(test_slice.index[0], "date") else str(test_slice.index[0]),
+                "test_end": str(test_slice.index[-1].date()) if hasattr(test_slice.index[-1], "date") else str(test_slice.index[-1]),
+                "avg_position": float(exposure.abs().mean()),
+            }
+        )
+        validation_slices.append(fold_metrics)
+
+    if not validation_slices:
+        return None
+
+    summary = aggregate_oos_metrics(validation_slices)
+    penalized = None
+    sharpe_stats = summary.get("sharpe")
+    if isinstance(sharpe_stats, dict):
+        penalized = (sharpe_stats.get("mean") or 0.0) - (sharpe_stats.get("std") or 0.0)
+    return {
+        "slices": validation_slices,
+        "summary": summary,
+        "folds": len(validation_slices),
+        "train_window": params.train_window,
+        "test_window": params.test_window,
+        "embargo": params.embargo_days,
+        "penalized_sharpe": penalized,
     }
 
 
@@ -601,6 +662,7 @@ def run_ml_backtest(
     if GradientBoostingClassifier is None or Pipeline is None or StandardScaler is None:
         raise QuantStrategyError("scikit-learn 未安装，无法启用机器学习策略。请运行 pip install scikit-learn。")
 
+    params = replace(params)
     dataset, feature_columns = build_feature_matrix(prices, params)
     if context_features:
         for name, value in context_features.items():
@@ -663,9 +725,8 @@ def run_ml_backtest(
         if train_slice["target"].nunique() < 2 or test_slice.empty:
             return {}
 
-        embargo = max(0, int(params.embargo_days))
         val_len = max(1, int(len(train_slice) * max(0.05, min(0.4, params.val_ratio))))
-        train_end = max(1, len(train_slice) - embargo)
+        train_end = len(train_slice)
         val_start = max(0, train_end - val_len)
         core_train = train_slice.iloc[:val_start]
         val_slice = train_slice.iloc[val_start:train_end]
@@ -906,6 +967,10 @@ def run_ml_backtest(
     except Exception:
         liquidity_blocks = 0
 
+    filtered_signal = apply_signal_filters(dataset, raw_signal, probabilities, params)
+    dataset["signal"] = filtered_signal
+    raw_signal = filtered_signal
+
     threshold_scan = scan_threshold_stability(
         probabilities.dropna(),
         dataset["future_return"],
@@ -915,45 +980,24 @@ def run_ml_backtest(
     )
     heatmap = build_threshold_heatmap(threshold_scan) if threshold_scan else None
 
-    if params.strategy_engine == "ml_momentum":
-        df_for_backtest = dataset.copy()
-        df_for_backtest["position"] = raw_signal.reindex(dataset.index).fillna(0.0)
-    else:
-        df_for_backtest = dataset.copy()
-        df_for_backtest["position"] = raw_signal.reindex(dataset.index).fillna(0.0)
+    df_for_backtest = dataset.copy()
+    df_for_backtest["position"] = raw_signal.reindex(dataset.index).fillna(0.0)
 
-    # Construct PnL with交易成本/借贷成本/流动性约束
-    exposure = df_for_backtest["position"].astype(float).fillna(0.0)
-    adv_hits = 0
-    adv_participation = None
-    if "adv" in df_for_backtest and df_for_backtest["adv"].notna().any():
-        adv_participation = max(0.0, min(1.0, params.max_adv_participation or 0.1))
-        adv_limit = df_for_backtest["adv"].fillna(0.0) * adv_participation
-        mask = exposure.abs() > adv_limit
-        adv_hits = int(mask.sum())
-        if adv_hits > 0:
-            exposure = exposure.where(~mask, 0.0)
-
-    adjusted_exposure, txn_cost, exec_cost, coverage, exec_stats = _apply_execution_model(
+    # Construct PnL with event-driven execution + costs
+    position = df_for_backtest["position"].astype(float).fillna(0.0)
+    asset_returns = compute_realized_returns(df_for_backtest, params)
+    df_for_backtest["asset_return"] = asset_returns
+    volatility = asset_returns.rolling(20).std().fillna(0.0) * np.sqrt(252)
+    leverage = calculate_target_leverage(position, volatility, params.volatility_target, params.max_leverage)
+    exposure, overlay_events = enforce_risk_limits(position, leverage, asset_returns, params)
+    df_for_backtest["volatility"] = volatility
+    df_for_backtest["leverage"] = leverage.reindex(df_for_backtest.index).fillna(0.0)
+    df_for_backtest, exec_stats, exec_events = run_event_backtest(
+        df_for_backtest,
         exposure,
-        df_for_backtest["adj close"] if "adj close" in df_for_backtest else df_for_backtest["future_return"].fillna(0.0).cumsum(),
-        df_for_backtest["adv"] if "adv" in df_for_backtest else None,
         params,
+        leverage=leverage,
     )
-    long_daily = float(params.long_borrow_cost_bps or params.borrow_cost_bps) / 10000.0 / 252.0
-    short_daily = float(params.short_borrow_cost_bps or params.borrow_cost_bps) / 10000.0 / 252.0
-    borrow_cost = adjusted_exposure.clip(lower=0.0) * long_daily + (-adjusted_exposure.clip(upper=0.0)) * short_daily
-    strategy_return_gross = df_for_backtest["future_return"].fillna(0.0) * adjusted_exposure.shift(fill_value=0.0)
-    df_for_backtest["position"] = adjusted_exposure
-    df_for_backtest["exposure"] = adjusted_exposure
-    df_for_backtest["transaction_cost"] = txn_cost
-    df_for_backtest["execution_cost"] = exec_cost
-    df_for_backtest["borrow_cost"] = borrow_cost
-    df_for_backtest["strategy_return_gross"] = strategy_return_gross
-    df_for_backtest["strategy_return"] = strategy_return_gross - txn_cost - exec_cost - borrow_cost
-    df_for_backtest["cum_strategy"] = (1 + df_for_backtest["strategy_return"]).cumprod()
-    df_for_backtest["cum_buy_hold"] = (1 + df_for_backtest["future_return"].fillna(0.0)).cumprod()
-    df_for_backtest["leverage"] = 1.0
 
     perf_total = float(df_for_backtest["cum_strategy"].iloc[-1] - 1) if not df_for_backtest.empty else 0.0
     ret_series = df_for_backtest["strategy_return"].fillna(0.0)
@@ -993,13 +1037,17 @@ def run_ml_backtest(
         "max_drawdown": mdd,
         "execution": {
             **exec_stats,
-            "exec_cost_total": float(exec_cost.sum()) if "exec_cost" in locals() else 0.0,
-            "txn_cost_total": float(txn_cost.sum()) if "txn_cost" in locals() else 0.0,
+            "exec_cost_total": float(df_for_backtest["execution_cost"].sum()) if "execution_cost" in df_for_backtest else 0.0,
+            "txn_cost_total": float(df_for_backtest["transaction_cost"].sum()) if "transaction_cost" in df_for_backtest else 0.0,
         },
         "cpcv": cpcv or {},
         "stress_test": stress_report or {},
         "drift": {"psi_returns": psi_ret, "psi_probabilities": psi_proba},
     }
+    if overlay_events:
+        stats.setdefault("risk_events", []).extend(overlay_events)
+    if exec_events:
+        stats.setdefault("risk_events", []).extend(exec_events)
     # 阈值敏感度：记录分布，若极端差则提示
     if threshold_scan:
         stability = {
@@ -1017,9 +1065,12 @@ def run_ml_backtest(
                 stats.setdefault("risk_events", []).append("阈值敏感度高：最佳/最差 Sharpe 差异显著，建议收紧阈值或降低杠杆。")
         except Exception:
             pass
+    adv_hits = int(exec_stats.get("adv_hard_cap_hits") or 0)
     if adv_hits:
         stats.setdefault("risk_events", [])
-        stats["risk_events"].append(f"因 ADV 参与率上限({(adv_participation or 0.1):.0%}) 清零 {adv_hits} 次 ML 仓位，避免不可成交。")
+        stats["risk_events"].append(
+            f"因 ADV 参与率上限({(params.max_adv_participation or 0.1):.0%}) 压缩 {adv_hits} 次 ML 仓位，避免不可成交。"
+        )
         stats["adv_hits"] = adv_hits
     if liquidity_blocks:
         stats.setdefault("risk_events", [])
@@ -1036,6 +1087,12 @@ def run_ml_backtest(
         coverage = exec_stats.get("avg_coverage")
         if coverage is not None and coverage < 0.7:
             stats.setdefault("risk_events", []).append(f"执行覆盖率偏低（{coverage:.0%}），建议降低参与率或放宽成交假设。")
+        halt_days = exec_stats.get("halt_days")
+        if halt_days is not None and halt_days > 0:
+            stats.setdefault("risk_events", []).append(f"检测到停牌/无成交 {int(halt_days)} 天，已跳过成交。")
+        limit_days = exec_stats.get("limit_days")
+        if limit_days is not None and limit_days > 0:
+            stats.setdefault("risk_events", []).append(f"检测到涨跌幅限制 {int(limit_days)} 天，已跳过成交。")
     if stress_report:
         worst_mdd = stress_report.get("worst_mdd")
         worst_sharpe = stress_report.get("worst_sharpe")
@@ -1073,6 +1130,8 @@ def run_ml_backtest(
 
 __all__ = [
     "_calibration_summary",
+    "_generate_validation_report",
+    "_scan_threshold_stability",
     "build_calibration_plot",
     "build_feature_matrix",
     "build_labels",

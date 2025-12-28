@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import fields
 from datetime import date, datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, get_args, get_origin, get_type_hints
 
 from celery import shared_task
 from django.conf import settings
@@ -11,6 +11,31 @@ from .strategies import StrategyInput, run_quant_pipeline
 from .history import BacktestRecord, append_history, sanitize_snapshot
 from .train_ml import run_engine_benchmark
 from paper.engine import run_pending_sessions
+
+
+_STRATEGY_INPUT_TYPES = get_type_hints(StrategyInput)
+
+
+def _is_date_type(type_hint: object | None) -> bool:
+    if type_hint is date:
+        return True
+    origin = get_origin(type_hint)
+    if origin is None:
+        return False
+    return date in get_args(type_hint)
+
+
+def _parse_date(value: str) -> date | None:
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+        except ValueError:
+            return None
 
 
 def _deserialize_strategy_input(payload: Dict[str, Any]) -> StrategyInput:
@@ -22,10 +47,13 @@ def _deserialize_strategy_input(payload: Dict[str, Any]) -> StrategyInput:
         value = payload[name]
         if value is None:
             continue
-        if field.type is date and isinstance(value, str):
-            converted[name] = datetime.fromisoformat(value).date()
-        else:
-            converted[name] = value
+        type_hint = _STRATEGY_INPUT_TYPES.get(name)
+        if _is_date_type(type_hint) and isinstance(value, str):
+            parsed = _parse_date(value)
+            if parsed is not None:
+                converted[name] = parsed
+                continue
+        converted[name] = value
     return StrategyInput(**converted)
 
 
@@ -47,9 +75,10 @@ def execute_backtest(payload: Dict[str, Any]) -> Dict[str, Any]:
     params = _deserialize_strategy_input(payload)
     result = run_quant_pipeline(params)
     history_id = _persist_history(result, getattr(params, "user_id", None))
+    safe_result = sanitize_snapshot(result)
     return {
         "history_id": history_id,
-        "result": result,
+        "result": safe_result,
     }
 
 
@@ -86,7 +115,7 @@ def execute_rl_job(payload: Dict[str, Any]) -> Dict[str, Any]:
         "stats": result.get("stats"),
         "warnings": result.get("warnings", []),
     }
-    return {"history_id": history_id, "result": rl_summary}
+    return {"history_id": history_id, "result": sanitize_snapshot(rl_summary)}
 
 
 @shared_task(
