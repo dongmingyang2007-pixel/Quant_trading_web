@@ -7,7 +7,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from ..risk_stats import recovery_period_days, calculate_cvar
 from .risk import calculate_max_drawdown
 
 # 指标描述与通用格式化/统计函数

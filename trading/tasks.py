@@ -5,7 +5,6 @@ from datetime import date, datetime
 from typing import Any, Dict, List, get_args, get_origin, get_type_hints
 
 from celery import shared_task
-from django.conf import settings
 
 from .strategies import StrategyInput, run_quant_pipeline
 from .history import BacktestRecord, append_history, sanitize_snapshot

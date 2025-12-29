@@ -1,6 +1,8 @@
 from pathlib import Path
 import os
 import sys
+
+from django.urls import reverse_lazy
 try:
     from dotenv import load_dotenv
 except Exception:
@@ -233,6 +235,7 @@ SCREEN_ANALYZER_RATE_MAX_CALLS = int(os.environ.get("SCREEN_ANALYZER_RATE_MAX_CA
 SCREEN_ANALYZER_RATE_CACHE_ALIAS = os.environ.get("SCREEN_ANALYZER_RATE_CACHE_ALIAS", "default")
 SCREEN_ANALYZER_OCR_ENABLED = os.environ.get("SCREEN_ANALYZER_OCR_ENABLED", "1") in {"1", "true", "True"}
 SCREEN_ANALYZER_TRAIN_MIN_SAMPLES = int(os.environ.get("SCREEN_ANALYZER_TRAIN_MIN_SAMPLES", 18))
+SCREEN_ANALYZER_MODEL_MIN_CONF = float(os.environ.get("SCREEN_ANALYZER_MODEL_MIN_CONF", "0.55"))
 SCREEN_ANALYZER_INCLUDE_WAVES = os.environ.get("SCREEN_ANALYZER_INCLUDE_WAVES", "1") in {"1", "true", "True"}
 SCREEN_ANALYZER_INCLUDE_FUSION = os.environ.get("SCREEN_ANALYZER_INCLUDE_FUSION", "1") in {"1", "true", "True"}
 SCREEN_ANALYZER_INCLUDE_TIMINGS = os.environ.get("SCREEN_ANALYZER_INCLUDE_TIMINGS", "0") in {"1", "true", "True"}
@@ -305,6 +308,10 @@ CELERY_TASK_ALWAYS_EAGER = os.environ.get("CELERY_ALWAYS_EAGER", "1" if CELERY_B
 }
 CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_TIMEZONE = TIME_ZONE
+CELERY_BEAT_SCHEDULE_FILENAME = os.environ.get(
+    "CELERY_BEAT_SCHEDULE_FILENAME",
+    os.fspath(DATA_ROOT / "celerybeat-schedule"),
+)
 PAPER_TRADING_INTERVAL_SECONDS = int(os.environ.get("PAPER_TRADING_INTERVAL_SECONDS", "300") or 300)
 ENABLE_PAPER_TRADING_BEAT = os.environ.get("ENABLE_PAPER_TRADING_BEAT", "1") in {"1", "true", "True"}
 CELERY_BEAT_SCHEDULE = globals().get("CELERY_BEAT_SCHEDULE", {})
@@ -357,8 +364,6 @@ CONTENT_SECURITY_POLICY = os.environ.get(
 _csrf_from_env = _split_env_list(os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS"))
 if _csrf_from_env:
     CSRF_TRUSTED_ORIGINS = _csrf_from_env
-
-from django.urls import reverse_lazy
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

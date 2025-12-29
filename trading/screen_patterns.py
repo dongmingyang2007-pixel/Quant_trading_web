@@ -53,6 +53,15 @@ _QUALITY_NEUTRAL = float(
     if settings
     else os.environ.get("SCREEN_ANALYZER_QUALITY_NEUTRAL", "0.45")
 )
+_MODEL_MIN_CONF = float(
+    getattr(
+        settings,
+        "SCREEN_ANALYZER_MODEL_MIN_CONF",
+        os.environ.get("SCREEN_ANALYZER_MODEL_MIN_CONF", "0.55"),
+    )
+    if settings
+    else os.environ.get("SCREEN_ANALYZER_MODEL_MIN_CONF", "0.55")
+)
 _FUSION_ALIGN_BONUS = float(
     getattr(
         settings,
@@ -459,13 +468,6 @@ def analyze_screen_frame(
     if isinstance(overlay_layers, list):
         overlay_layers = [str(layer).lower() for layer in overlay_layers if layer]
 
-    if mode == "candlestick" and not calibration.get("candle_up") and not calibration.get("candle_down"):
-        return _error_response(
-            "series_not_found",
-            next_action="Pick candle colors before analysis.",
-            diagnostics={"mode": mode},
-            timings=timings if include_timings else None,
-        )
     stage_start = time.perf_counter()
     series_result = _extract_series(image, mode, calibration)
     timings["extract_series"] = _elapsed_ms(stage_start)
@@ -624,14 +626,20 @@ def analyze_screen_frame(
             }
 
     stage_start = time.perf_counter()
-    overlay = _render_overlay(
-        image,
-        pattern.get("upper_fit"),
-        pattern.get("lower_fit"),
-        wave_payload=wave_payload,
-        overlay_layers=overlay_layers,
-        series_length=len(series_result.series),
-    )
+    overlay = ""
+    try:
+        overlay = _render_overlay(
+            image,
+            pattern.get("upper_fit"),
+            pattern.get("lower_fit"),
+            wave_payload=wave_payload,
+            overlay_layers=overlay_layers,
+            series_length=len(series_result.series),
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        response_error = f"{exc.__class__.__name__}"
+        response = {"overlay_error": response_error}
+        series_result.diagnostics.update(response)
     timings["overlay"] = _elapsed_ms(stage_start)
 
     response = {
@@ -886,8 +894,28 @@ def _maybe_apply_model(series: np.ndarray, pattern: Dict[str, Any]) -> Dict[str,
     best_index = int(np.argmax(probs))
     best_label = labels[best_index] if best_index < len(labels) else None
     confidence = float(probs[best_index]) if probs is not None else 0.0
-    diagnostics = {"model_used": True, "model_confidence": round(confidence, 3)}
-    if best_label and confidence >= 0.55:
+    min_conf = _MODEL_MIN_CONF
+    threshold_source = "default"
+    try:
+        from .screen_training import load_model_meta
+
+        meta = load_model_meta()
+        if isinstance(meta, dict):
+            override_threshold = meta.get("override_threshold")
+            if override_threshold is not None:
+                min_conf = float(override_threshold)
+                source = meta.get("override_source")
+                threshold_source = source if isinstance(source, str) else "meta"
+    except Exception:
+        pass
+    min_conf = max(0.0, min(1.0, float(min_conf)))
+    diagnostics = {
+        "model_used": True,
+        "model_confidence": round(confidence, 3),
+        "model_threshold": round(min_conf, 3),
+        "model_threshold_source": threshold_source,
+    }
+    if best_label and confidence >= min_conf:
         pattern["pattern_key"] = best_label
         pattern["bias"] = _pattern_bias(best_label)
         pattern["confidence"] = round(max(pattern["confidence"], confidence), 3)
@@ -1074,16 +1102,33 @@ def _extract_candlestick_series(image: Image.Image, calibration: Dict[str, Any])
     val = arr[:, :, 2].astype(np.int16)
     up_target = calibration.get("candle_up") if isinstance(calibration, dict) else None
     down_target = calibration.get("candle_down") if isinstance(calibration, dict) else None
-    if not isinstance(up_target, dict) and not isinstance(down_target, dict):
-        return None
-
     masks = []
+    calibrated = False
     if isinstance(up_target, dict):
         masks.append(_mask_from_target(hue, sat, val, up_target))
+        calibrated = True
     if isinstance(down_target, dict):
         masks.append(_mask_from_target(hue, sat, val, down_target))
+        calibrated = True
+    auto_hues: list[int] = []
     if not masks:
-        return None
+        base_mask = (sat >= _SAT_THRESHOLD) & (val >= _VAL_THRESHOLD)
+        if int(base_mask.sum()) < max(200, image.size[0]):
+            return None
+        hist = np.bincount(hue[base_mask].ravel(), minlength=256)
+        top1 = int(hist.argmax())
+        hist2 = hist.copy()
+        span = max(8, int(_HUE_TOLERANCE * 2))
+        hist2[max(0, top1 - span) : min(256, top1 + span + 1)] = 0
+        top2 = int(hist2.argmax())
+        auto_hues.append(top1)
+        if hist2[top2] >= max(30, hist[top1] * 0.08):
+            auto_hues.append(top2)
+        for hue_center in auto_hues:
+            diff = np.abs(((hue - hue_center + 128) % 256) - 128)
+            masks.append(base_mask & (diff <= _HUE_TOLERANCE))
+        if not masks:
+            return None
     combined = np.logical_or.reduce(masks)
     coverage, median_range = _measure_line_shape(combined)
     mask_coverage = float(combined.sum()) / max(1.0, float(combined.size))
@@ -1107,10 +1152,12 @@ def _extract_candlestick_series(image: Image.Image, calibration: Dict[str, Any])
         "mask_coverage": round(float(mask_coverage), 4),
         "median_range": round(float(median_range), 2),
         "points": int(valid.sum()),
-        "calibrated": True,
+        "calibrated": calibrated,
         "width": int(width),
         "height": int(height),
     }
+    if auto_hues:
+        diagnostics["auto_hues"] = auto_hues
     return SeriesResult(series=series, diagnostics=diagnostics, mode="candlestick")
 
 

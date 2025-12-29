@@ -5,7 +5,6 @@ from typing import Any
 from rest_framework import serializers
 
 from ..forms import QuantStrategyForm
-from paper.models import PaperTradingSession
 
 
 class StrategyTaskSerializer(serializers.Serializer):

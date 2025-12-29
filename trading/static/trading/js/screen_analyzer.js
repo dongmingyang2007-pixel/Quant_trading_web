@@ -143,6 +143,7 @@
     pickTarget: null,
     autoInterval: null,
     autoTimerInterval: null,
+    failureCount: 0,
     calibration: {
       line: null,
       candle_up: null,
@@ -228,6 +229,7 @@
       state.stream = stream;
       stream.getTracks().forEach((track) => {
         track.addEventListener('ended', stopCapture);
+        track.addEventListener('inactive', stopCapture);
       });
       video.srcObject = stream;
       await video.play();
@@ -384,6 +386,10 @@
     } catch (err) {
       return null;
     }
+  };
+
+  const ensureRoi = () => {
+    if (!state.roi) autoCrop();
   };
 
   const fallbackRoi = () =>
@@ -618,6 +624,12 @@
 
   const analyzeOnce = async () => {
     if (!state.capturing || state.inFlight) return;
+    if (!state.stream || !state.stream.active) {
+      stopCapture();
+      setStatus('error', labels.msg_capture_unsupported || 'Capture ended');
+      return;
+    }
+    ensureRoi();
     const image = captureFrame();
     if (!image) {
       setStatus('error', labels.msg_frame_missing || 'No frame');
@@ -654,14 +666,24 @@
       });
       const data = await response.json();
       if (!response.ok) {
-        const message = data.next_action || data.error || labels.msg_analysis_failed || 'Analysis failed';
+        const detail = data.error_detail ? ` (${data.error_detail})` : '';
+        const message = `${data.next_action || data.error || labels.msg_analysis_failed || 'Analysis failed'}${detail}`;
         setStatus('error', message);
+        state.failureCount += 1;
+        if (state.failureCount >= 3) {
+          stopAutoAnalyze();
+        }
       } else {
         setStatus('active', labels.status_updated || 'Updated');
         updateResult(data);
+        state.failureCount = 0;
       }
     } catch (err) {
       setStatus('error', labels.msg_network_error || 'Network error');
+      state.failureCount += 1;
+      if (state.failureCount >= 3) {
+        stopAutoAnalyze();
+      }
     } finally {
       state.inFlight = false;
     }
@@ -677,6 +699,7 @@
     if (state.analyzing) return;
     state.analyzing = true;
     if (elements.toggle) elements.toggle.textContent = labels.toggle_on || 'Stop auto';
+    ensureRoi();
     const interval = adaptiveEnabled() && state.autoInterval ? state.autoInterval : currentInterval();
     scheduleAutoAnalyze(interval);
   };
@@ -746,6 +769,16 @@
     if (payload.total_samples != null) parts.push(`samples=${payload.total_samples}`);
     if (payload.accuracy != null) parts.push(`acc=${Math.round(payload.accuracy * 100)}%`);
     if (payload.test_size != null) parts.push(`test=${payload.test_size}`);
+    if (payload.override_threshold != null) {
+      const thr = Number(payload.override_threshold);
+      if (!Number.isNaN(thr)) parts.push(`thr=${thr.toFixed(2)}`);
+    }
+    if (payload.override_accuracy != null) {
+      parts.push(`ovr_acc=${Math.round(payload.override_accuracy * 100)}%`);
+    }
+    if (payload.override_coverage != null) {
+      parts.push(`cov=${Math.round(payload.override_coverage * 100)}%`);
+    }
     elements.trainingSummary.textContent = parts.length ? parts.join(' | ') : '-';
   };
 

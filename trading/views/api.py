@@ -8,7 +8,6 @@ from dataclasses import asdict
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime, timezone
 import threading
-import time
 from itertools import combinations
 
 import pandas as pd
@@ -349,6 +348,7 @@ def ai_chat(request):
         user_id=request.user.id,
         model=model_name or "",
         enable_web=enable_web,
+        timings_ms=ai_payload.get("timings_ms"),
     )
     return JsonResponse(ai_payload)
 
@@ -455,6 +455,7 @@ def ai_chat_stream(request):
                     request_id=request_id,
                     user_id=request.user.id,
                     model=result.get("selected_model"),
+                    timings_ms=result.get("timings_ms"),
                 )
             except LLMIntegrationError as exc:
                 event_queue.put(("error", {"error": str(exc), "request_id": request_id}))
@@ -506,7 +507,7 @@ def enqueue_backtest_task(request):
             status=400,
             json_dumps_params={"ensure_ascii": False},
         )
-    strategy_input, _ = build_strategy_input(form.cleaned_data, request_id=request_id, user=request.user)
+    strategy_input, _warnings = build_strategy_input(form.cleaned_data, request_id=request_id, user=request.user)
     job = submit_backtest_task(asdict(strategy_input))
     response = {
         "task_id": getattr(job, "id", ""),
@@ -546,7 +547,7 @@ def enqueue_training_task(request):
             status=400,
             json_dumps_params={"ensure_ascii": False},
         )
-    strategy_input, _ = build_strategy_input(form.cleaned_data, request_id=request_id, user=request.user)
+    strategy_input, _warnings = build_strategy_input(form.cleaned_data, request_id=request_id, user=request.user)
     raw_tickers = payload.get("tickers") or form_data.get("tickers")
     tickers = _normalize_symbol_list(raw_tickers, fallback=str(form.cleaned_data.get("ticker", "")).upper())
     if not tickers:
@@ -718,7 +719,7 @@ def enqueue_rl_task(request):
             status=400,
             json_dumps_params={"ensure_ascii": False},
         )
-    strategy_input, _ = build_strategy_input(form.cleaned_data, request_id=request_id, user=request.user)
+    strategy_input, _warnings = build_strategy_input(form.cleaned_data, request_id=request_id, user=request.user)
     job = submit_rl_task(asdict(strategy_input))
     response = {
         "task_id": getattr(job, "id", ""),

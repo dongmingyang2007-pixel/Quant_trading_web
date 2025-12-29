@@ -8,11 +8,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib import dates as mdates
 
-plt.switch_backend("Agg")
-
 from .config import StrategyInput
 from .metrics import fig_to_base64
 from .risk import calculate_drawdown_series
+
+plt.switch_backend("Agg")
 
 
 def _format_chart_time(value: Any) -> str:

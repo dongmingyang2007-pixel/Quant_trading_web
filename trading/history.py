@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, Optional
 import uuid
 import json
 
-from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError
 

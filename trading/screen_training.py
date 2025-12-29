@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,20 @@ except Exception:  # pragma: no cover - optional
 
 from .screen_patterns import FEATURE_NAMES, PATTERN_KEYS
 
+_MODEL_MIN_CONF_DEFAULT = float(
+    getattr(settings, "SCREEN_ANALYZER_MODEL_MIN_CONF", os.environ.get("SCREEN_ANALYZER_MODEL_MIN_CONF", "0.55"))
+    if settings
+    else os.environ.get("SCREEN_ANALYZER_MODEL_MIN_CONF", "0.55")
+)
+_MODEL_THRESHOLD_CANDIDATES = [
+    float(item)
+    for item in os.environ.get(
+        "SCREEN_ANALYZER_MODEL_THRESHOLD_CANDIDATES",
+        "0.45,0.5,0.55,0.6,0.65,0.7,0.75",
+    ).split(",")
+    if item.strip()
+]
+
 
 @dataclass(slots=True)
 class TrainingMetrics:
@@ -34,6 +49,11 @@ class TrainingMetrics:
     classes: Dict[str, int]
     accuracy: Optional[float]
     test_size: int
+    override_threshold: Optional[float] = None
+    override_accuracy: Optional[float] = None
+    override_coverage: Optional[float] = None
+    override_samples: Optional[int] = None
+    override_source: Optional[str] = None
 
 
 def _data_dir() -> Path:
@@ -125,18 +145,45 @@ def train_model(min_samples: int = 18) -> TrainingMetrics:
     )
     model.fit(x_train, y_train)
 
+    labels = list(getattr(model, "classes_", sorted(set(y))))
     accuracy = None
+    override_summary: Optional[Dict[str, Any]] = None
     if x_test:
         preds = model.predict(x_test)
         accuracy = float(accuracy_score(y_test, preds))
+        try:
+            probs = model.predict_proba(x_test)
+            override_summary = _select_override_threshold(
+                probs,
+                y_test,
+                labels=labels,
+                thresholds=_MODEL_THRESHOLD_CANDIDATES,
+            )
+        except Exception:
+            override_summary = None
 
-    labels = list(getattr(model, "classes_", sorted(set(y))))
     _save_model(model, labels=labels)
+    override_threshold = _MODEL_MIN_CONF_DEFAULT
+    override_source = "default"
+    override_accuracy = None
+    override_coverage = None
+    override_samples = None
+    if override_summary:
+        override_threshold = float(override_summary["threshold"])
+        override_source = "validation"
+        override_accuracy = float(override_summary["accuracy"])
+        override_coverage = float(override_summary["coverage"])
+        override_samples = int(override_summary["samples"])
     meta = TrainingMetrics(
         total_samples=len(valid),
         classes=class_counts,
         accuracy=accuracy,
         test_size=len(x_test),
+        override_threshold=override_threshold,
+        override_accuracy=override_accuracy,
+        override_coverage=override_coverage,
+        override_samples=override_samples,
+        override_source=override_source,
     )
     _write_meta(meta)
     return meta
@@ -162,6 +209,11 @@ def _write_meta(metrics: TrainingMetrics) -> None:
         "accuracy": metrics.accuracy,
         "test_size": metrics.test_size,
         "features": FEATURE_NAMES,
+        "override_threshold": metrics.override_threshold,
+        "override_accuracy": metrics.override_accuracy,
+        "override_coverage": metrics.override_coverage,
+        "override_samples": metrics.override_samples,
+        "override_source": metrics.override_source,
     }
     path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -189,4 +241,86 @@ def load_trained_model() -> Optional[Tuple[Any, List[str]]]:
     return model, labels
 
 
-__all__ = ["save_sample", "train_model", "load_samples", "load_trained_model", "TrainingMetrics"]
+def load_model_meta() -> Optional[Dict[str, Any]]:
+    path = _model_meta_path()
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _select_override_threshold(
+    probabilities: Any,
+    labels_true: List[str],
+    *,
+    labels: List[str],
+    thresholds: Optional[List[float]] = None,
+) -> Optional[Dict[str, Any]]:
+    if not labels_true or not labels:
+        return None
+    rows = list(probabilities) if probabilities is not None else []
+    if not rows:
+        return None
+    total = min(len(rows), len(labels_true))
+    if total <= 0:
+        return None
+    thresholds = thresholds or _MODEL_THRESHOLD_CANDIDATES
+    best: Optional[Dict[str, Any]] = None
+    for threshold in thresholds:
+        correct = 0
+        covered = 0
+        for row, truth in zip(rows, labels_true):
+            idx, conf = _max_class_confidence(row)
+            if idx is None or conf < threshold:
+                continue
+            covered += 1
+            if idx < len(labels) and labels[idx] == truth:
+                correct += 1
+        if covered <= 0:
+            accuracy = 0.0
+        else:
+            accuracy = correct / covered
+        coverage = covered / total
+        score = accuracy * (0.6 + 0.4 * coverage)
+        if best is None or score > best["score"]:
+            best = {
+                "threshold": float(threshold),
+                "accuracy": float(accuracy),
+                "coverage": float(coverage),
+                "samples": int(covered),
+                "score": float(score),
+            }
+    return best
+
+
+def _max_class_confidence(row: Any) -> Tuple[Optional[int], float]:
+    best_idx = None
+    best_val = None
+    try:
+        iterator = enumerate(row)
+    except TypeError:
+        return None, 0.0
+    for idx, value in iterator:
+        try:
+            score = float(value)
+        except (TypeError, ValueError):
+            continue
+        if best_val is None or score > best_val:
+            best_val = score
+            best_idx = int(idx)
+    if best_idx is None or best_val is None:
+        return None, 0.0
+    return best_idx, float(best_val)
+
+
+__all__ = [
+    "save_sample",
+    "train_model",
+    "load_samples",
+    "load_trained_model",
+    "load_model_meta",
+    "TrainingMetrics",
+]

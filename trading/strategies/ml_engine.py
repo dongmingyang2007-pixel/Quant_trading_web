@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 from dataclasses import replace
 from typing import Any
 
@@ -36,15 +35,20 @@ except Exception:  # pragma: no cover
     def delayed(func):  # type: ignore
         return func
 
-from .config import StrategyInput, QuantStrategyError, DEFAULT_STRATEGY_SEED
-from .indicators import _normalized_open_prices, _select_forward_return, _attach_forward_returns
+from .config import StrategyInput, QuantStrategyError
+from .indicators import (
+    DEFAULT_FEATURE_COLUMNS,
+    build_feature_frame,
+    _normalized_open_prices,
+    _select_forward_return,
+)
 from .event_engine import compute_realized_returns, run_event_backtest
 from .store import DATA_CACHE_DIR, FEATURE_STORE
 from .metrics import compute_validation_metrics, aggregate_oos_metrics, build_oos_boxplot, fig_to_base64
 from ..optimization import PurgedWalkForwardSplit, _build_classifier
 from ..ml_models import build_custom_sequence_model
 from ..observability import record_metric
-from ..validation import compute_cpcv_report, build_stress_report, compute_psi
+from ..validation import compute_cpcv_report, build_stress_report, compute_psi, assert_no_feature_leakage
 from .risk import (
     apply_signal_filters,
     calculate_max_drawdown,
@@ -217,6 +221,14 @@ def build_feature_matrix(prices: pd.DataFrame, params: StrategyInput) -> tuple[p
             cache_key = None
 
     dataset = prices.copy()
+    required = {"sma_short", "sma_long", "boll_up", "boll_dn"}
+    if not required.issubset(dataset.columns):
+        dataset = build_feature_frame(
+            dataset,
+            params.short_window,
+            params.long_window,
+            params.rsi_period,
+        )
     dataset["label_style"] = params.label_style
     dataset["return_path"] = getattr(params, "return_path", "close_to_close")
     if "forward_return_close" not in dataset:
@@ -232,37 +244,17 @@ def build_feature_matrix(prices: pd.DataFrame, params: StrategyInput) -> tuple[p
     dataset["return_path"] = getattr(params, "return_path", "close_to_close")
     dataset["label_return_path"] = label_path
 
-    feature_columns = [
-        "return_1d",
-        "return_5d",
-        "return_21d",
-        "vol_10d",
-        "vol_20d",
-        "vol_60d",
-        "momentum_short",
-        "momentum_long",
-        "ema_trend",
-        "macd",
-        "macd_signal",
-        "macd_hist",
-        "rsi",
-        "volume_z",
-        "volume_trend",
-        "atr_14",
-        "atr_pct",
-        "adx_14",
-        "obv",
-        "cmf_20",
-        "skew_21",
-        "kurt_21",
-        "return_streak",
-        "price_z",
-    ]
+    feature_columns = list(DEFAULT_FEATURE_COLUMNS)
 
     dataset["sma_diff"] = dataset["sma_short"] - dataset["sma_long"]
     dataset["sma_ratio"] = dataset["sma_short"] / dataset["sma_long"] - 1
     dataset["boll_bandwidth"] = (dataset["boll_up"] - dataset["boll_dn"]) / dataset["sma_long"]
     feature_columns.extend(["sma_diff", "sma_ratio", "boll_bandwidth"])
+
+    try:
+        assert_no_feature_leakage(dataset, feature_columns)
+    except ValueError as exc:
+        raise QuantStrategyError(f"Feature leakage guard failed: {exc}") from exc
 
     labeled = build_labels(dataset, params)
     if params.label_style == "triple_barrier":

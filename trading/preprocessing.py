@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Iterable
 import hashlib
 import json
@@ -74,6 +75,7 @@ def sanitize_price_history(prices: pd.DataFrame) -> tuple[pd.DataFrame, DataQual
         return prices, report
 
     clean = prices.copy().sort_index()
+    clean.attrs = dict(getattr(prices, "attrs", {}))
     report.total_rows = int(clean.shape[0])
     if not clean.empty and hasattr(clean.index[0], "date"):
         report.start_date = str(clean.index[0].date())

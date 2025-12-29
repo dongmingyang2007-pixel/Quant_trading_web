@@ -18,8 +18,6 @@ from .insights import (
     generate_recommendations,
     build_related_portfolios,
     build_statistical_baselines,
-    build_factor_snapshot,
-    build_sentiment_snapshot,
     build_multimodal_bundle,
     run_deep_signal_model,
     build_model_ensemble_view,
@@ -37,34 +35,23 @@ from .insights import (
     build_advisor_playbook,
     build_flagship_research_bundle,
     build_key_takeaways,
-    estimate_confidence,
     build_user_guidance,
 )
 from .market import fetch_market_context
 from .metrics import build_core_metrics, build_metric, format_percentage
-from .risk import calculate_drawdown_series, calculate_max_drawdown
+from .risk import calculate_max_drawdown
 from .config import StrategyOutcome, StrategyInput, QuantStrategyError, DEFAULT_STRATEGY_SEED
 from .indicators import compute_indicators
 from .ma_cross import backtest_sma_strategy, format_table
 from .ml_engine import (
-    _calibration_summary,
-    build_calibration_plot,
     build_feature_matrix,
-    build_labels,
-    build_threshold_heatmap,
-    compute_triple_barrier_labels,
     load_best_ml_config,
     run_ml_backtest,
-    scan_threshold_stability,
-    tune_thresholds_on_validation,
 )
 from ..optimization import PurgedWalkForwardSplit
 from .charts import build_interactive_chart_payload, generate_charts
-from .store import DATA_CACHE_DIR
-from .risk import apply_signal_filters, apply_vol_targeting, calculate_target_leverage, enforce_risk_limits
 from ..portfolio import (
     apply_sector_caps,
-    build_target_weights,
     build_trade_list,
     cap_turnover,
 )
@@ -80,15 +67,13 @@ from .metrics import (
     calculate_var_cvar,
     compute_validation_metrics,
     aggregate_oos_metrics,
-    build_oos_boxplot,
-    fig_to_base64,
     get_risk_free_rate_annual,
 )
 from ..preprocessing import sanitize_price_history
 from ..data_sources import collect_auxiliary_data
 from ..observability import record_metric
 from ..cache_utils import build_cache_key, cache_get_object, cache_set_object
-from ..backtest_logger import append_log, top_runs
+from ..reinforcement import build_reinforcement_playbook
 from ..risk_stats import (
     calculate_cvar,
     compute_robust_sharpe,
@@ -102,6 +87,7 @@ from ..validation import (
     build_walk_forward_report,
     build_purged_kfold_schedule,
     collect_repro_metadata,
+    build_data_signature,
 )
 from ..security import sanitize_html_fragment
 from django.utils.safestring import mark_safe
@@ -110,9 +96,6 @@ import copy
 import hashlib
 import json
 import time
-import base64
-import io
-import math
 import numpy as np
 import pandas as pd
 from dataclasses import asdict, replace
@@ -471,6 +454,14 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
     stats["validation_report"] = {"walk_forward": walk_forward_report, "purged_kfold": purged_schedule}
     stats["tail_risk_summary"] = compute_tail_risk_summary(backtest.get("strategy_return"))
     metadata = collect_repro_metadata(params)
+    data_signature = build_data_signature(
+        prices,
+        columns=["adj close", "open", "high", "low", "close", "volume"],
+    )
+    if data_signature:
+        metadata["data_signature"] = data_signature
+        if data_signature.get("source"):
+            metadata["data_source"] = data_signature.get("source")
     data_quality = quality_report.to_dict() if quality_report else {}
     data_risks: list[str] = []
     if auxiliary.financials or auxiliary.fundamentals:
@@ -880,10 +871,8 @@ def summarize_backtest(
     strategy_return_gross = backtest.get("strategy_return_gross")
     if strategy_return_gross is not None:
         strategy_return_gross = strategy_return_gross.astype(float).fillna(0.0)
-        gross_exposure = float(np.abs(strategy_return_gross).sum())
     else:
         strategy_return_gross = net_returns + transaction_cost + execution_cost + borrow_cost_series
-        gross_exposure = float(np.abs(strategy_return_gross).sum())
     cost_base = float(exposure_change.abs().sum()) if not exposure_change.empty else 0.0
     cost_ratio = total_cost / max(cost_base, 1e-9)
     avg_holding = calculate_holding_periods(position_series) if not position_series.empty else 0.0
@@ -1114,7 +1103,7 @@ def _compute_oos_from_backtest(backtest: pd.DataFrame, params: StrategyInput) ->
         return None
     splitter = PurgedWalkForwardSplit(train_window=params.train_window, test_window=max(params.test_window, 5), embargo=max(0, params.embargo_days))
     slices: list[dict[str, Any]] = []
-    for fold_idx, (_, test_idx) in enumerate(splitter.split(total)):
+    for fold_idx, (_train_idx, test_idx) in enumerate(splitter.split(total)):
         test_returns = backtest["strategy_return"].iloc[test_idx].fillna(0.0)
         if test_returns.empty:
             continue

@@ -4,7 +4,7 @@ import csv
 import io
 import json
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any
 
 from django.template.loader import render_to_string
 from django.utils import timezone

@@ -5,6 +5,7 @@ from typing import Any, Mapping
 import logging
 import os
 import time
+from urllib.parse import urlsplit
 
 import requests
 from requests import Response, RequestException, Session
@@ -48,6 +49,10 @@ class HttpClient:
         headers: Mapping[str, str] | None = None,
         stream: bool = False,
         raise_for_status: bool = True,
+        emit_metrics: bool = True,
+        metric_event: str = "http.client.request",
+        request_id: str | None = None,
+        metric_tags: Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> Response:
         config = HttpRequestConfig(
@@ -66,6 +71,10 @@ class HttpClient:
             merged_headers.update(headers)
 
         last_exc: Exception | None = None
+        started = time.perf_counter()
+        url_parts = urlsplit(url)
+        host = url_parts.netloc
+        path = url_parts.path or "/"
         attempts = config.retries + 1
         for attempt in range(attempts):
             try:
@@ -79,6 +88,20 @@ class HttpClient:
                 )
                 if config.raise_for_status:
                     response.raise_for_status()
+                if emit_metrics:
+                    duration_ms = round((time.perf_counter() - started) * 1000.0, 2)
+                    self._record_metric(
+                        metric_event,
+                        method=method.upper(),
+                        host=host,
+                        path=path,
+                        status_code=response.status_code,
+                        duration_ms=duration_ms,
+                        success=True,
+                        attempts=attempt + 1,
+                        request_id=request_id,
+                        **(metric_tags or {}),
+                    )
                 return response
             except RequestException as exc:  # pragma: no cover - network dependent
                 last_exc = exc
@@ -91,10 +114,38 @@ class HttpClient:
                     exc,
                 )
                 if attempt >= attempts - 1:
+                    if emit_metrics:
+                        duration_ms = round((time.perf_counter() - started) * 1000.0, 2)
+                        status_code = None
+                        try:
+                            status_code = getattr(exc.response, "status_code", None)
+                        except Exception:
+                            status_code = None
+                        self._record_metric(
+                            metric_event,
+                            method=method.upper(),
+                            host=host,
+                            path=path,
+                            status_code=status_code,
+                            duration_ms=duration_ms,
+                            success=False,
+                            attempts=attempt + 1,
+                            error=str(exc),
+                            request_id=request_id,
+                            **(metric_tags or {}),
+                        )
                     break
                 time.sleep(config.backoff * (attempt + 1))
 
         raise HttpClientError(str(last_exc) if last_exc else "HTTP request failed")
+
+    @staticmethod
+    def _record_metric(event: str, **fields: Any) -> None:
+        try:
+            from .observability import record_metric
+        except Exception:
+            return
+        record_metric(event, **fields)
 
     def get(self, url: str, **kwargs: Any) -> Response:
         return self.request("GET", url, **kwargs)

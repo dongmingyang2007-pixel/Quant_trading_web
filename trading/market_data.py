@@ -1,27 +1,17 @@
 from __future__ import annotations
 
-from datetime import date, datetime
-from typing import Any, Iterable
-from pathlib import Path
-import json
-import time
-import hashlib
-import os
-import threading
-import logging
 from collections import deque
-
-MAX_RETRIES = int(os.environ.get("MARKET_FETCH_MAX_RETRIES", "2") or 0)
-RETRY_BACKOFF_SECONDS = float(os.environ.get("MARKET_FETCH_RETRY_BACKOFF", "1.0") or 0)
-RATE_LIMIT_PER_WINDOW = int(os.environ.get("MARKET_FETCH_RATE_LIMIT", "120") or 0)
-RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("MARKET_FETCH_RATE_WINDOW", "60") or 0)
-
-_RATE_LOCK = threading.Lock()
-_RATE_BUCKET: deque[float] = deque()
-LOGGER = logging.getLogger(__name__)
+from datetime import date
+import hashlib
+import json
+import logging
+import os
+from pathlib import Path
+import threading
+import time
+from typing import Iterable
 
 import pandas as pd
-
 from django.conf import settings
 
 from .cache_utils import build_cache_key, cache_memoize
@@ -31,6 +21,15 @@ try:  # optional dependency
     import yfinance as yf  # type: ignore
 except Exception:  # pragma: no cover
     yf = None  # type: ignore
+
+MAX_RETRIES = int(os.environ.get("MARKET_FETCH_MAX_RETRIES", "2") or 0)
+RETRY_BACKOFF_SECONDS = float(os.environ.get("MARKET_FETCH_RETRY_BACKOFF", "1.0") or 0)
+RATE_LIMIT_PER_WINDOW = int(os.environ.get("MARKET_FETCH_RATE_LIMIT", "120") or 0)
+RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("MARKET_FETCH_RATE_WINDOW", "60") or 0)
+
+_RATE_LOCK = threading.Lock()
+_RATE_BUCKET: deque[float] = deque()
+LOGGER = logging.getLogger(__name__)
 
 DATA_CACHE_DIR: Path = getattr(settings, "DATA_CACHE_DIR", Path(settings.DATA_ROOT) / "data_cache")
 DISK_CACHE_DIR = DATA_CACHE_DIR / "market_snapshots"

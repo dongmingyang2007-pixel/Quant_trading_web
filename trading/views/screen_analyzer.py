@@ -103,10 +103,10 @@ def screen_analyzer_api(request: HttpRequest) -> JsonResponse:
             user_id=request.user.id,
             error=str(exc),
         )
-        return JsonResponse(
-            {"error": "analysis_failed", "request_id": request_id},
-            status=500,
-        )
+        response = {"error": "analysis_failed", "request_id": request_id}
+        if getattr(settings, "DEBUG", False):
+            response["error_detail"] = f"{exc.__class__.__name__}: {exc}"
+        return JsonResponse(response, status=500)
 
     if "error" in result:
         response = {"error": result["error"], "request_id": request_id}
@@ -179,6 +179,13 @@ def screen_analyzer_sample_api(request: HttpRequest) -> JsonResponse:
         return JsonResponse({"error": str(exc), "request_id": request_id}, status=400)
 
     total = len(load_samples())
+    record_metric(
+        "screen_analyzer.sample_saved",
+        request_id=request_id,
+        user_id=request.user.id,
+        label=str(label),
+        total_samples=total,
+    )
     return JsonResponse(
         {"status": "saved", "total_samples": total, "request_id": request_id},
         json_dumps_params={"ensure_ascii": False},
@@ -208,8 +215,26 @@ def screen_analyzer_train_api(request: HttpRequest) -> JsonResponse:
         "classes": metrics.classes,
         "accuracy": metrics.accuracy,
         "test_size": metrics.test_size,
+        "override_threshold": metrics.override_threshold,
+        "override_accuracy": metrics.override_accuracy,
+        "override_coverage": metrics.override_coverage,
+        "override_samples": metrics.override_samples,
+        "override_source": metrics.override_source,
         "request_id": request_id,
     }
+    record_metric(
+        "screen_analyzer.model_trained",
+        request_id=request_id,
+        user_id=request.user.id,
+        total_samples=metrics.total_samples,
+        accuracy=metrics.accuracy,
+        test_size=metrics.test_size,
+        override_threshold=metrics.override_threshold,
+        override_accuracy=metrics.override_accuracy,
+        override_coverage=metrics.override_coverage,
+        override_samples=metrics.override_samples,
+        override_source=metrics.override_source,
+    )
     return JsonResponse(response, json_dumps_params={"ensure_ascii": False})
 
 

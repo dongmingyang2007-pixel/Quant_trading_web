@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import json
 import re
+import html
 from datetime import date, datetime, timezone
 import calendar
 from typing import Any, Callable, Dict, List
@@ -112,6 +114,77 @@ def _iter_web_search_candidates() -> list[str]:
 
 # in-memory TTL cache for web search results
 _WEB_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_DEFAULT_WEB_ALLOWLIST = [
+    "bloomberg.com",
+    "cnbc.com",
+    "economist.com",
+    "ft.com",
+    "investing.com",
+    "marketwatch.com",
+    "reuters.com",
+    "sec.gov",
+    "tradingview.com",
+    "wsj.com",
+    "yahoo.com",
+    "yahoo.co.jp",
+    "finance.yahoo.com",
+]
+
+
+def _load_web_allowlist() -> list[str]:
+    raw = os.environ.get("LLM_WEB_ALLOWLIST") or os.environ.get("OLLAMA_WEB_ALLOWLIST") or ""
+    if raw.strip().lower() in {"*", "all"}:
+        return []
+    if not raw.strip():
+        return _DEFAULT_WEB_ALLOWLIST
+    entries = [chunk.strip().lower() for chunk in raw.split(",") if chunk.strip()]
+    return list(dict.fromkeys(entries))
+
+
+def _normalize_host(host: str) -> str:
+    if not host:
+        return ""
+    host = host.lower().strip()
+    if host.startswith("www."):
+        host = host[4:]
+    if ":" in host:
+        host = host.split(":", 1)[0]
+    return host
+
+
+def _is_allowed_host(host: str, allowlist: list[str]) -> bool:
+    if not allowlist:
+        return True
+    normalized = _normalize_host(host)
+    if not normalized:
+        return False
+    for entry in allowlist:
+        entry = _normalize_host(entry)
+        if not entry:
+            continue
+        if normalized == entry or normalized.endswith(f".{entry}"):
+            return True
+    return False
+
+
+def _clean_web_text(value: Any, *, max_len: int = 240) -> str:
+    if value is None:
+        return ""
+    text = str(value)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    text = re.sub(r"\\s+", " ", text).strip()
+    if max_len and len(text) > max_len:
+        text = text[:max_len].rstrip() + "..."
+    return text
+
+
+def _record_web_metric(event: str, **fields: Any) -> None:
+    try:
+        from .observability import record_metric
+    except Exception:
+        return
+    record_metric(event, **fields)
 
 
 def _now_utc_label() -> str:
@@ -201,9 +274,9 @@ def _prepend_web_digest(answer: str, web_results: list[dict[str, Any]] | None) -
     for item in web_results[:3]:
         host = item.get("host") or urlsplit(item.get("url") or "").netloc or "未知来源"
         ts = item.get("retrieved_at") or _now_utc_label()
-        title = item.get("title") or "实时资讯"
+        title = _clean_web_text(item.get("title") or "实时资讯", max_len=120)
         url = item.get("url") or ""
-        snippet = (item.get("snippet") or "").replace("\n", " ").strip()
+        snippet = _clean_web_text(item.get("snippet") or "", max_len=220)
         if snippet:
             snippet = snippet[:220]
         link_markup = f"[访问链接]({url})" if url else ""
@@ -228,47 +301,57 @@ def _ollama_web_search(
         return [], "未提供有效的检索关键词", None
 
     errors: list[str] = []
-    for url in _iter_web_search_candidates():
+    allowlist = _load_web_allowlist()
+    for search_url in _iter_web_search_candidates():
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         try:
             resp = http_client.post(
-                url,
+                search_url,
                 json={"query": query, "max_results": max_results},
                 headers=headers,
                 timeout=timeout,
                 retries=0,
             )
         except HttpClientError as exc:
-            errors.append(f"{url} 连接失败：{exc}")
+            errors.append(f"{search_url} 连接失败：{exc}")
             continue
 
         try:
             data = resp.json() or {}
         except ValueError:
-            errors.append(f"{url} 返回了无法解析的 JSON")
+            errors.append(f"{search_url} 返回了无法解析的 JSON")
             continue
 
         raw_results = data.get("results") or data.get("data") or []
         items: list[dict[str, str]] = []
         retrieved_label = _now_utc_label()
+        filtered = 0
         for r in raw_results[:max_results]:
-            url = r.get("url") or ""
-            host = urlsplit(url).netloc
+            item_url = r.get("url") or ""
+            if not item_url.startswith(("http://", "https://")):
+                continue
+            host = _normalize_host(urlsplit(item_url).netloc)
+            if not _is_allowed_host(host, allowlist):
+                filtered += 1
+                continue
             items.append(
                 {
-                    "title": (r.get("title") or r.get("heading") or "网页").strip(),
-                    "url": url,
-                    "snippet": (r.get("content") or r.get("body") or r.get("excerpt") or "")[:220].strip(),
+                    "title": _clean_web_text(r.get("title") or r.get("heading") or "网页", max_len=160),
+                    "url": item_url,
+                    "snippet": _clean_web_text(r.get("content") or r.get("body") or r.get("excerpt") or "", max_len=220),
                     "host": host,
                     "retrieved_at": retrieved_label,
                 }
             )
 
         if items:
-            return items, None, url
-        errors.append(f"{url} 未返回有效结果")
+            return items, None, search_url
+        if filtered:
+            errors.append(f"{search_url} 结果被 allowlist 过滤 ({filtered})")
+        else:
+            errors.append(f"{search_url} 未返回有效结果")
 
     message = "；".join(errors[-3:]) if errors else "未获取到实时资讯"
     return [], message, None
@@ -340,7 +423,19 @@ def _cached_web_search(q: str | list[str], *, max_results: int = 0) -> dict[str,
     now = time.time()
     hit = _WEB_CACHE.get(key)
     if hit and (now - hit[0] < ttl):
+        _record_web_metric(
+            "llm.web_search.cache_hit",
+            query_count=len(normalized_queries),
+            max_results=max_results,
+            ttl_seconds=ttl,
+        )
         return hit[1]
+    _record_web_metric(
+        "llm.web_search.cache_miss",
+        query_count=len(normalized_queries),
+        max_results=max_results,
+        ttl_seconds=ttl,
+    )
     aggregated: dict[str, Any] = {"news": [], "interest_terms": [], "message": "", "source": "", "retrieved_at": ""}
     messages: list[str] = []
     per_query_cap = max_results if max_results > 0 else 10
@@ -352,10 +447,31 @@ def _cached_web_search(q: str | list[str], *, max_results: int = 0) -> dict[str,
     if not aggregated.get("message") and messages:
         aggregated["message"] = "；".join(filter(None, messages))
     if aggregated.get("news"):
+        _record_web_metric(
+            "llm.web_search.results",
+            hits=len(aggregated.get("news") or []),
+            query_count=len(normalized_queries),
+            max_results=max_results,
+            source=aggregated.get("source"),
+        )
         _WEB_CACHE[key] = (now, aggregated)
     else:
         _WEB_CACHE.pop(key, None)
     return aggregated
+
+
+def _profile_to_timings_ms(profile: dict[str, Any]) -> dict[str, float]:
+    timings: dict[str, float] = {}
+    for key, value in profile.items():
+        if not key.endswith("_sec"):
+            continue
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError):
+            continue
+        label = key[:-4]
+        timings[label] = round(seconds * 1000.0, 2)
+    return timings
 
 
 def _resolve_chat_endpoint(endpoint: str | None) -> str:
@@ -1075,6 +1191,9 @@ def generate_ai_commentary(
             }
             if tokens:
                 ret["profile"]["tokens"] = tokens
+            timings_ms = _profile_to_timings_ms(ret["profile"])
+            if timings_ms:
+                ret["timings_ms"] = timings_ms
 
         emit("done", message="AI 解读完成", model=primary_model, provider=provider)
         return ret
@@ -1119,6 +1238,9 @@ def generate_ai_commentary(
             }
             if tokens:
                 ret["profile"]["tokens"] = tokens
+            timings_ms = _profile_to_timings_ms(ret["profile"])
+            if timings_ms:
+                ret["timings_ms"] = timings_ms
         emit("done", message="AI 解读完成", model=primary_model, provider=provider)
         return ret
 
@@ -1182,6 +1304,9 @@ def generate_ai_commentary(
             "secondary_sec": round((t_s1 - t_s0), 3) if 't_s1' in locals() and 't_s0' in locals() else 0.0,
             "total_sec": round(((t_s1 if 't_s1' in locals() else time.time()) - t0), 3),
         }
+        timings_ms = _profile_to_timings_ms(ret["profile"])
+        if timings_ms:
+            ret["timings_ms"] = timings_ms
     emit("done", message="AI 解读完成", model=primary_model)
     return ret
 
@@ -1332,7 +1457,6 @@ def build_prompt(
     metrics_lines = "\n".join(
         f"- {item['label']}: {item['value']}" for item in result.get("metrics", [])
     )
-    benchmark_ticker = result.get("benchmark_ticker")
     benchmark_metrics = result.get("benchmark_metrics") or []
     benchmark_lines = "\n".join(f"- {item['label']}: {item['value']}" for item in benchmark_metrics)
     risk_profile = result.get("risk_profile", "未指定")
@@ -1845,6 +1969,6 @@ def _format_qa_answer(text: str, *, user_question: str = "") -> str:
         plain_segments.append(line)
 
     if not plain_segments and user_question:
-        plain_segments.append(f"目前缺乏更多数据支撑，请补充信息后我再评估。")
+        plain_segments.append("目前缺乏更多数据支撑，请补充信息后我再评估。")
 
     return _truncate_text(" ".join(plain_segments) or text.strip(), max_total)

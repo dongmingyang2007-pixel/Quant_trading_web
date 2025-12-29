@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from datetime import date, timedelta
+from datetime import date
+from typing import Any
 
 from django.test import SimpleTestCase
 

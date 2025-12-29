@@ -15,7 +15,6 @@ from paper.models import PaperTradingSession, PaperTrade
 from trading.strategies import StrategyInput, run_quant_pipeline, QuantStrategyError
 from trading.market_data import fetch_latest_quote, fetch_recent_window
 from trading.observability import record_metric
-from django.conf import settings
 
 try:  # Optional dependency used only for cache extraction helpers
     import pandas as pd
@@ -558,7 +557,7 @@ def run_pending_sessions(limit: int = 20, price_cache: dict[str, object] | None 
         except PaperTradingError as exc:
             LOGGER.warning("Paper trading failed for session %s: %s", session.pk, exc)
             PaperTradingSession.objects.filter(pk=session.pk).update(status="error", ended_at=timezone.now())
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception:  # pragma: no cover - defensive
             LOGGER.exception("Paper trading unexpected error for session %s", session.pk)
             PaperTradingSession.objects.filter(pk=session.pk).update(status="error", ended_at=timezone.now())
     return results

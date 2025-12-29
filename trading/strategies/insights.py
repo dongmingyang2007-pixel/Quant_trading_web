@@ -4,29 +4,18 @@ from typing import Any, Optional
 import math
 import textwrap
 import re
-import json
 
 import numpy as np
 import pandas as pd
 from django.utils.translation import gettext_lazy as _
-from django.utils.safestring import mark_safe
 
 from .config import StrategyInput
 from .metrics import (
-    build_metric,
     format_currency,
     format_percentage,
-    calculate_cagr,
-    calculate_sharpe,
-    calculate_var_cvar,
-    build_core_metrics,
-    calculate_sortino,
-    calculate_hit_ratio,
-    calculate_avg_gain_loss,
 )
-from .risk import calculate_max_drawdown, calculate_drawdown_series
-from ..security import sanitize_html_fragment
-from ..headlines import estimate_readers
+from .risk import calculate_max_drawdown
+from .. import screener
 
 try:  # optional baselines
     from statsmodels.tsa.arima.model import ARIMA  # type: ignore
@@ -47,6 +36,25 @@ try:  # optional graph analytics
     import networkx as nx  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
     nx = None  # type: ignore
+
+try:  # optional sentiment analyzer
+    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    SentimentIntensityAnalyzer = None  # type: ignore
+
+try:  # optional ML utilities
+    from sklearn.neural_network import MLPClassifier
+    from sklearn.preprocessing import StandardScaler
+except Exception:  # pragma: no cover - optional dependency
+    MLPClassifier = None  # type: ignore
+    StandardScaler = None  # type: ignore
+
+try:  # optional deep learning backend
+    import torch
+    from torch import nn
+except Exception:  # pragma: no cover - optional dependency
+    torch = None  # type: ignore
+    nn = None  # type: ignore
 
 RISK_PROFILE_LABELS = {
     "conservative": _("保守"),

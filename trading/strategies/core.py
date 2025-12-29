@@ -1,144 +1,34 @@
 from __future__ import annotations
 
-from dataclasses import replace, asdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from functools import lru_cache
 from typing import Any, Optional, Tuple
 import os
-import textwrap
-import base64
-import io
-import math
-import re
-import hashlib
-import copy
 import random
-import time
 import json
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
 
-from django.utils.translation import gettext_lazy as _
-from django.utils.safestring import mark_safe
-from django.conf import settings
 
-from ..headlines import estimate_readers
-from ..data_sources import collect_auxiliary_data, AuxiliaryData
-from .. import screener
-from ..preprocessing import sanitize_price_history
-from ..ml_models import build_custom_sequence_model
-from ..reinforcement import build_reinforcement_playbook, train_value_agent
+from ..data_sources import AuxiliaryData
 from ..rl_agents import build_rl_agent
-from ..backtest_logger import BacktestLogEntry, append_log, top_runs
-from ..observability import record_metric, track_latency
 from ..http_client import http_client, HttpClientError
-from ..security import sanitize_html_fragment
-from ..optimization import PurgedWalkForwardSplit, _simulate_returns, _compute_slippage_cost
-from ..risk_stats import (
-    compute_robust_sharpe,
-    calculate_cvar,
-    recovery_period_days,
-    compute_white_reality_check,
-    compute_white_reality_check_bootstrap,
-    compute_spa_pvalue,
-)
-from ..cache_utils import build_cache_key, cache_get_object, cache_set_object
-from ..validation import (
-    build_walk_forward_report,
-    build_purged_kfold_schedule,
-    compute_tail_risk_summary,
-    collect_repro_metadata,
-)
 from .config import (
-    DEFAULT_SEED_META,
-    DEFAULT_STRATEGY_SEED,
     QuantStrategyError,
     StrategyInput,
-    StrategyOutcome,
-)
-from .charts import build_interactive_chart_payload, generate_charts
-from .indicators import (
-    _attach_forward_returns,
-    _compute_asset_returns,
-    _normalized_open_prices,
-    _select_forward_return,
-    compute_indicators,
 )
 from .ml_engine import (
-    _calibration_summary,
-    _balanced_sample_weight,
-    _maybe_get_sample_weight,
-    build_calibration_plot,
-    build_feature_matrix,
-    build_labels,
-    build_threshold_heatmap,
-    compute_triple_barrier_labels,
-    load_best_ml_config,
     run_ml_backtest,
-    scan_threshold_stability,
-    tune_thresholds_on_validation,
 )
-from .metrics import (
-    METRIC_DESCRIPTIONS,
-    build_core_metrics,
-    build_metric,
-    calculate_avg_gain_loss,
-    calculate_beta,
-    calculate_cagr,
-    calculate_calmar,
-    calculate_holding_periods,
-    calculate_hit_ratio,
-    calculate_sharpe,
-    calculate_sortino,
-    calculate_var_cvar,
-    format_currency,
-    compute_validation_metrics,
-    aggregate_oos_metrics,
-    build_oos_boxplot,
-    fig_to_base64,
-    format_percentage,
-    get_risk_free_rate_annual,
-)
+from .metrics import build_core_metrics, compute_validation_metrics, aggregate_oos_metrics
 from .event_engine import compute_realized_returns, run_event_backtest
-from .ma_cross import backtest_sma_strategy, format_table
 from .risk import (
-    apply_signal_filters,
-    apply_vol_targeting,
-    calculate_drawdown_series,
-    calculate_max_drawdown,
     calculate_target_leverage,
     enforce_min_holding,
     enforce_risk_limits,
 )
-from .market import fetch_market_context
-from .insights import (
-    generate_recommendations,
-    build_related_portfolios,
-    build_statistical_baselines,
-    build_factor_snapshot,
-    build_sentiment_snapshot,
-    build_multimodal_bundle,
-    run_deep_signal_model,
-    build_model_ensemble_view,
-    analyze_factor_effectiveness,
-    build_knowledge_graph_bundle,
-    build_factor_scorecard,
-    compute_model_weights,
-    build_risk_dashboard,
-    build_mlops_report,
-    build_scenario_simulation,
-    build_opportunity_radar,
-    summarize_macro_highlight,
-    build_executive_briefing,
-    build_user_questions,
-    build_advisor_playbook,
-    build_flagship_research_bundle,
-    build_key_takeaways,
-    estimate_confidence,
-    build_user_guidance,
-)
+from .store import DATA_CACHE_DIR
 
 try:  # optional RL utils
     from stable_baselines3.common.utils import set_random_seed as sb3_set_seed  # type: ignore
@@ -289,10 +179,6 @@ try:
 except Exception:
     pass
 
-
-from .store import DATA_CACHE_DIR, FEATURE_STORE
-
-
 def extract_context_features(auxiliary: AuxiliaryData) -> dict[str, float]:
     """Flatten auxiliary data (macro/flows/sentiment/options) into numeric features for ML."""
     features: dict[str, float] = {}
@@ -360,14 +246,6 @@ RISK_PROFILE_LABELS = {
 }
 
 
-def build_metric(label: str, value: str) -> dict[str, str]:
-    return {
-        "label": label,
-        "value": value,
-        "explain": METRIC_DESCRIPTIONS.get(label, ""),
-    }
-
-
 def fetch_remote_strategy_overrides(params: StrategyInput) -> dict[str, Any]:
     """Optionally pull remote overrides (weights/notes) for strategy coordination."""
     endpoint = os.getenv("STRATEGY_UPDATE_ENDPOINT")
@@ -397,6 +275,8 @@ def fetch_remote_strategy_overrides(params: StrategyInput) -> dict[str, Any]:
 def fetch_price_data(ticker: str, start: date, end: date) -> Tuple[pd.DataFrame, list[str]]:
     """Fetch historical price data using yfinance with local cache fallback."""
     warnings: list[str] = []
+    data_source = "yfinance"
+    cache_path: str | None = None
     try:
         import yfinance as yf
     except ImportError as exc:  # pragma: no cover - dependency load
@@ -436,6 +316,8 @@ def fetch_price_data(ticker: str, start: date, end: date) -> Tuple[pd.DataFrame,
                 f"已从本地缓存 {cache_file} 读取数据。若需最新行情，请联网后刷新缓存。"
             )
             data = cached.loc[(cached.index.date >= start) & (cached.index.date <= end)]
+            data_source = "csv_cache"
+            cache_path = os.fspath(cache_file)
         else:
             if download_error:
                 raise QuantStrategyError(
@@ -496,6 +378,9 @@ def fetch_price_data(ticker: str, start: date, end: date) -> Tuple[pd.DataFrame,
             data[col] = data["close"]
     if "volume" not in data.columns:
         data["volume"] = 0.0
+    data.attrs["data_source"] = data_source
+    if cache_path:
+        data.attrs["cache_path"] = cache_path
     return data[base_cols].dropna(subset=["adj close"]), warnings
 
 
@@ -564,6 +449,7 @@ def _apply_listing_window(
     if effective_start > effective_end:
         raise QuantStrategyError("上市/退市日期导致回测区间无有效交易日，请调整开始/结束日期。")
     trimmed = data.loc[(data.index.date >= effective_start) & (data.index.date <= effective_end)]
+    trimmed.attrs = dict(getattr(data, "attrs", {}))
     return trimmed, effective_start, effective_end
 
 

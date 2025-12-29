@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from datetime import date
 import json
 
-import pandas as pd
 from django.test import SimpleTestCase
 from django.conf import settings
 

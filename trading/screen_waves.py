@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import time
 import threading
 from dataclasses import dataclass
@@ -169,28 +168,27 @@ def _pivots_from_series(series: np.ndarray) -> List[Dict[str, Any]]:
         key=lambda item: item[0],
     )
     pivots: List[Tuple[int, float, str]] = []
-    last_idx = None
     last_val = None
     last_kind = None
     for idx, kind in candidates:
         val = float(series[idx])
         if last_val is None:
             pivots.append((idx, val, kind))
-            last_idx, last_val, last_kind = idx, val, kind
+            last_val, last_kind = val, kind
             continue
         if kind == last_kind:
             replace = (kind == "H" and val >= last_val) or (kind == "L" and val <= last_val)
             if replace:
                 pivots[-1] = (idx, val, kind)
-                last_idx, last_val = idx, val
+                last_val = val
             continue
         if abs(val - last_val) < ZIGZAG_THRESHOLD:
             continue
         pivots.append((idx, val, kind))
-        last_idx, last_val, last_kind = idx, val, kind
+        last_val, last_kind = val, kind
 
     trimmed = pivots[-12:]
-    return [{"idx": idx, "value": round(val, 6), "kind": kind} for idx, val, kind in trimmed]
+    return [{"idx": int(idx), "value": round(val, 6), "kind": kind} for idx, val, kind in trimmed]
 
 
 def _score_impulse(series: np.ndarray, pivots: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

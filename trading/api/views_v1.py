@@ -9,7 +9,6 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from ..forms import QuantStrategyForm
 from ..observability import ensure_request_id
 from ..strategies import QuantStrategyError
 from ..task_queue import (
@@ -24,6 +23,7 @@ from ..views.dashboard import build_strategy_input
 from paper.engine import create_session, serialize_session
 from paper.models import PaperTradingSession
 from .serializers import StrategyTaskSerializer, TrainingTaskSerializer, PaperSessionCreateSerializer
+from .throttles import TaskBurstThrottle
 
 
 def _clamp_pagination(request, *, default_limit: int = 20, max_limit: int = 100) -> tuple[int, int]:
@@ -38,7 +38,6 @@ def _clamp_pagination(request, *, default_limit: int = 20, max_limit: int = 100)
     limit = max(1, min(max_limit, limit))
     offset = max(0, offset)
     return limit, offset
-from .throttles import TaskBurstThrottle
 
 
 class BaseTaskAPIView(APIView):

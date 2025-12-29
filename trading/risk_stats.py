@@ -10,7 +10,6 @@ try:  # optional dependency for p-value computation
 except Exception:  # pragma: no cover
     norm = None  # type: ignore
 import random
-import math
 
 
 def _newey_west_variance(series: pd.Series, lag: int | None = None) -> float:

@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 from datetime import date, timedelta, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
-import pandas as pd
 import numpy as np
 try:  # optional parallel backend
     from joblib import Parallel, delayed  # type: ignore

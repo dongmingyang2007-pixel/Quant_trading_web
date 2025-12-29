@@ -1,23 +1,49 @@
 from __future__ import annotations
 
-from datetime import date
-from typing import Any, Tuple
-import math
 
 import numpy as np
 import pandas as pd
 
 from .config import StrategyInput, QuantStrategyError
 
+DEFAULT_FEATURE_COLUMNS = [
+    "return_1d",
+    "return_5d",
+    "return_21d",
+    "vol_10d",
+    "vol_20d",
+    "vol_60d",
+    "momentum_short",
+    "momentum_long",
+    "ema_trend",
+    "macd",
+    "macd_signal",
+    "macd_hist",
+    "rsi",
+    "volume_z",
+    "volume_trend",
+    "atr_14",
+    "atr_pct",
+    "adx_14",
+    "obv",
+    "cmf_20",
+    "skew_21",
+    "kurt_21",
+    "return_streak",
+    "price_z",
+]
 
-def compute_indicators(
+
+def build_feature_frame(
     prices: pd.DataFrame, short_window: int, long_window: int, rsi_period: int
 ) -> pd.DataFrame:
-    """计算趋势/波动/成交量等技术指标，用于信号和特征构建。"""
+    """纯函数：仅计算技术指标，不写入未来收益或标签。"""
     if long_window <= short_window:
         raise QuantStrategyError("The long window must be greater than the short window.")
 
+    base_attrs = dict(getattr(prices, "attrs", {}))
     prices = prices.sort_index().copy()
+    prices.attrs = base_attrs
     prices["sma_short"] = prices["adj close"].rolling(window=short_window).mean()
     prices["sma_long"] = prices["adj close"].rolling(window=long_window).mean()
 
@@ -107,9 +133,22 @@ def compute_indicators(
             / (prices["adj close"].rolling(64, min_periods=20).std().replace(0, np.nan))
         ).fillna(0.0)
 
-    _attach_forward_returns(prices)
-    prices["label"] = (prices["forward_return"] > 0).astype(int)
+    return prices
 
+
+def compute_indicators(
+    prices: pd.DataFrame,
+    short_window: int,
+    long_window: int,
+    rsi_period: int,
+    *,
+    include_labels: bool = True,
+) -> pd.DataFrame:
+    """计算趋势/波动/成交量等技术指标，用于信号和特征构建。"""
+    prices = build_feature_frame(prices, short_window, long_window, rsi_period)
+    if include_labels:
+        _attach_forward_returns(prices)
+        prices["label"] = (prices["forward_return"] > 0).astype(int)
     return prices
 
 
@@ -187,6 +226,8 @@ def _compute_asset_returns(frame: pd.DataFrame, params: StrategyInput) -> pd.Ser
 
 
 __all__ = [
+    "DEFAULT_FEATURE_COLUMNS",
+    "build_feature_frame",
     "compute_indicators",
     "_normalized_open_prices",
     "_attach_forward_returns",

@@ -350,7 +350,6 @@ def backtest(request):
                     append_history(BacktestRecord.from_payload(history_payload, user_id=user_id))
                 except Exception:
                     pass
-                result_json_payload = history_snapshot.copy()
                 result_json = json.dumps(history_snapshot, ensure_ascii=False, default=str)
                 request.session["last_result"] = result_json
             except QuantStrategyError as exc:

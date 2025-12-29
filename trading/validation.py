@@ -4,8 +4,9 @@ import math
 import sys
 import os
 import subprocess
+import hashlib
 from datetime import datetime
-from typing import Any, Iterable, List
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
@@ -203,6 +204,67 @@ def collect_repro_metadata(params) -> dict[str, Any]:
     metadata["git_commit"] = git_commit
     metadata["exec_latency_ms"] = getattr(params, "exec_latency_ms", None)
     return metadata
+
+
+def build_data_signature(
+    frame: pd.DataFrame | None,
+    *,
+    columns: Iterable[str] | None = None,
+) -> dict[str, Any]:
+    """为数据快照生成可复现签名（哈希/区间/行数/来源）。"""
+    if frame is None or frame.empty:
+        return {"rows": 0, "hash": None, "start": None, "end": None, "source": None}
+    subset = frame
+    if columns:
+        cols = [col for col in columns if col in frame.columns]
+        if cols:
+            subset = frame[cols]
+    hashed = pd.util.hash_pandas_object(subset, index=True).values  # type: ignore[attr-defined]
+    digest = hashlib.sha256(hashed.tobytes()).hexdigest()
+    idx = subset.index
+    start = idx[0]
+    end = idx[-1]
+    source = getattr(frame, "attrs", {}).get("data_source")
+    cache_path = getattr(frame, "attrs", {}).get("cache_path")
+    return {
+        "rows": int(len(subset)),
+        "hash": digest,
+        "start": str(start.date()) if hasattr(start, "date") else str(start),
+        "end": str(end.date()) if hasattr(end, "date") else str(end),
+        "source": source,
+        "cache_path": cache_path,
+    }
+
+
+def assert_no_feature_leakage(
+    frame: pd.DataFrame,
+    feature_columns: Iterable[str],
+    *,
+    label_columns: Iterable[str] | None = None,
+) -> None:
+    """防止训练特征包含未来/标签字段。"""
+    labels = {
+        "target",
+        "target_multiclass",
+        "forward_return",
+        "future_return",
+        "label",
+    }
+    if label_columns:
+        labels.update({str(col) for col in label_columns})
+    missing = [col for col in feature_columns if col not in frame.columns]
+    if missing:
+        raise ValueError(f"Feature columns missing from dataset: {missing}")
+    leakage = []
+    for col in feature_columns:
+        lowered = col.lower()
+        if col in labels:
+            leakage.append(col)
+            continue
+        if lowered.startswith(("forward_", "future_", "target", "label", "tb_")):
+            leakage.append(col)
+    if leakage:
+        raise ValueError(f"Feature leakage detected: {sorted(set(leakage))}")
 
 
 def compute_cpcv_report(
