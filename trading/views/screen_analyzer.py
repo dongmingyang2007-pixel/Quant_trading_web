@@ -71,6 +71,11 @@ def screen_analyzer_api(request: HttpRequest) -> JsonResponse:
     calibration = payload.get("calibration") if isinstance(payload.get("calibration"), dict) else None
     ocr_enabled = payload.get("ocr_enabled", True)
     ocr_enabled = bool(ocr_enabled) and getattr(settings, "SCREEN_ANALYZER_OCR_ENABLED", True)
+    include_waves = payload.get("include_waves", getattr(settings, "SCREEN_ANALYZER_INCLUDE_WAVES", True))
+    include_fusion = payload.get("include_fusion", getattr(settings, "SCREEN_ANALYZER_INCLUDE_FUSION", True))
+    include_timings = payload.get("include_timings", getattr(settings, "SCREEN_ANALYZER_INCLUDE_TIMINGS", False))
+    overlay_layers = payload.get("overlay_layers")
+    session_id = payload.get("session_id")
     if not image_data:
         return JsonResponse(
             {"error": "missing_image", "request_id": request_id},
@@ -85,6 +90,11 @@ def screen_analyzer_api(request: HttpRequest) -> JsonResponse:
                 calibration=calibration,
                 header_image=str(header_image) if header_image else None,
                 enable_ocr=bool(ocr_enabled),
+                include_waves=bool(include_waves),
+                include_fusion=bool(include_fusion),
+                include_timings=bool(include_timings),
+                overlay_layers=overlay_layers if isinstance(overlay_layers, list) else None,
+                session_id=str(session_id) if session_id else None,
             )
     except Exception as exc:  # pragma: no cover - defensive
         record_metric(
@@ -99,10 +109,14 @@ def screen_analyzer_api(request: HttpRequest) -> JsonResponse:
         )
 
     if "error" in result:
-        return JsonResponse(
-            {"error": result["error"], "request_id": request_id},
-            status=400,
-        )
+        response = {"error": result["error"], "request_id": request_id}
+        if result.get("next_action"):
+            response["next_action"] = result["next_action"]
+        if result.get("diagnostics"):
+            response["diagnostics"] = result["diagnostics"]
+        if result.get("timings_ms"):
+            response["timings_ms"] = result["timings_ms"]
+        return JsonResponse(response, status=400)
 
     response = {**result, "request_id": request_id}
     record_metric(
@@ -141,6 +155,9 @@ def screen_analyzer_sample_api(request: HttpRequest) -> JsonResponse:
             calibration=calibration,
             include_features=True,
             enable_ocr=False,
+            include_waves=False,
+            include_fusion=False,
+            include_timings=False,
         )
     except Exception as exc:
         record_metric(

@@ -201,6 +201,26 @@
     color: #475569;
 }
 
+.screen-overlay-controls {
+    border-radius: 14px;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    padding: 14px 16px;
+    background: rgba(248, 250, 252, 0.8);
+}
+
+.screen-overlay-options {
+    display: grid;
+    gap: 8px;
+    font-size: 0.84rem;
+    color: #475569;
+}
+
+.screen-overlay-options label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .screen-result {
     display: grid;
     gap: 14px;
@@ -217,6 +237,44 @@
 .screen-result-main {
     display: grid;
     gap: 6px;
+}
+
+.screen-wave-block {
+    border-radius: 12px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    padding: 10px 12px;
+    background: rgba(15, 23, 42, 0.03);
+    display: grid;
+    gap: 8px;
+}
+
+.screen-wave-title {
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.screen-wave-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 8px 12px;
+}
+
+.screen-wave-grid > div {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    font-size: 0.82rem;
+    color: #475569;
+}
+
+.screen-wave-label {
+    color: #64748b;
+}
+
+.screen-wave-value {
+    font-weight: 600;
+    color: #0f172a;
 }
 
 .screen-pattern-name {
@@ -240,6 +298,13 @@
 .screen-probabilities {
     display: grid;
     gap: 8px;
+}
+
+.screen-prob-source {
+    font-size: 0.78rem;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
 }
 
 .prob-row {

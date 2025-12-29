@@ -13,8 +13,7 @@ except Exception:  # pragma: no cover - optional
     pytesseract = None  # type: ignore
 
 
-_TIMEFRAME_PATTERN = re.compile(r"\b(\d{1,3})([smhdwSMHDW])\b")
-_TIMEFRAME_ALIAS = re.compile(r"\b(\d{1,3})(min|m|h|d|w|wk|mo|M)\b", re.IGNORECASE)
+_TIMEFRAME_TOKEN = re.compile(r"\b(\d{1,3})\s*([a-zA-Z]{1,6})\b")
 _SYMBOL_PATTERN = re.compile(r"\b[A-Z]{1,6}(?:\.[A-Z]{1,3})?\b")
 
 
@@ -66,16 +65,48 @@ def _extract_symbol(text: str) -> Optional[str]:
 
 
 def _extract_timeframe(text: str) -> Optional[str]:
+    return canonicalize_timeframe(text)
+
+
+def canonicalize_timeframe(text: Optional[str]) -> Optional[str]:
     if not text:
         return None
-    match = _TIMEFRAME_PATTERN.search(text)
-    if match:
-        return f"{match.group(1)}{match.group(2).lower()}"
-    match = _TIMEFRAME_ALIAS.search(text)
-    if match:
-        unit = match.group(2).lower()
-        return f"{match.group(1)}{unit}"
+    unit_map = {
+        "s": "s",
+        "sec": "s",
+        "secs": "s",
+        "second": "s",
+        "seconds": "s",
+        "m": "m",
+        "min": "m",
+        "mins": "m",
+        "minute": "m",
+        "minutes": "m",
+        "h": "h",
+        "hr": "h",
+        "hrs": "h",
+        "hour": "h",
+        "hours": "h",
+        "d": "d",
+        "day": "d",
+        "days": "d",
+        "w": "w",
+        "wk": "w",
+        "wks": "w",
+        "week": "w",
+        "weeks": "w",
+        "mo": "m",
+        "mon": "m",
+        "month": "m",
+        "months": "m",
+    }
+    for match in _TIMEFRAME_TOKEN.finditer(text):
+        number = match.group(1)
+        unit_raw = match.group(2).lower()
+        unit = unit_map.get(unit_raw)
+        if unit:
+            return f"{int(number)}{unit}"
     return None
 
 
-__all__ = ["extract_header_metadata", "OcrResult"]
+__all__ = ["extract_header_metadata", "canonicalize_timeframe", "OcrResult"]

@@ -28,6 +28,16 @@
     }
   })();
 
+  const waveCopy = (() => {
+    const raw = document.getElementById('wave-copy');
+    if (!raw) return {};
+    try {
+      return JSON.parse(raw.textContent || '{}');
+    } catch (err) {
+      return {};
+    }
+  })();
+
   const labels = (() => {
     const raw = document.getElementById('screen-analyzer-labels');
     if (!raw) return {};
@@ -37,6 +47,28 @@
       return {};
     }
   })();
+
+  const sessionId = (() => {
+    const key = 'screenAnalyzerSessionId';
+    try {
+      const stored = window.localStorage.getItem(key);
+      if (stored) return stored;
+    } catch (err) {
+      // ignore
+    }
+    const fallback = `session-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    const generated = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : fallback;
+    try {
+      window.localStorage.setItem(key, generated);
+    } catch (err) {
+      // ignore
+    }
+    return generated;
+  })();
+
+  const includeWaves = true;
+  const includeFusion = true;
+  const includeTimings = true;
 
   const elements = {
     canvas: document.getElementById('screen-preview'),
@@ -52,6 +84,11 @@
     patternConfidence: document.querySelector('[data-role="pattern-confidence"]'),
     patternBias: document.querySelector('[data-role="pattern-bias"]'),
     patternSuggestion: document.querySelector('[data-role="pattern-suggestion"]'),
+    waveName: document.querySelector('[data-role="wave-name"]'),
+    waveStage: document.querySelector('[data-role="wave-stage"]'),
+    waveDirection: document.querySelector('[data-role="wave-direction"]'),
+    waveConfidence: document.querySelector('[data-role="wave-confidence"]'),
+    probSource: document.querySelector('[data-role="prob-source"]'),
     probUp: document.querySelector('[data-role="prob-up"]'),
     probDown: document.querySelector('[data-role="prob-down"]'),
     probNeutral: document.querySelector('[data-role="prob-neutral"]'),
@@ -59,7 +96,9 @@
     probDownLabel: document.querySelector('[data-role="prob-down-label"]'),
     probNeutralLabel: document.querySelector('[data-role="prob-neutral-label"]'),
     diagnostics: document.querySelector('[data-role="diagnostics"]'),
+    overlayLayers: document.querySelectorAll('[data-overlay-layer]'),
     interval: document.getElementById('screen-interval'),
+    adaptive: document.getElementById('screen-adaptive'),
     quality: document.getElementById('screen-quality'),
     mode: document.getElementById('screen-mode'),
     ocr: document.getElementById('screen-ocr'),
@@ -67,6 +106,7 @@
     stop: document.querySelector('[data-action="stop"]'),
     analyze: document.querySelector('[data-action="analyze"]'),
     toggle: document.querySelector('[data-action="toggle"]'),
+    autoCrop: document.querySelector('[data-action="auto-crop"]'),
     clear: document.querySelector('[data-action="clear"]'),
     pickButtons: document.querySelectorAll('[data-pick]'),
     patternLabel: document.getElementById('pattern-label'),
@@ -88,6 +128,8 @@
 
   const analysisCanvas = document.createElement('canvas');
   const analysisCtx = analysisCanvas.getContext('2d');
+  const autoCanvas = document.createElement('canvas');
+  const autoCtx = autoCanvas.getContext('2d');
 
   const state = {
     stream: null,
@@ -99,6 +141,8 @@
     selectionStart: null,
     inFlight: false,
     pickTarget: null,
+    autoInterval: null,
+    autoTimerInterval: null,
     calibration: {
       line: null,
       candle_up: null,
@@ -116,6 +160,7 @@
     if (elements.stop) elements.stop.disabled = !enabled;
     if (elements.analyze) elements.analyze.disabled = !enabled;
     if (elements.toggle) elements.toggle.disabled = !enabled;
+    if (elements.autoCrop) elements.autoCrop.disabled = !enabled;
     if (elements.clear) elements.clear.disabled = !enabled;
     if (elements.pickButtons && elements.pickButtons.length) {
       elements.pickButtons.forEach((btn) => {
@@ -218,6 +263,11 @@
     return defaultInterval;
   };
 
+  const adaptiveEnabled = () => {
+    if (elements.adaptive) return elements.adaptive.checked;
+    return false;
+  };
+
   const currentQuality = () => {
     if (elements.quality) {
       const value = Number(elements.quality.value);
@@ -229,6 +279,17 @@
   const currentMode = () => {
     if (elements.mode) return elements.mode.value || 'auto';
     return 'auto';
+  };
+
+  const currentOverlayLayers = () => {
+    if (!elements.overlayLayers || elements.overlayLayers.length === 0) return [];
+    const layers = [];
+    elements.overlayLayers.forEach((input) => {
+      if (input.checked && input.dataset.overlayLayer) {
+        layers.push(input.dataset.overlayLayer);
+      }
+    });
+    return layers;
   };
 
   const currentOcr = () => {
@@ -325,6 +386,112 @@
     }
   };
 
+  const fallbackRoi = () =>
+    clampRoi({
+      x: 0.06,
+      y: 0.1,
+      w: 0.78,
+      h: 0.72,
+    });
+
+  const findPeakIndex = (values, start, end) => {
+    let max = -1;
+    let idx = start;
+    for (let i = start; i < end; i += 1) {
+      if (values[i] > max) {
+        max = values[i];
+        idx = i;
+      }
+    }
+    return { idx, value: max };
+  };
+
+  const autoCrop = () => {
+    if (!state.capturing || !autoCtx) {
+      setStatus('error', labels.msg_missing_capture || 'Start capture first');
+      return;
+    }
+    const width = elements.canvas.width;
+    const height = elements.canvas.height;
+    if (!width || !height) {
+      setStatus('error', labels.msg_auto_crop_failed || 'Auto crop failed');
+      return;
+    }
+    const targetWidth = 260;
+    const scale = Math.min(1, targetWidth / width);
+    const sampleW = Math.max(120, Math.round(width * scale));
+    const sampleH = Math.max(90, Math.round(height * scale));
+    autoCanvas.width = sampleW;
+    autoCanvas.height = sampleH;
+    autoCtx.drawImage(elements.canvas, 0, 0, sampleW, sampleH);
+    const data = autoCtx.getImageData(0, 0, sampleW, sampleH).data;
+    const total = sampleW * sampleH;
+    const grays = new Float32Array(total);
+    for (let i = 0, p = 0; i < total; i += 1, p += 4) {
+      const r = data[p];
+      const g = data[p + 1];
+      const b = data[p + 2];
+      grays[i] = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    }
+    const rowEdges = new Float32Array(sampleH);
+    const colEdges = new Float32Array(sampleW);
+    for (let y = 1; y < sampleH; y += 1) {
+      const rowOffset = y * sampleW;
+      const prevOffset = rowOffset - sampleW;
+      for (let x = 1; x < sampleW; x += 1) {
+        const idx = rowOffset + x;
+        const g = grays[idx];
+        const gx = Math.abs(g - grays[idx - 1]);
+        const gy = Math.abs(g - grays[prevOffset + x]);
+        const edge = gx + gy;
+        rowEdges[y] += edge;
+        colEdges[x] += edge;
+      }
+    }
+    const rowBandStart = Math.floor(sampleH * 0.2);
+    const rowBandEnd = Math.floor(sampleH * 0.85);
+    const colBandStart = Math.floor(sampleW * 0.12);
+    const colBandEnd = Math.floor(sampleW * 0.9);
+    const rowPeak = findPeakIndex(rowEdges, rowBandStart, rowBandEnd);
+    const colPeak = findPeakIndex(colEdges, colBandStart, colBandEnd);
+    if (rowPeak.value < 1 || colPeak.value < 1) {
+      state.roi = fallbackRoi();
+      setStatus('active', labels.msg_auto_crop_failed || 'Auto crop failed');
+      return;
+    }
+    const rowThreshold = rowPeak.value * 0.35;
+    const colThreshold = colPeak.value * 0.35;
+    let top = rowPeak.idx;
+    let bottom = rowPeak.idx;
+    let left = colPeak.idx;
+    let right = colPeak.idx;
+    while (top > 0 && rowEdges[top] >= rowThreshold) top -= 1;
+    while (bottom < sampleH - 1 && rowEdges[bottom] >= rowThreshold) bottom += 1;
+    while (left > 0 && colEdges[left] >= colThreshold) left -= 1;
+    while (right < sampleW - 1 && colEdges[right] >= colThreshold) right += 1;
+    const minW = Math.floor(sampleW * 0.35);
+    const minH = Math.floor(sampleH * 0.35);
+    if (right - left < minW || bottom - top < minH) {
+      state.roi = fallbackRoi();
+      setStatus('active', labels.msg_auto_crop_failed || 'Auto crop failed');
+      return;
+    }
+    const marginX = Math.max(2, Math.round(sampleW * 0.01));
+    const marginY = Math.max(2, Math.round(sampleH * 0.015));
+    left = Math.max(0, left + marginX);
+    right = Math.min(sampleW - 1, right - marginX);
+    top = Math.max(0, top + marginY);
+    bottom = Math.min(sampleH - 1, bottom - marginY);
+    const roi = clampRoi({
+      x: left / sampleW,
+      y: top / sampleH,
+      w: (right - left) / sampleW,
+      h: (bottom - top) / sampleH,
+    });
+    state.roi = roi;
+    setStatus('active', labels.msg_auto_crop_success || 'Auto crop set');
+  };
+
   const updateResult = (data) => {
     const key = data.pattern_key || 'unknown';
     const copy = patternCopy[key] || patternCopy.unknown || { name: key, bias: '-', suggestion: '-' };
@@ -356,6 +523,32 @@
       const label = labels.label_mode || 'Mode';
       elements.analysisMode.textContent = `${label}: ${data.analysis_mode || '-'}`;
     }
+    const wave = data.wave || null;
+    const waveKey = wave && wave.wave_key ? wave.wave_key : 'unknown';
+    const waveCopyItem = waveCopy[waveKey] || waveCopy.unknown || { name: waveKey };
+    if (elements.waveName) elements.waveName.textContent = waveCopyItem.name || waveKey || '-';
+    if (elements.waveStage) {
+      const stageLabelMap = {
+        impulse: labels.wave_stage_impulse || 'Impulse',
+        correction: labels.wave_stage_correction || 'Correction',
+        unknown: labels.wave_stage_unknown || 'Unknown',
+      };
+      const stage = wave && wave.stage ? wave.stage : 'unknown';
+      elements.waveStage.textContent = stageLabelMap[stage] || stage;
+    }
+    if (elements.waveDirection) {
+      const directionLabelMap = {
+        up: labels.wave_direction_up || 'Up',
+        down: labels.wave_direction_down || 'Down',
+        neutral: labels.wave_direction_neutral || 'Neutral',
+      };
+      const direction = wave && wave.direction ? wave.direction : 'neutral';
+      elements.waveDirection.textContent = directionLabelMap[direction] || direction;
+    }
+    if (elements.waveConfidence) {
+      const waveConfidence = wave && wave.confidence != null ? Math.round(wave.confidence * 100) : null;
+      elements.waveConfidence.textContent = waveConfidence != null ? `${waveConfidence}%` : '-';
+    }
     if (elements.overlayImg && elements.overlayBox) {
       if (data.overlay_image) {
         elements.overlayImg.src = data.overlay_image;
@@ -365,8 +558,16 @@
         elements.overlayBox.classList.remove('has-image');
       }
     }
+    if (data.suggested_interval_ms && adaptiveEnabled()) {
+      updateAutoInterval(data.suggested_interval_ms);
+    }
 
-    const prob = data.probabilities || {};
+    const prob = data.fused_probabilities || data.probabilities || {};
+    if (elements.probSource) {
+      elements.probSource.textContent = data.fused_probabilities
+        ? labels.prob_source_fused || 'Fused probability'
+        : labels.prob_source_pattern || 'Pattern probability';
+    }
     updateProbability(elements.probUp, elements.probUpLabel, prob.up);
     updateProbability(elements.probDown, elements.probDownLabel, prob.down);
     updateProbability(elements.probNeutral, elements.probNeutralLabel, prob.neutral);
@@ -376,6 +577,10 @@
       const labelCoverage = labels.diagnostic_coverage || 'Coverage';
       const labelRange = labels.diagnostic_range || 'Range';
       const labelExtrema = labels.diagnostic_extrema || 'Extrema';
+      const labelInterval = labels.diagnostic_interval || 'Interval';
+      const labelVolatility = labels.diagnostic_volatility || 'Volatility';
+      const labelWavePivots = labels.diagnostic_wave_pivots || 'Wave pivots';
+      const labelLatency = labels.diagnostic_latency || 'Latency';
       const ocrState =
         diagnostics.ocr_available === true ? labels.ocr_on || 'OCR on' : labels.ocr_off || 'OCR off';
       const modelState = diagnostics.model_used ? labels.model_on || 'Model on' : labels.model_off || 'Model off';
@@ -383,6 +588,10 @@
         `${labelCoverage}: ${diagnostics.coverage ?? '-'}`,
         `${labelRange}: ${diagnostics.median_range ?? '-'}`,
         `${labelExtrema}: ${diagnostics.maxima ?? '-'} / ${diagnostics.minima ?? '-'}`,
+        `${labelInterval}: ${data.suggested_interval_ms ? `${data.suggested_interval_ms}ms` : '-'}`,
+        `${labelVolatility}: ${diagnostics.analysis_volatility ?? '-'}`,
+        `${labelWavePivots}: ${wave && wave.diagnostics ? wave.diagnostics.pivot_count ?? '-' : '-'}`,
+        `${labelLatency}: ${data.timings_ms && data.timings_ms.total ? `${data.timings_ms.total}ms` : '-'}`,
         ocrState,
         modelState,
       ];
@@ -395,6 +604,16 @@
     const pct = value != null ? Math.round(value * 100) : 0;
     bar.style.width = `${pct}%`;
     label.textContent = `${pct}%`;
+  };
+
+  const updateAutoInterval = (nextInterval) => {
+    const interval = Math.round(Number(nextInterval));
+    if (!interval || Number.isNaN(interval)) return;
+    state.autoInterval = interval;
+    if (!state.analyzing || !adaptiveEnabled()) return;
+    const current = state.autoTimerInterval || currentInterval();
+    if (Math.abs(interval - current) < 150) return;
+    scheduleAutoAnalyze(interval);
   };
 
   const analyzeOnce = async () => {
@@ -426,11 +645,17 @@
           mode,
           calibration,
           ocr_enabled: currentOcr(),
+          include_waves: includeWaves,
+          include_fusion: includeFusion,
+          include_timings: includeTimings,
+          overlay_layers: currentOverlayLayers(),
+          session_id: sessionId,
         }),
       });
       const data = await response.json();
       if (!response.ok) {
-        setStatus('error', data.error || labels.msg_analysis_failed || 'Analysis failed');
+        const message = data.next_action || data.error || labels.msg_analysis_failed || 'Analysis failed';
+        setStatus('error', message);
       } else {
         setStatus('active', labels.status_updated || 'Updated');
         updateResult(data);
@@ -442,12 +667,18 @@
     }
   };
 
+  const scheduleAutoAnalyze = (interval) => {
+    if (state.autoTimer) clearInterval(state.autoTimer);
+    state.autoTimerInterval = interval;
+    state.autoTimer = window.setInterval(analyzeOnce, interval);
+  };
+
   const startAutoAnalyze = () => {
     if (state.analyzing) return;
     state.analyzing = true;
     if (elements.toggle) elements.toggle.textContent = labels.toggle_on || 'Stop auto';
-    const interval = currentInterval();
-    state.autoTimer = window.setInterval(analyzeOnce, interval);
+    const interval = adaptiveEnabled() && state.autoInterval ? state.autoInterval : currentInterval();
+    scheduleAutoAnalyze(interval);
   };
 
   const stopAutoAnalyze = () => {
@@ -457,6 +688,7 @@
       clearInterval(state.autoTimer);
       state.autoTimer = null;
     }
+    state.autoTimerInterval = null;
   };
 
   const toggleAuto = () => {
@@ -627,6 +859,7 @@
   if (elements.stop) elements.stop.addEventListener('click', stopCapture);
   if (elements.analyze) elements.analyze.addEventListener('click', analyzeOnce);
   if (elements.toggle) elements.toggle.addEventListener('click', toggleAuto);
+  if (elements.autoCrop) elements.autoCrop.addEventListener('click', autoCrop);
   if (elements.clear) elements.clear.addEventListener('click', clearRoi);
   if (elements.pickButtons && elements.pickButtons.length) {
     elements.pickButtons.forEach((btn) => {
@@ -639,6 +872,16 @@
   if (elements.interval) {
     elements.interval.value = `${defaultInterval}`;
     elements.interval.addEventListener('change', () => {
+      state.autoInterval = null;
+      if (state.analyzing) {
+        stopAutoAnalyze();
+        startAutoAnalyze();
+      }
+    });
+  }
+  if (elements.adaptive) {
+    elements.adaptive.addEventListener('change', () => {
+      state.autoInterval = null;
       if (state.analyzing) {
         stopAutoAnalyze();
         startAutoAnalyze();

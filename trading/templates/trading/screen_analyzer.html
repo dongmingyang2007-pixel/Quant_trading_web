@@ -43,6 +43,7 @@
                 <button class="btn btn-outline-secondary" type="button" data-action="stop" disabled>{% bilingual "Stop" "停止" %}</button>
                 <button class="btn btn-outline-primary" type="button" data-action="analyze" disabled>{% bilingual "Analyze Once" "单次分析" %}</button>
                 <button class="btn btn-outline-dark" type="button" data-action="toggle" disabled>{% bilingual "Auto Analyze" "自动分析" %}</button>
+                <button class="btn btn-outline-secondary" type="button" data-action="auto-crop" disabled>{% bilingual "Auto Crop" "自动框选" %}</button>
                 <button class="btn btn-link" type="button" data-action="clear" disabled>{% bilingual "Clear Crop" "清除选区" %}</button>
                 <div class="screen-control-field">
                     <label for="screen-interval">{% bilingual "Interval" "分析间隔" %}</label>
@@ -52,6 +53,12 @@
                         <option value="1800">1.8s</option>
                         <option value="2400">2.4s</option>
                     </select>
+                </div>
+                <div class="screen-control-field screen-control-toggle">
+                    <label class="screen-toggle">
+                        <input type="checkbox" id="screen-adaptive" checked>
+                        <span>{% bilingual "Adaptive Interval" "自适应间隔" %}</span>
+                    </label>
                 </div>
                 <div class="screen-control-field">
                     <label for="screen-quality">{% bilingual "Quality" "质量" %}</label>
@@ -104,10 +111,22 @@
                     </div>
                 </div>
             </div>
+            <div class="screen-overlay-controls">
+                <div class="screen-calibration-head">
+                    <h3>{% bilingual "Overlay Layers" "叠加层" %}</h3>
+                    <p>{% bilingual "Choose which annotations to draw on the overlay." "选择要绘制的叠加标注。" %}</p>
+                </div>
+                <div class="screen-overlay-options">
+                    <label><input type="checkbox" data-overlay-layer="trendlines" checked> {% bilingual "Trendlines" "趋势线" %}</label>
+                    <label><input type="checkbox" data-overlay-layer="pivots"> {% bilingual "Wave pivots" "波浪拐点" %}</label>
+                    <label><input type="checkbox" data-overlay-layer="wave_count"> {% bilingual "Wave count" "波浪计数" %}</label>
+                </div>
+            </div>
             <div class="screen-hints">
                 <div>{% bilingual "Tip:" "提示：" %} {% bilingual "Use TradingView line chart for the first run." "首次建议使用折线图模式。" %}</div>
                 <div>{% bilingual "Safari may only allow full-screen or window capture." "Safari 可能只支持屏幕或窗口级捕获。" %}</div>
                 <div>{% bilingual "Local analysis runs in Django; keep this page open." "分析在本机 Django 中完成，请保持页面打开。" %}</div>
+                <div>{% bilingual "Auto crop uses edge density and may need manual adjustments." "自动框选基于边缘密度，必要时请手动微调。" %}</div>
                 <div>{% bilingual "OCR requires Tesseract (brew install tesseract)." "OCR 需安装 Tesseract（brew install tesseract）。" %}</div>
             </div>
         </article>
@@ -136,6 +155,28 @@
                     <div class="screen-pattern-bias" data-role="pattern-bias">—</div>
                     <div class="screen-pattern-suggestion" data-role="pattern-suggestion">—</div>
                 </div>
+                <div class="screen-wave-block">
+                    <div class="screen-wave-title">{% bilingual "Wave Interpretation" "波浪解读" %}</div>
+                    <div class="screen-wave-grid">
+                        <div>
+                            <span class="screen-wave-label">{% bilingual "Wave" "波型" %}</span>
+                            <span class="screen-wave-value" data-role="wave-name">—</span>
+                        </div>
+                        <div>
+                            <span class="screen-wave-label">{% bilingual "Stage" "阶段" %}</span>
+                            <span class="screen-wave-value" data-role="wave-stage">—</span>
+                        </div>
+                        <div>
+                            <span class="screen-wave-label">{% bilingual "Direction" "方向" %}</span>
+                            <span class="screen-wave-value" data-role="wave-direction">—</span>
+                        </div>
+                        <div>
+                            <span class="screen-wave-label">{% bilingual "Confidence" "置信度" %}</span>
+                            <span class="screen-wave-value" data-role="wave-confidence">—</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="screen-prob-source" data-role="prob-source">—</div>
                 <div class="screen-probabilities">
                     <div class="prob-row">
                         <span>{% bilingual "Up" "上涨" %}</span>
@@ -283,6 +324,25 @@
     }
 }
 </script>
+<script id="wave-copy" type="application/json">
+{
+    "impulse_up": {
+        "name": "推动浪（上行）"
+    },
+    "impulse_down": {
+        "name": "推动浪（下行）"
+    },
+    "abc_up": {
+        "name": "ABC 修正（上行）"
+    },
+    "abc_down": {
+        "name": "ABC 修正（下行）"
+    },
+    "unknown": {
+        "name": "未识别"
+    }
+}
+</script>
 <script id="screen-analyzer-labels" type="application/json">
 {
     "status_idle": "空闲",
@@ -306,6 +366,8 @@
     "msg_train_fail": "训练失败",
     "msg_missing_capture": "请先开始捕获",
     "msg_need_candle_color": "请先取样K线颜色",
+    "msg_auto_crop_success": "已自动框选",
+    "msg_auto_crop_failed": "自动框选失败，请手动拖拽",
     "toggle_on": "停止自动",
     "toggle_off": "自动分析",
     "bias_prefix": "方向：",
@@ -314,9 +376,25 @@
     "diagnostic_coverage": "覆盖率",
     "diagnostic_range": "像素跨度",
     "diagnostic_extrema": "极值点",
+    "diagnostic_interval": "建议间隔",
+    "diagnostic_volatility": "波动度",
+    "diagnostic_latency": "延迟",
+    "diagnostic_wave_pivots": "波浪拐点",
     "label_symbol": "品种",
     "label_timeframe": "周期",
     "label_mode": "模式",
+    "label_wave": "波型",
+    "label_wave_stage": "阶段",
+    "label_wave_direction": "方向",
+    "label_wave_confidence": "置信度",
+    "wave_stage_impulse": "推动阶段",
+    "wave_stage_correction": "修正阶段",
+    "wave_stage_unknown": "未知阶段",
+    "wave_direction_up": "上行",
+    "wave_direction_down": "下行",
+    "wave_direction_neutral": "中性",
+    "prob_source_pattern": "形态概率",
+    "prob_source_fused": "融合概率",
     "ocr_on": "OCR 开启",
     "ocr_off": "OCR 关闭",
     "model_on": "模型启用",
