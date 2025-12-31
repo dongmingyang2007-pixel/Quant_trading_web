@@ -4,7 +4,7 @@ import json
 from types import SimpleNamespace
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase, override_settings
+from django.test import TestCase, SimpleTestCase, override_settings
 from django.urls import reverse
 from unittest import mock
 
@@ -26,10 +26,10 @@ class BacktestTaskApiTests(TestCase):
         self.user = User.objects.create_user(username="celery", password="secret123")
         self.client.force_login(self.user)
 
-    @override_settings(CELERY_TASK_ALWAYS_EAGER=True)
+    @override_settings(CELERY_TASK_ALWAYS_EAGER=True, TASK_RETURN_SNAPSHOT=False)
     @mock.patch("trading.task_queue.execute_backtest")
     def test_enqueue_backtest_task_returns_history_for_sync(self, mock_execute):
-        mock_execute.return_value = {"history_id": "history-1", "result": {"alpha": 0.5}}
+        mock_execute.return_value = {"history_id": "history-1"}
         response = self.client.post(
             reverse("trading:enqueue_backtest_task"),
             data=json.dumps({"params": _form_payload()}),
@@ -41,6 +41,7 @@ class BacktestTaskApiTests(TestCase):
         self.assertEqual(payload["state"], "SUCCESS")
         self.assertIn("result", payload)
         self.assertEqual(payload["result"]["history_id"], "history-1")
+        self.assertNotIn("result", payload["result"])
         mock_execute.assert_called_once()
 
     @override_settings(CELERY_TASK_ALWAYS_EAGER=False)
@@ -99,7 +100,7 @@ class BacktestTaskApiTests(TestCase):
     @override_settings(CELERY_TASK_ALWAYS_EAGER=True)
     @mock.patch("trading.task_queue.execute_backtest")
     def test_api_v1_backtest_endpoint(self, mock_execute):
-        mock_execute.return_value = {"history_id": "api-history", "result": {"alpha": 1.0}}
+        mock_execute.return_value = {"history_id": "api-history"}
         response = self.client.post(
             reverse("trading:api_v1_backtest_tasks"),
             data=json.dumps(_form_payload()),
@@ -108,6 +109,7 @@ class BacktestTaskApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["result"]["history_id"], "api-history")
+        self.assertNotIn("result", payload["result"])
 
     def test_api_v1_task_status_endpoint(self):
         response = self.client.get(reverse("trading:api_v1_task_status", kwargs={"task_id": "sync-test"}))
@@ -115,6 +117,40 @@ class BacktestTaskApiTests(TestCase):
         data = response.json()
         self.assertEqual(data["task_id"], "sync-test")
         self.assertEqual(data["state"], "SUCCESS")
+
+
+class ExecuteBacktestReturnTests(SimpleTestCase):
+    @override_settings(TASK_RETURN_SNAPSHOT=False)
+    @mock.patch("trading.tasks._persist_history")
+    @mock.patch("trading.tasks.run_quant_pipeline")
+    @mock.patch("trading.tasks._deserialize_strategy_input")
+    def test_execute_backtest_default_returns_history_only(self, mock_deserialize, mock_run, mock_persist):
+        mock_deserialize.return_value = SimpleNamespace(user_id="user-1")
+        mock_run.return_value = {"stats": {"alpha": 0.8}}
+        mock_persist.return_value = "history-99"
+
+        from trading import tasks as task_module
+
+        result = task_module.execute_backtest({})
+
+        self.assertEqual(result, {"history_id": "history-99"})
+
+    @override_settings(TASK_RETURN_SNAPSHOT=True)
+    @mock.patch("trading.tasks.sanitize_snapshot")
+    @mock.patch("trading.tasks._persist_history")
+    @mock.patch("trading.tasks.run_quant_pipeline")
+    @mock.patch("trading.tasks._deserialize_strategy_input")
+    def test_execute_backtest_can_return_snapshot(self, mock_deserialize, mock_run, mock_persist, mock_sanitize):
+        mock_deserialize.return_value = SimpleNamespace(user_id="user-2")
+        mock_run.return_value = {"stats": {"alpha": 0.9}}
+        mock_persist.return_value = "history-100"
+        mock_sanitize.return_value = {"alpha": 0.9}
+
+        from trading import tasks as task_module
+
+        result = task_module.execute_backtest({})
+
+        self.assertEqual(result, {"history_id": "history-100", "result": {"alpha": 0.9}})
 
 
 class ApiV1ScreenerTests(TestCase):

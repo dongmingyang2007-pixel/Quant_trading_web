@@ -2,6 +2,10 @@
 
 以下提供三种可选方案：
 
+开始前：
+- 从仓库根目录复制 `.env.example` 为 `.env` 并填写生产配置。
+- `storage_bundle/` 为默认运行数据目录（`db.sqlite3`、`data_cache/`、`media/`、`staticfiles/`），Docker 场景建议挂载为持久卷。
+
 1) Docker + 反向代理（Nginx/Traefik）
 - 构建镜像：
   - `cd quant_trading_web`
@@ -38,6 +42,7 @@
 - `DJANGO_SECRET_KEY`：随机字符串
 - `DJANGO_CSRF_TRUSTED_ORIGINS`：例如 `https://yourdomain.com`
 - 邮件：`EMAIL_HOST/PORT/USER/PASSWORD`、`EMAIL_USE_TLS` 或 `EMAIL_USE_SSL`
+- 可选：`REDIS_URL`（启用 Redis cache/限流一致性）与 `CELERY_BROKER_URL`/`CELERY_RESULT_BACKEND`（异步任务）
 
 数据库
 - 默认 SQLite（`db.sqlite3`）。初期访问量小可用。
@@ -51,4 +56,3 @@
 - 始终使用 HTTPS；若位于代理后，已在 settings 中设置 `SECURE_PROXY_SSL_HEADER`。
 - 生产中设置：`SESSION_COOKIE_SECURE=1`、`CSRF_COOKIE_SECURE=1`（在 settings 已支持 ENV 控制）。
 - 只把 `.env.example` 提交到仓库，`.env` 请勿提交。
-

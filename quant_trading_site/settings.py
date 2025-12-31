@@ -25,8 +25,6 @@ def _ensure_dir(path: Path) -> Path:
 
 
 _default_storage_root = PROJECT_ROOT / "storage_bundle"
-if not _default_storage_root.exists():
-    _default_storage_root = BASE_DIR / "storage_bundle"
 
 _configured_storage = os.environ.get("DJANGO_STORAGE_DIR")
 if _configured_storage:
@@ -212,7 +210,7 @@ AI_CHAT_MAX_IN_FLIGHT = int(
 AI_CHAT_GUARD_WAIT_SECONDS = float(os.environ.get("AI_CHAT_GUARD_WAIT_SECONDS", 0.75))
 AI_CHAT_RATE_WINDOW_SECONDS = int(os.environ.get("AI_CHAT_RATE_WINDOW_SECONDS", 60))
 AI_CHAT_RATE_MAX_CALLS = int(os.environ.get("AI_CHAT_RATE_MAX_CALLS", 30))
-AI_CHAT_RATE_CACHE_ALIAS = os.environ.get("AI_CHAT_RATE_CACHE_ALIAS", "default")
+AI_CHAT_RATE_CACHE_ALIAS = os.environ.get("AI_CHAT_RATE_CACHE_ALIAS", "ratelimit")
 AI_CHAT_FETCH_TIMEOUT_MS = int(
     os.environ.get(
         "AI_CHAT_FETCH_TIMEOUT_MS",
@@ -223,7 +221,7 @@ MARKET_DATA_TIMEOUT_SECONDS = int(os.environ.get("MARKET_DATA_TIMEOUT_SECONDS", 
 MARKET_DATA_MAX_WORKERS = int(os.environ.get("MARKET_DATA_MAX_WORKERS", 4))
 MARKET_DATA_RATE_WINDOW_SECONDS = int(os.environ.get("MARKET_DATA_RATE_WINDOW_SECONDS", 90))
 MARKET_DATA_RATE_MAX_CALLS = int(os.environ.get("MARKET_DATA_RATE_MAX_CALLS", 45))
-MARKET_DATA_RATE_CACHE_ALIAS = os.environ.get("MARKET_DATA_RATE_CACHE_ALIAS", "default")
+MARKET_DATA_RATE_CACHE_ALIAS = os.environ.get("MARKET_DATA_RATE_CACHE_ALIAS", "ratelimit")
 
 SCREEN_ANALYZER_INTERVAL_MS = int(os.environ.get("SCREEN_ANALYZER_INTERVAL_MS", 1200))
 SCREEN_ANALYZER_MAX_BYTES = int(os.environ.get("SCREEN_ANALYZER_MAX_BYTES", 900_000))
@@ -232,7 +230,7 @@ SCREEN_ANALYZER_MAX_WIDTH = int(os.environ.get("SCREEN_ANALYZER_MAX_WIDTH", 1280
 SCREEN_ANALYZER_MAX_HEIGHT = int(os.environ.get("SCREEN_ANALYZER_MAX_HEIGHT", 720))
 SCREEN_ANALYZER_RATE_WINDOW_SECONDS = int(os.environ.get("SCREEN_ANALYZER_RATE_WINDOW_SECONDS", 20))
 SCREEN_ANALYZER_RATE_MAX_CALLS = int(os.environ.get("SCREEN_ANALYZER_RATE_MAX_CALLS", 30))
-SCREEN_ANALYZER_RATE_CACHE_ALIAS = os.environ.get("SCREEN_ANALYZER_RATE_CACHE_ALIAS", "default")
+SCREEN_ANALYZER_RATE_CACHE_ALIAS = os.environ.get("SCREEN_ANALYZER_RATE_CACHE_ALIAS", "ratelimit")
 SCREEN_ANALYZER_OCR_ENABLED = os.environ.get("SCREEN_ANALYZER_OCR_ENABLED", "1") in {"1", "true", "True"}
 SCREEN_ANALYZER_TRAIN_MIN_SAMPLES = int(os.environ.get("SCREEN_ANALYZER_TRAIN_MIN_SAMPLES", 18))
 SCREEN_ANALYZER_MODEL_MIN_CONF = float(os.environ.get("SCREEN_ANALYZER_MODEL_MIN_CONF", "0.55"))
@@ -292,9 +290,29 @@ SCREEN_SIGNAL_DIRECTION_THRESHOLD = float(os.environ.get("SCREEN_SIGNAL_DIRECTIO
 PROFILE_MAX_GALLERY_IMAGES = int(os.environ.get("PROFILE_MAX_GALLERY_IMAGES", 12))
 PROFILE_GALLERY_UPLOAD_LIMIT = int(os.environ.get("PROFILE_GALLERY_UPLOAD_LIMIT", 5))
 
-RATELIMIT_USE_CACHE = "default"
+RATELIMIT_USE_CACHE = "ratelimit"
 
 REDIS_URL = os.environ.get("REDIS_URL")
+TASK_RETURN_SNAPSHOT = os.environ.get("TASK_RETURN_SNAPSHOT", "0") in {"1", "true", "True"}
+
+if REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+            "KEY_PREFIX": "quantweb",
+        },
+        "ratelimit": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+            "KEY_PREFIX": "quantweb:ratelimit",
+        },
+    }
+else:
+    CACHES = {
+        "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
+        "ratelimit": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
+    }
 
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", REDIS_URL or "memory://")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)

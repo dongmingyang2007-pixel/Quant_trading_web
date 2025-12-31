@@ -1,0 +1,4 @@
+# Optional RL engines
+stable-baselines3>=2.2
+gymnasium>=0.29
+finrl>=0.3

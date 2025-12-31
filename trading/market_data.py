@@ -30,11 +30,67 @@ RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("MARKET_FETCH_RATE_WINDOW", "60")
 _RATE_LOCK = threading.Lock()
 _RATE_BUCKET: deque[float] = deque()
 LOGGER = logging.getLogger(__name__)
+_PARQUET_AVAILABLE: bool | None = None
+_PARQUET_WARNED = False
 
 DATA_CACHE_DIR: Path = getattr(settings, "DATA_CACHE_DIR", Path(settings.DATA_ROOT) / "data_cache")
 DISK_CACHE_DIR = DATA_CACHE_DIR / "market_snapshots"
 DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 DISK_CACHE_TTL_SECONDS = int(getattr(settings, "MARKET_DISK_CACHE_TTL", 6 * 3600))
+
+
+def _has_parquet_engine() -> bool:
+    global _PARQUET_AVAILABLE
+    if _PARQUET_AVAILABLE is not None:
+        return _PARQUET_AVAILABLE
+    for module in ("pyarrow", "fastparquet"):
+        try:
+            __import__(module)
+            _PARQUET_AVAILABLE = True
+            return True
+        except Exception:
+            continue
+    _PARQUET_AVAILABLE = False
+    return False
+
+
+def _warn_parquet_missing(context: str) -> None:
+    global _PARQUET_WARNED
+    if _PARQUET_WARNED:
+        return
+    LOGGER.warning(
+        "Parquet engine missing; %s skipped. Install pyarrow>=14 or fastparquet.",
+        context,
+    )
+    _PARQUET_WARNED = True
+
+
+def _write_parquet_atomic(df: pd.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        df.to_parquet(tmp_path)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+
+
+def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp_path.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
 
 def _with_retries(func, *args, **kwargs):
     last_exc = None
@@ -107,6 +163,9 @@ def fetch(
             if not path.exists() or not meta_path.exists():
                 continue
             try:
+                if not _has_parquet_engine():
+                    _warn_parquet_missing("market cache read")
+                    return pd.DataFrame()
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
                 ts = float(meta.get("timestamp", 0))
                 if time.time() - ts > DISK_CACHE_TTL_SECONDS:
@@ -127,10 +186,13 @@ def fetch(
         if not isinstance(df, pd.DataFrame) or df.empty:
             return
         try:
+            if not _has_parquet_engine():
+                _warn_parquet_missing("market cache write")
+                return
             path, meta_path = _cache_paths(cache_key)
-            df.to_parquet(path)
             meta = {"timestamp": time.time(), "symbols": unique, "fields": fields, "cache_key": cache_key}
-            meta_path.write_text(json.dumps(meta), encoding="utf-8")
+            _write_parquet_atomic(df, path)
+            _write_json_atomic(meta_path, meta)
         except Exception:
             pass
 

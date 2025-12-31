@@ -1,40 +1,4 @@
-Django>=4.2,<5.0
-yfinance>=0.2.18
-pandas>=1.5
-numpy>=1.23
-requests>=2.31
-sentry-sdk>=1.45
-django-bootstrap5>=24.2
-djangorestframework>=3.15
-matplotlib>=3.7
-ddgs>=1.0
-duckduckgo-search>=5.1.0
-scikit-learn>=1.3
-whitenoise>=6.6
-APScheduler>=3.10
-# Backtest insights / baselines
-statsmodels>=0.14
-networkx>=3.2
-# Task queue / caching (可选)
-celery>=5.3
-redis>=5.0
-# HTML/安全处理
-bleach>=6.1.0
-# 图像校验
-Pillow>=10.3.0
-# Optional, if可用：
-lightgbm>=4.0
-catboost>=1.2
-shap>=0.45
-vaderSentiment>=3.3
-torch>=2.2
-optuna>=3.6
-# Optional RL engines（如需启用 FinRL/SB3，请另行安装）
-stable-baselines3>=2.2
-gymnasium>=0.29
-finrl>=0.3
-gunicorn>=21.2
-python-dotenv>=1.0
-mlflow>=2.14
-pdfplumber>=0.11
-pytesseract>=0.3.10
+# Full install (core + optional)
+-r requirements-core.txt
+-r requirements-ml.txt
+-r requirements-rl.txt

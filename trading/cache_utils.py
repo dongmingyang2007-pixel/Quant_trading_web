@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from typing import Any, Callable
@@ -17,6 +18,36 @@ try:  # optional dependency
     import redis  # type: ignore
 except Exception:  # pragma: no cover
     redis = None  # type: ignore
+
+LOGGER = logging.getLogger(__name__)
+_PARQUET_AVAILABLE: bool | None = None
+_PARQUET_WARNED = False
+
+
+def _has_parquet_engine() -> bool:
+    global _PARQUET_AVAILABLE
+    if _PARQUET_AVAILABLE is not None:
+        return _PARQUET_AVAILABLE
+    for module in ("pyarrow", "fastparquet"):
+        try:
+            __import__(module)
+            _PARQUET_AVAILABLE = True
+            return True
+        except Exception:
+            continue
+    _PARQUET_AVAILABLE = False
+    return False
+
+
+def _warn_parquet_missing(context: str) -> None:
+    global _PARQUET_WARNED
+    if _PARQUET_WARNED:
+        return
+    LOGGER.warning(
+        "Parquet engine missing; %s skipped. Install pyarrow>=14 or fastparquet.",
+        context,
+    )
+    _PARQUET_WARNED = True
 
 
 class BaseCache:
@@ -138,11 +169,17 @@ def _encode_value(value: Any) -> bytes | None:
     if pd is not None:
         try:
             if isinstance(value, pd.Series):
+                if not _has_parquet_engine():
+                    _warn_parquet_missing("cache parquet serialization (Series)")
+                    return None
                 buffer = BytesIO()
                 value.to_frame("value").to_parquet(buffer, index=True)
                 header = json.dumps({"type": "series"}, separators=(",", ":")).encode("utf-8")
                 return b"PQT1" + header + b"\n" + buffer.getvalue()
             if isinstance(value, pd.DataFrame):
+                if not _has_parquet_engine():
+                    _warn_parquet_missing("cache parquet serialization (DataFrame)")
+                    return None
                 buffer = BytesIO()
                 value.to_parquet(buffer, index=True)
                 header = json.dumps({"type": "dataframe"}, separators=(",", ":")).encode("utf-8")
@@ -163,6 +200,9 @@ def _decode_value(payload: bytes | None) -> Any | None:
         payload = payload.encode("utf-8")
     if payload.startswith(b"PQT1") and pd is not None:
         try:
+            if not _has_parquet_engine():
+                _warn_parquet_missing("cache parquet deserialization")
+                return None
             header_and_body = payload[4:]
             split = header_and_body.find(b"\n")
             if split == -1:

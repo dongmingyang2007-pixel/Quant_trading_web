@@ -28,16 +28,38 @@ python manage.py runserver
 python manage.py createsuperuser
 ```
 
+## 依赖分层（core / optional）
+默认使用完整依赖：
+```bash
+pip install -r requirements.txt
+```
+轻量安装（仅核心能力）：
+```bash
+pip install -r requirements-core.txt
+```
+按需启用：
+```bash
+pip install -r requirements-ml.txt   # 机器学习相关
+pip install -r requirements-rl.txt   # 强化学习相关
+```
+
 ## 配置与环境变量
-常用环境变量（按需设置）：
-- `DJANGO_STORAGE_DIR`：自定义数据目录；默认使用 `storage_bundle/`，不存在时自动创建 `storage_bundle/`。
-- `DJANGO_DEBUG`：调试开关（默认测试时开启）。
+复制 `.env.example` 为 `.env`，按需修改；生产部署建议参考 `deploy/README.md`。
+
+生产配置最小集合：
 - `DJANGO_SECRET_KEY`：生产环境必须设置。
-- `DJANGO_ALLOW_INSECURE_KEY=1`：仅限本地临时绕过密钥校验。
+- `DJANGO_DEBUG=0`
+- `DJANGO_ALLOWED_HOSTS`：逗号分隔域名/IP。
+- `DJANGO_CSRF_TRUSTED_ORIGINS`：例如 `https://yourdomain.com`。
+
+可选配置：
+- `DJANGO_STORAGE_DIR`：自定义数据目录；默认使用 `storage_bundle/`，不存在时自动创建。
+- `REDIS_URL`：启用 Redis cache（含限流跨进程一致）。
 - `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND`：异步队列配置。
 - `CELERY_ALWAYS_EAGER`：置为 `1` 可强制同步执行。
+- `TASK_RETURN_SNAPSHOT=1`：仅在需要时让回测任务返回完整快照。
+- `OLLAMA_ENDPOINT` / `OLLAMA_MODEL` / `AI_PROVIDER` / `GEMINI_API_KEY`：LLM 洞察与外部模型（可选）。
 - `METRICS_MAX_BYTES`：遥测文件大小轮转阈值。
-- `OLLAMA_ENDPOINT` / `OLLAMA_MODEL`：本地 LLM 洞察（可选）。
 
 ## 异步任务（Celery）
 同步模式（默认）：
@@ -86,4 +108,4 @@ docker run -p 8000:8000 \
 
 ## 备注
 - 默认 Python 3.11（CI 与 Dockerfile 已统一）。
-- `storage_bundle/` 作为运行数据目录，请确保可写。
+- `storage_bundle/` 作为运行数据目录（`db.sqlite3`、`data_cache/`、`media/`、`staticfiles/`），请确保可写并在 Docker 中做 volume 挂载。

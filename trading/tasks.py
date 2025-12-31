@@ -5,6 +5,7 @@ from datetime import date, datetime
 from typing import Any, Dict, List, get_args, get_origin, get_type_hints
 
 from celery import shared_task
+from django.conf import settings
 
 from .strategies import StrategyInput, run_quant_pipeline
 from .history import BacktestRecord, append_history, sanitize_snapshot
@@ -74,11 +75,13 @@ def execute_backtest(payload: Dict[str, Any]) -> Dict[str, Any]:
     params = _deserialize_strategy_input(payload)
     result = run_quant_pipeline(params)
     history_id = _persist_history(result, getattr(params, "user_id", None))
-    safe_result = sanitize_snapshot(result)
-    return {
-        "history_id": history_id,
-        "result": safe_result,
-    }
+    if getattr(settings, "TASK_RETURN_SNAPSHOT", False):
+        safe_result = sanitize_snapshot(result)
+        return {
+            "history_id": history_id,
+            "result": safe_result,
+        }
+    return {"history_id": history_id}
 
 
 def execute_training_job(payload: Dict[str, Any]) -> Dict[str, Any]:

@@ -72,6 +72,7 @@
 
   const elements = {
     canvas: document.getElementById('screen-preview'),
+    preview: document.querySelector('.screen-preview'),
     overlayImg: document.getElementById('screen-overlay-img'),
     overlayBox: document.querySelector('.screen-overlay'),
     status: document.querySelector('[data-role="status"]'),
@@ -251,6 +252,7 @@
     state.stream = null;
     state.capturing = false;
     state.pickTarget = null;
+    if (elements.preview) elements.preview.classList.remove('is-picking');
     stopAutoAnalyze();
     setButtons(false);
     if (elements.start) elements.start.disabled = false;
@@ -739,7 +741,8 @@
       return;
     }
     state.pickTarget = target;
-    setStatus('active', labels.msg_pick_prompt || 'Pick a color');
+    if (elements.preview) elements.preview.classList.add('is-picking');
+    setStatus('pick', labels.msg_pick_prompt || 'Pick a color');
   };
 
   const handlePick = (event) => {
@@ -751,6 +754,7 @@
     const rgb = { r: pixel[0], g: pixel[1], b: pixel[2] };
     setCalibration(state.pickTarget, rgb);
     state.pickTarget = null;
+    if (elements.preview) elements.preview.classList.remove('is-picking');
     setStatus('active', labels.status_active || 'Capturing');
   };
 
