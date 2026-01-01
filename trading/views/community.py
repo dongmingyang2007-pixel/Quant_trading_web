@@ -17,6 +17,7 @@ from ..community import (
     CommunityComment,
     add_comment,
     append_post,
+    build_backtest_summary,
     build_post,
     create_topic,
     get_topic,
@@ -26,9 +27,38 @@ from ..community import (
     remove_post,
 )
 from ..forms import CommunityPostForm
+from ..history import get_history_record
 from ..profile import load_profile
 from ..storage_utils import save_uploaded_file, describe_image_error, decode_data_url_image, resolve_media_url
 from ..observability import record_metric
+
+
+def _build_share_prefill(summary: dict[str, Any]) -> str:
+    ticker = summary.get("ticker") or "—"
+    engine = summary.get("engine") or "Strategy"
+    start_date = summary.get("start_date") or "--"
+    end_date = summary.get("end_date") or "--"
+    header_zh = f"【回测摘要】{ticker} · {engine} · {start_date} → {end_date}"
+    metrics_zh = (
+        f"收益率：{summary.get('total_return')} | 夏普：{summary.get('sharpe')} | "
+        f"最大回撤：{summary.get('max_drawdown')} | 波动率：{summary.get('volatility')}"
+    )
+    header_en = f"[Backtest Summary] {ticker} · {engine} · {start_date} → {end_date}"
+    metrics_en = (
+        f"Return: {summary.get('total_return')} | Sharpe: {summary.get('sharpe')} | "
+        f"Max drawdown: {summary.get('max_drawdown')} | Volatility: {summary.get('volatility')}"
+    )
+    return "\n".join(
+        [
+            header_zh,
+            metrics_zh,
+            "我的思考：",
+            "",
+            header_en,
+            metrics_en,
+            "Notes:",
+        ]
+    )
 
 
 @login_required
@@ -37,6 +67,8 @@ def community(request):
     profile = load_profile(str(user.id))
     display_name = profile.get("display_name") or user.username
     avatar_path = profile.get("avatar_path") or ""
+    language = (getattr(request, "LANGUAGE_CODE", "") or "").lower()
+    is_zh = language.startswith("zh")
 
     def resolve_media(path: str | None) -> str:
         return resolve_media_url(path)
@@ -45,6 +77,15 @@ def community(request):
     topic_choices = [(topic["topic_id"], topic["name"]) for topic in topics]
     requested_topic = request.GET.get("topic") or DEFAULT_TOPIC_ID
     topic_meta = get_topic(requested_topic)
+    share_record = None
+    share_error = None
+    share_history_id = (request.GET.get("share_history_id") or "").strip()
+    if share_history_id:
+        record = get_history_record(share_history_id, user_id=str(user.id))
+        if record:
+            share_record = build_backtest_summary(record)
+        else:
+            share_error = "未找到对应的回测记录，无法分享。" if is_zh else "Backtest record not found. Unable to share."
 
     post_success = None
     post_error = None
@@ -96,6 +137,14 @@ def community(request):
                     )
                 except ValueError as exc:
                     post_error = describe_image_error(exc)
+            backtest_record_id = (form.cleaned_data.get("backtest_record_id") or "").strip()
+            if backtest_record_id and not post_error:
+                record = get_history_record(backtest_record_id, user_id=str(user.id))
+                if record:
+                    backtest_record_id = record.get("record_id") or ""
+                else:
+                    post_error = "回测记录已不存在，无法关联发布。" if is_zh else "Backtest record is missing and cannot be attached."
+                    backtest_record_id = ""
             if not content and not post_error:
                 post_error = "内容不能为空。"
             if not post_error:
@@ -107,6 +156,7 @@ def community(request):
                         author=display_name,
                         content=content,
                         image_path=image_path,
+                        backtest_record_id=backtest_record_id or None,
                     )
                 )
                 post_success = "已发布，与社区成员共同交流。"
@@ -128,7 +178,11 @@ def community(request):
                 topic_id=topic_id,
             )
     else:
-        form = CommunityPostForm(topics=topic_choices, initial={"topic": topic_meta.get("topic_id")})
+        initial = {"topic": topic_meta.get("topic_id")}
+        if share_record:
+            initial["content"] = _build_share_prefill(share_record)
+            initial["backtest_record_id"] = share_record.get("record_id")
+        form = CommunityPostForm(topics=topic_choices, initial=initial)
 
     if not post_success and request.GET.get("deleted") == "1":
         post_success = "帖子已删除。"
@@ -140,6 +194,8 @@ def community(request):
             "invalid": "请求无效，请刷新后重试。",
         }
         post_error = error_map.get(reason, "删除失败，请稍后再试。")
+    if share_error and not post_error:
+        post_error = share_error
 
     topic_filter = topic_meta.get("topic_id")
     topic_value = topic_filter if topic_filter and topic_filter != "all" else None
@@ -177,6 +233,8 @@ def community(request):
             "post_error": post_error,
             "topics": topics,
             "active_topic": topic_meta,
+            "share_record": share_record,
+            "share_history_id": share_history_id,
         },
     )
 

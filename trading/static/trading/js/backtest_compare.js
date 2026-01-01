@@ -45,7 +45,7 @@
   payload.forEach((series, index) => {
     if (!Array.isArray(series.points) || !series.points.length) return;
     const line = chart.addLineSeries({
-      color: series.color || ['#2563eb', '#10b981', '#f97316'][index % 3],
+      color: series.color || ['#2563eb', '#10b981', '#f97316', '#8b5cf6', '#ef4444'][index % 5],
       lineWidth: 3,
       title: series.label || `Strategy ${index + 1}`,
     });

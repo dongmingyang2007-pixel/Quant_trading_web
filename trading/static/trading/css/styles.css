@@ -332,10 +332,60 @@
 .paper-meta strong {
     color: #0f172a;
 }
+.paper-session-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 12px;
+}
+.paper-session-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    flex: 1 1 280px;
+}
+.paper-session-filters .form-control,
+.paper-session-filters .form-select {
+    min-width: 140px;
+}
+.paper-session-pagination {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+}
+.paper-session-pagination .btn[disabled] {
+    opacity: 0.5;
+    pointer-events: none;
+}
 .paper-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+}
+.paper-card-chart {
+    margin-top: 10px;
+    padding: 6px 10px;
+    border-radius: 12px;
+    background: rgba(15, 23, 42, 0.05);
+}
+.paper-card-chart canvas {
+    width: 100%;
+    height: 44px;
+    display: block;
+}
+.paper-card-chart .paper-card-chart-label {
+    display: inline-flex;
+    margin-top: 6px;
+    font-size: 0.72rem;
+    color: #64748b;
+}
+.paper-export {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
 }
 .paper-detail-summary {
     display: grid;
@@ -4656,6 +4706,56 @@ a:hover { text-decoration: underline; }
     width: 100%;
 }
 
+.history-filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: flex-end;
+    margin: 10px 0 18px;
+}
+
+.history-filter-field {
+    min-width: 180px;
+    flex: 1 1 180px;
+}
+
+.history-filter-toggle {
+    margin-top: 26px;
+}
+
+.history-star-toggle {
+    border: none;
+    background: rgba(15, 23, 42, 0.08);
+    color: #64748b;
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.history-star-toggle.is-active {
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.18);
+}
+
+.history-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: #111827;
+}
+
+.history-meta-editor {
+    margin-bottom: 16px;
+    padding: 12px 14px;
+    border-radius: 16px;
+    background: rgba(241, 245, 249, 0.7);
+    border: 1px dashed rgba(148, 163, 184, 0.3);
+}
+
 .history-ticker {
     font-weight: 600;
 }
@@ -4741,6 +4841,14 @@ a:hover { text-decoration: underline; }
     display: flex;
     flex-wrap: wrap;
     gap: 12px;
+    margin-bottom: 16px;
+}
+
+.history-export {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
     margin-bottom: 16px;
 }
 .history-accordion,
@@ -4914,6 +5022,29 @@ a:hover { text-decoration: underline; }
 
 .arena-table td {
     border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.arena-corr-table th,
+.arena-corr-table td {
+    text-align: center;
+    vertical-align: middle;
+    font-variant-numeric: tabular-nums;
+}
+
+.arena-corr-table td:first-child,
+.arena-corr-table th:first-child {
+    text-align: left;
+}
+
+.arena-corr-cell {
+    min-width: 90px;
+    border-radius: 12px;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.arena-risk .arena-table td {
+    font-variant-numeric: tabular-nums;
 }
 
 .portfolio-builder-card {
@@ -6959,6 +7090,29 @@ a:hover { text-decoration: underline; }
     background: #0f172a;
     color: #fff;
     border-color: #0f172a;
+}
+.task-actions .task-cancel {
+    border-color: rgba(248, 113, 113, 0.6);
+    color: #b91c1c;
+}
+.task-progress {
+    margin-top: 8px;
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.2);
+    overflow: hidden;
+}
+.task-progress-bar {
+    height: 100%;
+    width: 0%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #2563eb, #38bdf8);
+    transition: width 0.25s ease;
+}
+.task-progress-note {
+    margin-top: 4px;
+    font-size: 0.75rem;
+    color: #64748b;
 }
 .task-count {
     display: inline-flex;

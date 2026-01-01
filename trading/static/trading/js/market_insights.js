@@ -2,6 +2,8 @@
   const apiMeta = document.querySelector('meta[name="market-api"]');
   const apiUrl = apiMeta ? apiMeta.getAttribute('content') : window.MARKET_API_URL || '/market/api/';
   const langMeta = document.querySelector('meta[name="market-lang"]');
+  const backtestMeta = document.querySelector('meta[name="backtest-base"]');
+  const backtestBase = backtestMeta ? backtestMeta.getAttribute('content') : '/backtest/';
   const docLang = document.documentElement.getAttribute('lang');
   const langPrefix = ((langMeta && langMeta.getAttribute('content')) || docLang || navigator.language || 'zh')
     .toLowerCase()
@@ -737,6 +739,7 @@
       const canvas = fragment.querySelector('canvas');
       const windowLabel = fragment.querySelector('[data-role="window-label"]');
       const updatedEl = fragment.querySelector('[data-role="updated"]');
+      const backtestLink = fragment.querySelector('[data-role="backtest-link"]');
 
       if (symbolLink) {
         symbolLink.textContent = item.symbol || '';
@@ -769,6 +772,10 @@
         const timestamps = Array.isArray(item.timestamps) ? item.timestamps : [];
         const stamp = timestamps.length ? timestamps[timestamps.length - 1] : '';
         updatedEl.textContent = stamp ? `${TEXT.updatedLabel} ${stamp}` : '';
+      }
+      if (backtestLink) {
+        const symbol = item.symbol || '';
+        backtestLink.href = `${backtestBase}?ticker=${encodeURIComponent(symbol)}`;
       }
       if (canvas) {
         drawSparkline(canvas, item.series || [], invert);

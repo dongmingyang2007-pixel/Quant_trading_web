@@ -2,8 +2,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const langIsZh = (document.documentElement.lang || '').toLowerCase().startsWith('zh');
   const TEXT = {
     minSelect: langIsZh ? '请至少选择两条记录再进行对比。' : 'Select at least two runs before comparing.',
-    maxSelect: langIsZh ? '最多选择三条记录进行对比。' : 'Select up to three runs for comparison.',
-    hintEmpty: langIsZh ? '请选择 2-3 条历史记录以开始对比。' : 'Select 2-3 runs to start comparison.',
+    maxSelect: langIsZh ? '最多选择五条记录进行对比。' : 'Select up to five runs for comparison.',
+    hintEmpty: langIsZh ? '请选择 2-5 条历史记录以开始对比。' : 'Select 2-5 runs to start comparison.',
     hintNeedMore: langIsZh ? '再选择至少一条记录即可对比。' : 'Select at least one more run.',
     hintReady: langIsZh ? '已就绪，点击右侧按钮进入对比。' : 'Ready. Click the button to compare.',
     hintFull: langIsZh ? '已达上限，可删除勾选项后重选。' : 'Maximum reached. Remove one to adjust.',
@@ -18,7 +18,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const csrfToken = getCSRFToken();
   const compareState = new Map();
-  const MAX_COMPARE = 3;
+  const MAX_COMPARE = 5;
 
   const findBar = (accordionId) =>
     document.querySelector(`[data-role="history-compare"][data-accordion-id="${accordionId}"]`);

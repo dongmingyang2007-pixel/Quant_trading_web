@@ -47,12 +47,20 @@ def account(request):
 
     history_runs = load_history(user_id=str(user.id))
     history_briefs: list[dict[str, Any]] = []
+    history_tags: set[str] = set()
     for entry in history_runs:
         entry["warnings_localized"] = translate_list(entry.get("warnings") or [], language)
+        for tag in entry.get("tags") or []:
+            if isinstance(tag, str) and tag.strip():
+                history_tags.add(tag.strip())
+        ticker_label = entry.get("ticker", "Strategy")
+        engine_label = entry.get("engine", "")
+        default_label = f"{ticker_label} · {engine_label}"
+        display_label = entry.get("title") or default_label
         history_briefs.append(
             {
                 "record_id": entry.get("record_id"),
-                "label": f"{entry.get('ticker', 'Strategy')} · {entry.get('engine', '')}",
+                "label": display_label,
                 "ticker": entry.get("ticker"),
                 "engine": entry.get("engine"),
                 "period": f"{entry.get('start_date', '--')} → {entry.get('end_date', '--')}",
@@ -363,6 +371,7 @@ def account(request):
         "history_load_url": request.build_absolute_uri(reverse("trading:backtest")),
         "history_compare_url": reverse("trading:history_compare"),
         "history_briefs": history_briefs,
+        "history_tags": sorted(history_tags),
     }
     return render(request, "trading/account.html", context)
 

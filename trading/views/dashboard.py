@@ -25,85 +25,7 @@ from ..backtest_logger import top_runs
 from ..strategies import QuantStrategyError, StrategyInput, run_quant_pipeline
 from ..observability import ensure_request_id
 from ..i18n_messages import translate_list, translate_text
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return value.strip().lower() not in {"0", "false", "no", "off"}
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        return default
-
-
-HYPEROPT_ENABLED = _env_bool("ENABLE_HYPEROPT", True)
-HYPEROPT_TRIALS = _env_int("HYPEROPT_TRIALS", 8)
-HYPEROPT_TIMEOUT = _env_int("HYPEROPT_TIMEOUT", 90)
-
-ADVANCED_STRATEGY_DEFAULTS = {
-    "benchmark_ticker": "SPY",
-    "capital": 250000.0,
-    "short_window": 35,
-    "long_window": 126,
-    "rsi_period": 21,
-    "include_plots": True,
-    "show_ai_thoughts": True,
-    "risk_profile": "balanced",
-    "strategy_engine": "multi_combo",
-    "volatility_target": 0.14,
-    "transaction_cost_bps": 6.0,
-    "slippage_bps": 4.0,
-    "min_holding_days": 3,
-    "train_window": 504,
-    "test_window": 21,
-    "entry_threshold": 0.58,
-    "exit_threshold": 0.42,
-    "max_leverage": 3.0,
-    "ml_task": "hybrid",
-    "val_ratio": 0.2,
-    "embargo_days": 7,
-    "optimize_thresholds": True,
-    "ml_model": "lightgbm",
-    "ml_params": None,
-    "auto_apply_best_config": True,
-    "calibrate_proba": True,
-    "early_stopping_rounds": 80,
-    "dl_sequence_length": 36,
-    "dl_hidden_dim": 96,
-    "dl_dropout": 0.15,
-    "dl_epochs": 14,
-    "dl_batch_size": 64,
-    "dl_num_layers": 2,
-    "rl_engine": "value_iter",
-    "rl_params": None,
-    "label_style": "triple_barrier",
-    "tb_up": 0.035,
-    "tb_down": 0.03,
-    "tb_max_holding": 15,
-    "return_path": "close_to_close",
-    "enable_hyperopt": HYPEROPT_ENABLED,
-    "hyperopt_trials": HYPEROPT_TRIALS,
-    "hyperopt_timeout": HYPEROPT_TIMEOUT,
-    "max_drawdown_stop": 0.25,
-    "daily_exposure_limit": 1.5,
-    "investment_horizon": "medium",
-    "experience_level": "advanced",
-    "primary_goal": "growth",
-    "lot_size": 1,
-    "max_weight": None,
-    "min_weight": None,
-    "max_holdings": None,
-    "sector_caps": None,
-    "turnover_cap": None,
-    "allow_short": True,
-    "limit_move_threshold": None,
-    "execution_delay_days": 1,
-}
+from ..strategy_defaults import ADVANCED_STRATEGY_DEFAULTS
 
 
 FOCUS_PLACEHOLDER_SVG = """
@@ -207,6 +129,40 @@ def build_strategy_input(cleaned: dict[str, Any], *, request_id: str, user) -> t
     config["ml_model"] = ml_mapping.get(ml_mode, config["ml_model"])
     config["benchmark_ticker"] = benchmark
     config["capital"] = capital
+
+    def _override(key: str, cast=None) -> None:
+        if key not in cleaned:
+            return
+        val = cleaned.get(key)
+        if val is None or val == "":
+            return
+        config[key] = cast(val) if cast else val
+
+    _override("strategy_engine", str)
+    _override("risk_profile", str)
+    _override("short_window", int)
+    _override("long_window", int)
+    _override("rsi_period", int)
+    _override("volatility_target", float)
+    _override("transaction_cost_bps", float)
+    _override("slippage_bps", float)
+    _override("min_holding_days", int)
+    _override("entry_threshold", float)
+    _override("exit_threshold", float)
+    _override("optimize_thresholds", bool)
+    _override("train_window", int)
+    _override("test_window", int)
+    _override("val_ratio", float)
+    _override("embargo_days", int)
+    _override("auto_apply_best_config", bool)
+    _override("enable_hyperopt", bool)
+    _override("hyperopt_trials", int)
+    _override("hyperopt_timeout", int)
+    _override("max_leverage", float)
+    _override("max_drawdown_stop", float)
+    _override("daily_exposure_limit", float)
+    _override("allow_short", bool)
+    _override("execution_delay_days", int)
 
     user_id = str(user.id) if getattr(user, "is_authenticated", False) else None
 
@@ -360,7 +316,11 @@ def backtest(request):
             result = None
             result_json = "{}"
     else:
-        form = QuantStrategyForm(initial=default_initial, language=language)
+        initial_values = default_initial.copy()
+        ticker_query = (request.GET.get("ticker") or "").strip()
+        if ticker_query:
+            initial_values["ticker"] = ticker_query.upper()
+        form = QuantStrategyForm(initial=initial_values, language=language)
 
         history_id = request.GET.get("history_id")
         if history_id:
@@ -405,6 +365,7 @@ def backtest(request):
 
     history_runs = load_history(user_id=str(request.user.id)) if request.user.is_authenticated else []
     history_briefs: list[dict[str, Any]] = []
+    history_tags: set[str] = set()
     for entry in history_runs:
         try:
             snapshot_payload = entry.get("snapshot") or entry
@@ -414,10 +375,17 @@ def backtest(request):
         except (TypeError, ValueError):
             entry["json_payload"] = "{}"
         entry["warnings_localized"] = translate_list(entry.get("warnings") or [], language)
+        for tag in entry.get("tags") or []:
+            if isinstance(tag, str) and tag.strip():
+                history_tags.add(tag.strip())
+        ticker_label = entry.get("ticker", "Strategy")
+        engine_label = entry.get("engine", "")
+        default_label = f"{ticker_label} · {engine_label}"
+        display_label = entry.get("title") or default_label
         history_briefs.append(
             {
                 "record_id": entry.get("record_id"),
-                "label": f"{entry.get('ticker', 'Strategy')} · {entry.get('engine', '')}",
+                "label": display_label,
                 "ticker": entry.get("ticker"),
                 "engine": entry.get("engine"),
                 "period": f"{entry.get('start_date', '--')} → {entry.get('end_date', '--')}",
@@ -478,5 +446,7 @@ def backtest(request):
             "history_load_url": history_load_url,
             "history_compare_url": history_compare_url,
             "history_briefs": history_briefs,
+            "history_tags": sorted(history_tags),
+            "advanced_defaults": ADVANCED_STRATEGY_DEFAULTS,
         },
     )

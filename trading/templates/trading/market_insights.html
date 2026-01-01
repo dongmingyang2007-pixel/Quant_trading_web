@@ -12,6 +12,7 @@
 <link rel="stylesheet" href="{% static 'trading/css/market_insights.css' %}">
 <meta name="market-api" content="{% url 'trading:market_insights_data' %}">
 <meta name="market-lang" content="{{ lang_prefix }}">
+<meta name="backtest-base" content="{% url 'trading:backtest' %}">
 <meta name="csrf-token" content="{{ csrf_token }}">
 {% endwith %}
 {% endblock %}
@@ -207,6 +208,9 @@
             </div>
             <footer class="market-card-foot">
                 <span class="market-updated" data-role="updated"></span>
+                <a class="market-backtest" data-role="backtest-link" href="#">
+                    {% if lang_prefix == 'zh' %}一键回测{% else %}Quick backtest{% endif %}
+                </a>
             </footer>
         </article>
     </template>

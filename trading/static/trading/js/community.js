@@ -45,6 +45,7 @@
     const postAlert = root.querySelector("[data-role='post-alert']");
     const activeTopicId = root.dataset.activeTopicId;
     const activeTopicName = root.dataset.activeTopicName;
+    const shareHistoryId = root.dataset.shareHistoryId;
 
     let objectUrl = null;
     let lastComposeTrigger = null;
@@ -306,6 +307,11 @@
                 setTimeout(() => input.focus(), 60);
             }
         });
+    }
+
+    if (shareHistoryId) {
+        openCompose();
+        composePanel?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
 
     if (pickImageBtn) {

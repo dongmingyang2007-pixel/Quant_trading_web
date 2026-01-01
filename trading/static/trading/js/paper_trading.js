@@ -6,6 +6,21 @@
   const detailEl = panel.querySelector('[data-role="paper-detail"]');
   const form = panel.querySelector('[data-role="paper-form"]');
   const alertEl = panel.querySelector('[data-role="paper-form-alert"]');
+  const searchInput = panel.querySelector('[data-role="paper-search"]');
+  const statusSelect = panel.querySelector('[data-role="paper-status"]');
+  const sortSelect = panel.querySelector('[data-role="paper-sort"]');
+  const prevBtn = panel.querySelector('[data-role="paper-prev"]');
+  const nextBtn = panel.querySelector('[data-role="paper-next"]');
+  const countEl = panel.querySelector('[data-role="paper-count"]');
+
+  const listState = {
+    query: "",
+    status: "all",
+    sort: "updated",
+    limit: 6,
+    offset: 0,
+    total: 0,
+  };
 
   const getCsrfToken = () => {
     const match = document.cookie.match(/csrftoken=([^;]+)/);
@@ -26,6 +41,30 @@
     } catch (e) {
       return ts;
     }
+  };
+
+  const drawSparkline = (canvas, series) => {
+    if (!canvas || !series || series.length < 2) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const values = series.map((val) => Number(val) || 0);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = max - min || 1;
+    const width = canvas.width || canvas.offsetWidth || 160;
+    const height = canvas.height || canvas.offsetHeight || 44;
+    ctx.clearRect(0, 0, width, height);
+    ctx.beginPath();
+    values.forEach((val, index) => {
+      const x = (index / (values.length - 1)) * width;
+      const y = height - ((val - min) / range) * height;
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    const trendUp = values[values.length - 1] >= values[0];
+    ctx.strokeStyle = trendUp ? "#2563eb" : "#dc2626";
+    ctx.lineWidth = 2;
+    ctx.stroke();
   };
 
   const renderDetail = (session) => {
@@ -61,8 +100,36 @@
       healthLabel = lang.startsWith("zh") ? "轻微延迟" : "Running behind";
     }
     const labels = lang.startsWith("zh")
-      ? { status: "状态", equity: "权益", cash: "现金", pnl: "收益", positions: "持仓", trades: "成交明细", curve: "权益曲线（最近）", none: "暂无数据", noTrades: "暂无成交。", noPos: "暂无持仓", heartbeat: "调仓间隔", lastRun: "最近运行" }
-      : { status: "Status", equity: "Equity", cash: "Cash", pnl: "Return", positions: "Positions", trades: "Trades", curve: "Equity (latest)", none: "No data", noTrades: "No trades yet.", noPos: "No positions", heartbeat: "Rebalance interval", lastRun: "Last run" };
+      ? {
+          status: "状态",
+          equity: "权益",
+          cash: "现金",
+          pnl: "收益",
+          positions: "持仓",
+          trades: "成交明细",
+          curve: "权益曲线（最近）",
+          none: "暂无数据",
+          noTrades: "暂无成交。",
+          noPos: "暂无持仓",
+          heartbeat: "调仓间隔",
+          lastRun: "最近运行",
+          export: "导出成交",
+        }
+      : {
+          status: "Status",
+          equity: "Equity",
+          cash: "Cash",
+          pnl: "Return",
+          positions: "Positions",
+          trades: "Trades",
+          curve: "Equity (latest)",
+          none: "No data",
+          noTrades: "No trades yet.",
+          noPos: "No positions",
+          heartbeat: "Rebalance interval",
+          lastRun: "Last run",
+          export: "Export trades",
+        };
     const signalSource = session.signal_source || "unknown";
     const signalLabels = lang.startsWith("zh")
       ? { fresh: "新信号", fallback_cached: "回退信号", light_cached: "快速缓存", failure: "失败", unknown: "未知" }
@@ -90,6 +157,7 @@
           </li>`).join("")
       : `<li class="list-group-item text-muted">${labels.noTrades}</li>`;
 
+    const exportBase = `/api/v1/paper/sessions/${session.session_id}/trades/`;
     detailEl.innerHTML = `
       <div class="paper-detail-grid">
         <div>
@@ -159,6 +227,11 @@
 
       <div class="paper-detail-section">
         <p class="fw-semibold mb-2">${labels.trades}</p>
+        <div class="paper-export">
+          <span class="text-muted small">${labels.export}</span>
+          <a class="btn btn-outline-secondary btn-sm" target="_blank" rel="noopener" href="${exportBase}?format=csv">CSV</a>
+          <a class="btn btn-outline-secondary btn-sm" target="_blank" rel="noopener" href="${exportBase}?format=json">JSON</a>
+        </div>
         <ul class="list-group list-group-flush">
           ${tradesList}
         </ul>
@@ -200,6 +273,10 @@
           <span>${lang.startsWith("zh") ? "下次运行" : "Next run"} <strong>${formatTs(s.next_run_at)}</strong></span>
           <span>${lang.startsWith("zh") ? "信号" : "Signal"} <strong><span class="signal-pill source-${s.signal_source || "unknown"}">${signalLabels[s.signal_source || "unknown"] || signalLabels.unknown}</span></strong></span>
         </div>
+        <div class="paper-card-chart">
+          <canvas data-role="paper-sparkline" data-series="${encodeURIComponent(JSON.stringify(s.equity_preview || []))}"></canvas>
+          <span class="paper-card-chart-label">${lang.startsWith("zh") ? "权益趋势" : "Equity trend"}</span>
+        </div>
         <div class="paper-actions mt-2">
           <button type="button" class="btn btn-outline-secondary btn-sm" data-action="detail">${lang.startsWith("zh") ? "详情" : "Details"}</button>
           <button type="button" class="btn btn-outline-primary btn-sm" data-action="${s.status === "paused" ? "resume" : "pause"}">
@@ -210,6 +287,14 @@
         </div>
       </article>
     `).join("");
+    listEl.querySelectorAll('[data-role="paper-sparkline"]').forEach((canvas) => {
+      try {
+        const series = JSON.parse(decodeURIComponent(canvas.dataset.series || "[]"));
+        drawSparkline(canvas, series);
+      } catch (_error) {
+        // ignore parse failures
+      }
+    });
     listEl.querySelectorAll(".paper-card").forEach((card) => {
       const sessionId = card.dataset.sessionId;
       card.addEventListener("click", (evt) => {
@@ -236,9 +321,28 @@
     alertEl.textContent = "";
   };
 
+  const updatePager = (state) => {
+    if (!countEl) return;
+    const lang = (window.langPrefix || document.documentElement.lang || "zh").toLowerCase();
+    const total = state.total || 0;
+    const start = total ? state.offset + 1 : 0;
+    const end = Math.min(state.offset + state.limit, total);
+    countEl.textContent = lang.startsWith("zh")
+      ? `显示 ${start}-${end} / 共 ${total}`
+      : `Showing ${start}-${end} of ${total}`;
+    if (prevBtn) prevBtn.disabled = !state.hasPrev;
+    if (nextBtn) nextBtn.disabled = !state.hasNext;
+  };
+
   const loadSessions = async () => {
     try {
-      const resp = await fetch("/api/v1/paper/sessions/", {
+      const params = new URLSearchParams();
+      params.set("limit", String(listState.limit));
+      params.set("offset", String(listState.offset));
+      if (listState.query) params.set("q", listState.query);
+      if (listState.status && listState.status !== "all") params.set("status", listState.status);
+      if (listState.sort) params.set("sort", listState.sort);
+      const resp = await fetch(`/api/v1/paper/sessions/?${params.toString()}`, {
         credentials: "include",
         headers: { "X-Requested-With": "XMLHttpRequest" },
       });
@@ -255,6 +359,10 @@
         return;
       }
       renderSessions((data && data.sessions) || []);
+      listState.total = data.total || 0;
+      listState.hasNext = Boolean(data.has_next);
+      listState.hasPrev = Boolean(data.has_prev);
+      updatePager(listState);
     } catch (err) {
       console.error("Load sessions failed", err);
       handleError("加载模拟盘列表失败，请稍后重试。");
@@ -391,6 +499,46 @@
 
   if (form) {
     form.addEventListener("submit", submitForm);
+  }
+
+  if (searchInput) {
+    let timer = null;
+    searchInput.addEventListener("input", () => {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        listState.query = (searchInput.value || "").trim();
+        listState.offset = 0;
+        loadSessions();
+      }, 250);
+    });
+  }
+  if (statusSelect) {
+    statusSelect.addEventListener("change", () => {
+      listState.status = statusSelect.value || "all";
+      listState.offset = 0;
+      loadSessions();
+    });
+  }
+  if (sortSelect) {
+    sortSelect.addEventListener("change", () => {
+      listState.sort = sortSelect.value || "updated";
+      listState.offset = 0;
+      loadSessions();
+    });
+  }
+  if (prevBtn) {
+    prevBtn.addEventListener("click", () => {
+      if (!listState.hasPrev) return;
+      listState.offset = Math.max(0, listState.offset - listState.limit);
+      loadSessions();
+    });
+  }
+  if (nextBtn) {
+    nextBtn.addEventListener("click", () => {
+      if (!listState.hasNext) return;
+      listState.offset = listState.offset + listState.limit;
+      loadSessions();
+    });
   }
 
   loadSessions();

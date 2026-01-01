@@ -20,6 +20,10 @@ class BacktestRecord(models.Model):
     params = models.JSONField(default=dict)
     warnings = models.JSONField(default=list)
     snapshot = models.JSONField(default=dict)
+    title = models.CharField(max_length=120, blank=True, default="")
+    tags = models.JSONField(default=list, blank=True)
+    notes = models.TextField(blank=True, default="")
+    starred = models.BooleanField(default=False)
 
     class Meta:
         indexes = [
@@ -29,6 +33,26 @@ class BacktestRecord(models.Model):
 
     def __str__(self) -> str:  # pragma: no cover
         return f"{self.ticker} {self.start_date}->{self.end_date} ({self.user_id})"
+
+
+class StrategyPreset(models.Model):
+    preset_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="strategy_presets")
+    name = models.CharField(max_length=80)
+    description = models.CharField(max_length=200, blank=True, default="")
+    payload = models.JSONField(default=dict)
+    is_default = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        indexes = [
+            models.Index(fields=["user", "-updated_at"]),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover
+        return f"{self.name} ({self.user_id})"
 
 
 def generate_post_id() -> str:
@@ -48,6 +72,7 @@ class UserProfile(models.Model):
     avatar_path = models.CharField(max_length=255, blank=True, default="")
     feature_image_path = models.CharField(max_length=255, blank=True, default="")
     gallery_paths = models.JSONField(default=list, blank=True)
+    market_watchlist = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -79,6 +104,7 @@ class CommunityPost(models.Model):
     author_display_name = models.CharField(max_length=120)
     content = models.TextField()
     image_path = models.CharField(max_length=255, blank=True, default="")
+    backtest_record_id = models.CharField(max_length=64, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     liked_by = models.ManyToManyField(

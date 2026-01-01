@@ -12,7 +12,8 @@
 </head>
 <body class="bg-light"
       data-task-status-template="{% url 'trading:api_v1_task_status' task_id='TASK_ID_PLACEHOLDER' %}"
-      data-task-history-base="{% url 'trading:backtest' %}">
+      data-task-history-base="{% url 'trading:backtest' %}"
+      data-task-cancel-template="{% url 'trading:api_v1_task_cancel' task_id='TASK_ID_PLACEHOLDER' %}">
     <nav class="navbar navbar-expand-lg navbar-dark om-nav shadow-sm mb-4">
         <div class="container-xl">
             <a class="navbar-brand fw-semibold" href="{% url 'trading:backtest' %}">{% bilingual "Quant Trading Simulator" "量化交易模拟器" %}</a>

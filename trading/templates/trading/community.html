@@ -16,7 +16,8 @@
      data-like-endpoint="{% url 'trading:community_like' %}"
      data-comment-endpoint="{% url 'trading:community_comment' %}"
      data-active-topic-id="{{ active_topic.topic_id }}"
-     data-active-topic-name="{{ active_topic.name }}">
+     data-active-topic-name="{{ active_topic.name }}"
+     data-share-history-id="{{ share_history_id }}">
     <header class="community-hero">
         <div>
             <p class="community-kicker">Social Lounge</p>
@@ -111,6 +112,7 @@
                     <input type="hidden" name="action" value="create_post">
                     <input type="hidden" name="topic" value="{{ post_form.topic.value|default:active_topic.topic_id }}" data-role="topic-input">
                     <input type="hidden" name="image_cropped_data" value="{{ post_form.image_cropped_data.value|default_if_none:'' }}" data-role="cropped-data">
+                    <input type="hidden" name="backtest_record_id" value="{{ post_form.backtest_record_id.value|default_if_none:share_record.record_id|default_if_none:'' }}">
                     <div class="compose-topic-bar">
                         <span class="badge bg-primary-subtle text-primary-emphasis" data-role="selected-topic">
                             #{{ active_topic.name }}
@@ -141,6 +143,30 @@
                             </div>
                         </div>
                     </div>
+                    {% if share_record %}
+                    <div class="community-share-card">
+                        <div class="share-card-header">
+                            <span class="badge bg-success-subtle text-success-emphasis">{% bilingual "Backtest summary" "回测摘要" %}</span>
+                            <span class="text-muted small">ID {{ share_record.record_id }}</span>
+                        </div>
+                        <div class="share-card-body">
+                            <div class="share-card-main">
+                                <span class="share-card-ticker">{{ share_record.ticker|default:"--" }}</span>
+                                {% if share_record.engine %}
+                                    <span class="share-card-engine">{{ share_record.engine }}</span>
+                                {% endif %}
+                                <span class="share-card-period">{{ share_record.start_date|default:"--" }} → {{ share_record.end_date|default:"--" }}</span>
+                            </div>
+                            <div class="share-card-metrics">
+                                <div><span>{% bilingual "Return" "收益" %}</span><strong>{{ share_record.total_return }}</strong></div>
+                                <div><span>{% bilingual "Sharpe" "夏普" %}</span><strong>{{ share_record.sharpe }}</strong></div>
+                                <div><span>{% bilingual "Max drawdown" "最大回撤" %}</span><strong>{{ share_record.max_drawdown }}</strong></div>
+                                <div><span>{% bilingual "Volatility" "波动率" %}</span><strong>{{ share_record.volatility }}</strong></div>
+                            </div>
+                        </div>
+                        <p class="share-card-note">{% bilingual "Editing this post will not change the original history record." "编辑内容不会影响原回测记录。" %}</p>
+                    </div>
+                    {% endif %}
                     <div class="mb-3">
                         <label class="form-label">{% bilingual "Idea" "想法" %}</label>
                         <textarea name="content" rows="4" class="form-control"
@@ -203,6 +229,29 @@
                             </div>
                         </header>
                         <div class="community-post-body">
+                            {% if post.backtest_summary %}
+                            <div class="community-share-card is-inline">
+                                <div class="share-card-header">
+                                    <span class="badge bg-primary-subtle text-primary-emphasis">{% bilingual "Shared backtest" "回测分享" %}</span>
+                                    <span class="text-muted small">ID {{ post.backtest_summary.record_id }}</span>
+                                </div>
+                                <div class="share-card-body">
+                                    <div class="share-card-main">
+                                        <span class="share-card-ticker">{{ post.backtest_summary.ticker|default:"--" }}</span>
+                                        {% if post.backtest_summary.engine %}
+                                            <span class="share-card-engine">{{ post.backtest_summary.engine }}</span>
+                                        {% endif %}
+                                        <span class="share-card-period">{{ post.backtest_summary.start_date|default:"--" }} → {{ post.backtest_summary.end_date|default:"--" }}</span>
+                                    </div>
+                                    <div class="share-card-metrics">
+                                        <div><span>{% bilingual "Return" "收益" %}</span><strong>{{ post.backtest_summary.total_return }}</strong></div>
+                                        <div><span>{% bilingual "Sharpe" "夏普" %}</span><strong>{{ post.backtest_summary.sharpe }}</strong></div>
+                                        <div><span>{% bilingual "Max drawdown" "最大回撤" %}</span><strong>{{ post.backtest_summary.max_drawdown }}</strong></div>
+                                        <div><span>{% bilingual "Volatility" "波动率" %}</span><strong>{{ post.backtest_summary.volatility }}</strong></div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
                             <div class="community-post-content">{{ post.content|linebreaksbr }}</div>
                             {% if post.image_url %}
                                 <figure class="community-post-image">

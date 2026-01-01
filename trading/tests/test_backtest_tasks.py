@@ -111,6 +111,55 @@ class BacktestTaskApiTests(TestCase):
         self.assertEqual(payload["result"]["history_id"], "api-history")
         self.assertNotIn("result", payload["result"])
 
+    @override_settings(CELERY_TASK_ALWAYS_EAGER=True)
+    @mock.patch("trading.task_queue.execute_backtest")
+    def test_api_v1_backtest_accepts_advanced_fields(self, mock_execute):
+        mock_execute.return_value = {"history_id": "adv-history"}
+        payload = _form_payload()
+        payload.update(
+            {
+                "strategy_engine": "rl_policy",
+                "risk_profile": "aggressive",
+                "short_window": 20,
+                "long_window": 80,
+                "rsi_period": 14,
+                "volatility_target": 0.18,
+                "transaction_cost_bps": 9.5,
+                "slippage_bps": 6.0,
+                "min_holding_days": 2,
+                "entry_threshold": 0.62,
+                "exit_threshold": 0.38,
+                "optimize_thresholds": False,
+                "train_window": 360,
+                "test_window": 30,
+                "val_ratio": 0.25,
+                "embargo_days": 5,
+                "auto_apply_best_config": False,
+                "enable_hyperopt": True,
+                "hyperopt_trials": 12,
+                "hyperopt_timeout": 120,
+                "max_leverage": 2.2,
+                "max_drawdown_stop": 0.2,
+                "daily_exposure_limit": 1.1,
+                "allow_short": False,
+                "execution_delay_days": 3,
+            }
+        )
+        response = self.client.post(
+            reverse("trading:api_v1_backtest_tasks"),
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        submitted = mock_execute.call_args[0][0]
+        self.assertEqual(submitted["strategy_engine"], "rl_policy")
+        self.assertEqual(submitted["risk_profile"], "aggressive")
+        self.assertEqual(submitted["short_window"], 20)
+        self.assertEqual(submitted["long_window"], 80)
+        self.assertEqual(submitted["rsi_period"], 14)
+        self.assertEqual(submitted["execution_delay_days"], 3)
+        self.assertFalse(submitted["allow_short"])
+
     def test_api_v1_task_status_endpoint(self):
         response = self.client.get(reverse("trading:api_v1_task_status", kwargs={"task_id": "sync-test"}))
         self.assertEqual(response.status_code, 200)

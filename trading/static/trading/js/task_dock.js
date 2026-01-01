@@ -7,6 +7,7 @@
     const bodyDataset = document.body ? document.body.dataset || {} : {};
     const statusTemplate = bodyDataset.taskStatusTemplate || "";
     const historyBase = bodyDataset.taskHistoryBase || "";
+    const cancelTemplate = bodyDataset.taskCancelTemplate || "";
     const pollInterval = 5000;
     const statusLabels = langIsZh
         ? {
@@ -14,6 +15,7 @@
               SUBMITTED: "已提交",
               PENDING: "已排队",
               STARTED: "运行中",
+              PROGRESS: "运行中",
               RETRY: "重试中",
               SUCCESS: "已完成",
               FAILURE: "执行失败",
@@ -24,13 +26,28 @@
               SUBMITTED: "Submitted",
               PENDING: "Queued",
               STARTED: "Running",
+              PROGRESS: "Running",
               RETRY: "Retrying",
               SUCCESS: "Complete",
               FAILURE: "Failed",
               REVOKED: "Cancelled",
           };
+    const stageLabels = langIsZh
+        ? {
+              bootstrap: "准备中",
+              finalizing: "收尾中",
+              benchmark: "评估中",
+              rl_pipeline: "强化学习中",
+          }
+        : {
+              bootstrap: "Bootstrapping",
+              finalizing: "Finalizing",
+              benchmark: "Benchmarking",
+              rl_pipeline: "RL pipeline",
+          };
 
     const labelForStatus = (status) => statusLabels[status] || (langIsZh ? "排队中" : "Queued");
+    const labelForStage = (stage) => stageLabels[stage] || stage || "";
     const statusClassFor = (status) => {
         if (status === "SUCCESS") return "success";
         if (status === "FAILURE" || status === "REVOKED") return "failure";
@@ -80,6 +97,11 @@
         fallback();
     };
 
+    const getCsrfToken = () => {
+        const match = document.cookie.match(/csrftoken=([^;]+)/i);
+        return match ? decodeURIComponent(match[1]) : "";
+    };
+
     const loadStore = () => {
         try {
             const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
@@ -108,6 +130,10 @@
     const buildStatusUrl = (taskId) =>
         statusTemplate && taskId
             ? statusTemplate.replace("TASK_ID_PLACEHOLDER", encodeURIComponent(taskId))
+            : "";
+    const buildCancelUrl = (taskId) =>
+        cancelTemplate && taskId
+            ? cancelTemplate.replace("TASK_ID_PLACEHOLDER", encodeURIComponent(taskId))
             : "";
 
 const dock =
@@ -203,6 +229,16 @@ const showToast = (task) => {
             const statusText = labelForStatus(normalizedStatus);
             const rawId = task.taskId && task.taskId.trim() ? task.taskId : shouldHideId(mapId) ? "" : mapId;
             const shortId = rawId ? shortenId(rawId) : "";
+            const progressValue =
+                typeof task.progress === "number" && !Number.isNaN(task.progress)
+                    ? Math.max(0, Math.min(100, task.progress))
+                    : null;
+            const stageLabel = labelForStage(task.stage || (task.meta && task.meta.stage));
+            const progressNote = stageLabel
+                ? `${stageLabel}${progressValue !== null ? ` · ${Math.round(progressValue)}%` : ""}`
+                : progressValue !== null
+                  ? `${Math.round(progressValue)}%`
+                  : "";
             pill.innerHTML = `
                 <h6>
                     ${label}
@@ -214,6 +250,12 @@ const showToast = (task) => {
                     ${task.created ? `<span>${task.created}</span>` : ""}
                     ${task.link ? `<a href="${task.link}" target="_blank" rel="noopener">${langIsZh ? "查看报告" : "View report"}</a>` : ""}
                 </div>
+                ${
+                    progressValue !== null
+                        ? `<div class="task-progress"><div class="task-progress-bar" style="width:${progressValue}%"></div></div>`
+                        : ""
+                }
+                ${progressNote ? `<div class="task-progress-note">${progressNote}</div>` : ""}
             `;
             const actions = document.createElement("div");
             actions.className = "task-actions";
@@ -227,6 +269,42 @@ const showToast = (task) => {
                     copyTaskId(rawId, copyBtn);
                 });
                 actions.appendChild(copyBtn);
+            }
+            if (rawId && cancelTemplate && !shouldHideId(rawId)) {
+                const isTerminal = ["SUCCESS", "FAILURE", "REVOKED"].includes(normalizedStatus);
+                if (!isTerminal) {
+                    const cancelBtn = document.createElement("button");
+                    cancelBtn.type = "button";
+                    cancelBtn.className = "task-cancel";
+                    cancelBtn.textContent = langIsZh ? "取消" : "Cancel";
+                    cancelBtn.addEventListener("click", (event) => {
+                        event.stopPropagation();
+                        cancelBtn.disabled = true;
+                        cancelBtn.textContent = langIsZh ? "取消中..." : "Cancelling...";
+                        const url = buildCancelUrl(rawId);
+                        if (!url) return;
+                        fetch(url, {
+                            method: "POST",
+                            headers: {
+                                "X-CSRFToken": getCsrfToken(),
+                                "X-Requested-With": "XMLHttpRequest",
+                            },
+                        })
+                            .then((res) => res.json().catch(() => ({})))
+                            .then((data) => {
+                                updateTask(mapId, {
+                                    status: data.state || "REVOKED",
+                                    message: langIsZh ? "已取消" : "Cancelled",
+                                    taskId: rawId,
+                                });
+                            })
+                            .catch(() => {
+                                cancelBtn.disabled = false;
+                                cancelBtn.textContent = langIsZh ? "取消" : "Cancel";
+                            });
+                    });
+                    actions.appendChild(cancelBtn);
+                }
             }
             const dismiss = document.createElement("button");
             dismiss.textContent = langIsZh ? "移除" : "Dismiss";
@@ -267,6 +345,15 @@ const updateTask = (taskId, data) => {
         } else if (existing.taskId) {
             merged.taskId = existing.taskId;
         }
+        if (data && data.meta) {
+            merged.meta = { ...(existing.meta || {}), ...(data.meta || {}) };
+            if (typeof data.meta.progress === "number") {
+                merged.progress = data.meta.progress;
+            }
+            if (data.meta.stage) {
+                merged.stage = data.meta.stage;
+            }
+        }
     tasks.set(taskId, merged);
     if (merged.status === "SUCCESS" && existing.status !== "SUCCESS") {
         showToast(merged);
@@ -292,12 +379,17 @@ const updateTask = (taskId, data) => {
             .then((res) => res.json().catch(() => ({})))
             .then((data) => {
                 const state = data.state || "";
+                const meta = data.meta || {};
+                const progress =
+                    typeof meta.progress === "number" && !Number.isNaN(meta.progress) ? meta.progress : null;
+                const stage = meta.stage || meta.detail || "";
                 if (state === "SUCCESS") {
                     const hid = data.result && data.result.history_id;
                     updateTask(taskId, {
                         status: "SUCCESS",
                         message: langIsZh ? "任务完成，可查看报告。" : "Task complete.",
                         link: hid ? `${historyBase}?history_id=${encodeURIComponent(hid)}` : null,
+                        progress: 100,
                         taskId,
                     });
                     return;
@@ -306,6 +398,7 @@ const updateTask = (taskId, data) => {
                     updateTask(taskId, {
                         status: "FAILURE",
                         message: data.error || (langIsZh ? "执行失败" : "Failed"),
+                        progress,
                         taskId,
                     });
                     return;
@@ -313,13 +406,16 @@ const updateTask = (taskId, data) => {
                 updateTask(taskId, {
                     status: state || "PENDING",
                     message:
-                        state === "STARTED"
+                        state === "STARTED" || state === "PROGRESS"
                             ? langIsZh
-                                ? "运行中…"
-                                : "Running…"
+                                ? "运行中..."
+                                : "Running..."
                             : langIsZh
-                            ? "已排队…"
-                            : "Queued…",
+                            ? "已排队..."
+                            : "Queued...",
+                    progress,
+                    stage,
+                    meta,
                     taskId,
                 });
                 window.setTimeout(() => pollTask(taskId), pollInterval);

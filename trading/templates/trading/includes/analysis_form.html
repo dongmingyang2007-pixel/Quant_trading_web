@@ -130,12 +130,260 @@
                     {% endif %}
                 </div>
             </div>
+            <div class="border rounded-4 p-3 mt-4 backtest-presets"
+                 data-role="preset-panel"
+                 data-api-endpoint="{% url 'trading:api_v1_presets' %}"
+                 data-detail-template="{% url 'trading:api_v1_preset_detail' preset_id='PRESET_ID' %}">
+                <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                    <div>
+                        <h3 class="h6 mb-1">{% if lang_prefix == 'zh' %}策略预设{% else %}Strategy presets{% endif %}</h3>
+                        <p class="text-muted small mb-0">
+                            {% if lang_prefix == 'zh' %}
+                                保存常用回测配置，快速应用与管理。
+                            {% else %}
+                                Save frequently used configs to apply or manage quickly.
+                            {% endif %}
+                        </p>
+                    </div>
+                </div>
+                <div class="row g-3 mt-1">
+                    <div class="col-12 col-md-6">
+                        <label class="form-label">{% if lang_prefix == 'zh' %}选择预设{% else %}Select preset{% endif %}</label>
+                        <select class="form-select" data-role="preset-select">
+                            <option value="">{% if lang_prefix == 'zh' %}请选择预设{% else %}Choose a preset{% endif %}</option>
+                        </select>
+                    </div>
+                    <div class="col-12 col-md-6">
+                        <label class="form-label">{% if lang_prefix == 'zh' %}预设名称{% else %}Preset name{% endif %}</label>
+                        <input type="text"
+                               class="form-control"
+                               data-role="preset-name"
+                               placeholder="{% if lang_prefix == 'zh' %}例如：波动率稳健策略{% else %}e.g. Balanced Volatility{% endif %}">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">{% if lang_prefix == 'zh' %}预设描述{% else %}Preset description{% endif %}</label>
+                        <input type="text"
+                               class="form-control"
+                               data-role="preset-description"
+                               placeholder="{% if lang_prefix == 'zh' %}添加简短说明（可选）{% else %}Add a short note (optional){% endif %}">
+                    </div>
+                    <div class="col-12 d-flex flex-wrap align-items-center gap-2">
+                        <button type="button" class="btn btn-outline-primary btn-sm" data-role="preset-apply">
+                            {% if lang_prefix == 'zh' %}应用预设{% else %}Apply preset{% endif %}
+                        </button>
+                        <button type="button" class="btn btn-primary btn-sm" data-role="preset-save">
+                            {% if lang_prefix == 'zh' %}保存预设{% else %}Save preset{% endif %}
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-role="preset-toggle">
+                            {% if lang_prefix == 'zh' %}管理预设{% else %}Manage presets{% endif %}
+                        </button>
+                        <div class="form-check ms-auto">
+                            <input class="form-check-input" type="checkbox" id="preset-default-flag" data-role="preset-default">
+                            <label class="form-check-label" for="preset-default-flag">
+                                {% if lang_prefix == 'zh' %}设为默认{% else %}Set as default{% endif %}
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <div class="alert alert-info d-none" data-role="preset-status"></div>
+                    </div>
+                </div>
+                <div class="mt-3 d-none" data-role="preset-manage">
+                    <div class="d-flex align-items-center justify-content-between mb-2">
+                        <strong>{% if lang_prefix == 'zh' %}预设库{% else %}Preset library{% endif %}</strong>
+                        <button type="button" class="btn btn-link btn-sm text-decoration-none" data-role="preset-hide">
+                            {% if lang_prefix == 'zh' %}收起{% else %}Hide{% endif %}
+                        </button>
+                    </div>
+                    <div class="list-group" data-role="preset-list"></div>
+                </div>
+            </div>
+            <div class="accordion mt-4" id="advanced-settings">
+                <div class="accordion-item border-0">
+                    <h2 class="accordion-header" id="advanced-settings-heading">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#advanced-settings-panel" aria-expanded="false" aria-controls="advanced-settings-panel">
+                            {% if lang_prefix == 'zh' %}高级设置{% else %}Advanced settings{% endif %}
+                        </button>
+                    </h2>
+                    <div id="advanced-settings-panel" class="accordion-collapse collapse" aria-labelledby="advanced-settings-heading" data-bs-parent="#advanced-settings">
+                        <div class="accordion-body">
+                            <div class="row g-3">
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label" for="{{ form.strategy_engine.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}策略引擎{% else %}Strategy engine{% endif %}
+                                    </label>
+                                    {{ form.strategy_engine }}
+                                    <div class="form-text">
+                                        {% if lang_prefix == 'zh' %}选择本次回测的核心策略引擎。{% else %}Pick the core engine for this run.{% endif %}
+                                    </div>
+                                </div>
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label" for="{{ form.risk_profile.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}风险偏好{% else %}Risk profile{% endif %}
+                                    </label>
+                                    {{ form.risk_profile }}
+                                    <div class="form-text">
+                                        {% if lang_prefix == 'zh' %}决定风控与仓位尺度风格。{% else %}Sets risk budget and sizing style.{% endif %}
+                                    </div>
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.short_window.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}短期均线窗口{% else %}Short window{% endif %}
+                                    </label>
+                                    {{ form.short_window }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.long_window.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}长期均线窗口{% else %}Long window{% endif %}
+                                    </label>
+                                    {{ form.long_window }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.rsi_period.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}RSI 周期{% else %}RSI period{% endif %}
+                                    </label>
+                                    {{ form.rsi_period }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.volatility_target.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}目标波动率{% else %}Volatility target{% endif %}
+                                    </label>
+                                    {{ form.volatility_target }}
+                                    <div class="form-text">{% if lang_prefix == 'zh' %}0-1 之间。{% else %}Range 0-1.{% endif %}</div>
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.transaction_cost_bps.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}交易成本（bps）{% else %}Transaction cost (bps){% endif %}
+                                    </label>
+                                    {{ form.transaction_cost_bps }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.slippage_bps.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}滑点（bps）{% else %}Slippage (bps){% endif %}
+                                    </label>
+                                    {{ form.slippage_bps }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.min_holding_days.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}最短持仓天数{% else %}Min holding days{% endif %}
+                                    </label>
+                                    {{ form.min_holding_days }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.execution_delay_days.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}执行延迟（天）{% else %}Execution delay (days){% endif %}
+                                    </label>
+                                    {{ form.execution_delay_days }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.max_leverage.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}最大杠杆{% else %}Max leverage{% endif %}
+                                    </label>
+                                    {{ form.max_leverage }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.entry_threshold.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}入场阈值{% else %}Entry threshold{% endif %}
+                                    </label>
+                                    {{ form.entry_threshold }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.exit_threshold.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}离场阈值{% else %}Exit threshold{% endif %}
+                                    </label>
+                                    {{ form.exit_threshold }}
+                                </div>
+                                <div class="col-12 col-md-4 d-flex align-items-end">
+                                    <div class="form-check">
+                                        {{ form.optimize_thresholds }}
+                                        <label class="form-check-label" for="{{ form.optimize_thresholds.id_for_label }}">
+                                            {% if lang_prefix == 'zh' %}优化阈值{% else %}Optimize thresholds{% endif %}
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.train_window.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}训练窗口{% else %}Train window{% endif %}
+                                    </label>
+                                    {{ form.train_window }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.test_window.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}测试窗口{% else %}Test window{% endif %}
+                                    </label>
+                                    {{ form.test_window }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.val_ratio.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}验证集比例{% else %}Validation ratio{% endif %}
+                                    </label>
+                                    {{ form.val_ratio }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.embargo_days.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}隔离期{% else %}Embargo days{% endif %}
+                                    </label>
+                                    {{ form.embargo_days }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.max_drawdown_stop.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}最大回撤止损{% else %}Max drawdown stop{% endif %}
+                                    </label>
+                                    {{ form.max_drawdown_stop }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.daily_exposure_limit.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}日内暴露上限{% else %}Daily exposure limit{% endif %}
+                                    </label>
+                                    {{ form.daily_exposure_limit }}
+                                </div>
+                                <div class="col-12 col-md-6">
+                                    <div class="form-check">
+                                        {{ form.auto_apply_best_config }}
+                                        <label class="form-check-label" for="{{ form.auto_apply_best_config.id_for_label }}">
+                                            {% if lang_prefix == 'zh' %}自动套用最优配置{% else %}Auto-apply best config{% endif %}
+                                        </label>
+                                    </div>
+                                    <div class="form-check mt-2">
+                                        {{ form.enable_hyperopt }}
+                                        <label class="form-check-label" for="{{ form.enable_hyperopt.id_for_label }}">
+                                            {% if lang_prefix == 'zh' %}启用超参搜索{% else %}Enable hyperopt{% endif %}
+                                        </label>
+                                    </div>
+                                    <div class="form-check mt-2">
+                                        {{ form.allow_short }}
+                                        <label class="form-check-label" for="{{ form.allow_short.id_for_label }}">
+                                            {% if lang_prefix == 'zh' %}允许做空{% else %}Allow short selling{% endif %}
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label" for="{{ form.hyperopt_trials.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}超参搜索次数{% else %}Hyperopt trials{% endif %}
+                                    </label>
+                                    {{ form.hyperopt_trials }}
+                                    <label class="form-label mt-3" for="{{ form.hyperopt_timeout.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}超参搜索超时（秒）{% else %}Hyperopt timeout (sec){% endif %}
+                                    </label>
+                                    {{ form.hyperopt_timeout }}
+                                </div>
+                            </div>
+                            <div class="d-flex justify-content-end mt-3">
+                                <button type="button" class="btn btn-outline-secondary btn-sm" data-role="advanced-reset">
+                                    {% if lang_prefix == 'zh' %}恢复默认值{% else %}Reset defaults{% endif %}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
             <div class="d-flex justify-content-end mt-4">
                 <button type="submit" class="btn btn-primary btn-lg px-4">
                     <span class="me-1">📊</span>{% if lang_prefix == 'zh' %}生成量化报告{% else %}Generate report{% endif %}
                 </button>
             </div>
         </form>
+        {{ advanced_defaults|json_script:"advanced-strategy-defaults" }}
         {% endwith %}
     </div>
 </div>

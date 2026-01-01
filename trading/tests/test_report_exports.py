@@ -5,9 +5,11 @@ import json
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 from unittest import mock
 
 from trading.reporting import ReportRenderingError
+from trading.models import BacktestRecord as BacktestRecordModel
 
 
 def _snapshot():
@@ -54,3 +56,25 @@ class ReportExportTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["X-Export-Fallback"], "html")
         self.assertIn("text/html", response["Content-Type"])
+
+    def test_export_history_id_snapshot(self):
+        record = BacktestRecordModel.objects.create(
+            record_id="hist-export-1",
+            user=self.user,
+            timestamp=timezone.now(),
+            ticker="AAPL",
+            benchmark="SPY",
+            engine="sma",
+            start_date="2023-01-01",
+            end_date="2023-06-30",
+            metrics=[],
+            stats={},
+            params={},
+            warnings=[],
+            snapshot=_snapshot(),
+        )
+        url = reverse("trading:export_report") + f"?format=json&history_id={record.record_id}"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("application/json", response["Content-Type"])
+        self.assertIn("AAPL", response.content.decode("utf-8"))

@@ -195,6 +195,71 @@
     gap: 16px;
 }
 
+.community-share-card {
+    border-radius: 18px;
+    padding: 14px 16px;
+    border: 1px solid rgba(59, 130, 246, 0.18);
+    background: rgba(239, 246, 255, 0.7);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.community-share-card.is-inline {
+    margin-bottom: 14px;
+}
+
+.share-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.share-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.share-card-main {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.share-card-engine,
+.share-card-period {
+    font-weight: 500;
+    color: #475569;
+}
+
+.share-card-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 8px;
+    font-size: 0.85rem;
+    color: #334155;
+}
+
+.share-card-metrics div {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 6px 10px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.share-card-note {
+    margin: 0;
+    font-size: 0.82rem;
+    color: #64748b;
+}
+
 .compose-topic-bar {
     display: flex;
     align-items: center;

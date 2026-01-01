@@ -27,6 +27,10 @@ class BacktestRecord:
     params: dict[str, Any]
     warnings: list[str]
     snapshot: dict[str, Any]
+    title: str
+    tags: list[str]
+    notes: str
+    starred: bool
     user_id: Optional[str] = None
     record_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
@@ -49,6 +53,12 @@ class BacktestRecord:
         warnings = payload.get("warnings", [])
         params = {k: v for k, v in (payload.get("params") or {}).items() if v is not None}
         snapshot = payload.get("snapshot") or payload
+        title = str(payload.get("title") or "").strip()
+        if not title:
+            title = f"{ticker} · {engine or 'Strategy'}"
+        tags = _normalize_tags(payload.get("tags"))
+        notes = str(payload.get("notes") or "").strip()
+        starred = bool(payload.get("starred") or False)
         return cls(
             timestamp=timestamp,
             ticker=ticker,
@@ -61,6 +71,10 @@ class BacktestRecord:
             params=params,
             warnings=warnings,
             snapshot=snapshot,
+            title=title,
+            tags=tags,
+            notes=notes,
+            starred=starred,
             user_id=user_id,
         )
 
@@ -86,6 +100,10 @@ def load_history(limit: int = 25, *, user_id: Optional[str] = None) -> list[dict
             "params": obj.params,
             "warnings": obj.warnings,
             "snapshot": obj.snapshot,
+            "title": obj.title,
+            "tags": obj.tags,
+            "notes": obj.notes,
+            "starred": obj.starred,
             "user_id": str(obj.user_id),
         }
         for obj in qs
@@ -148,6 +166,10 @@ def append_history(record: BacktestRecord) -> None:
                 "params": record.params,
                 "warnings": record.warnings,
                 "snapshot": record.snapshot,
+                "title": record.title,
+                "tags": record.tags,
+                "notes": record.notes,
+                "starred": record.starred,
             },
         )
     except (ValueError, IntegrityError):
@@ -178,6 +200,10 @@ def get_history_record(record_id: str, *, user_id: Optional[str] = None) -> Opti
         "params": obj.params,
         "warnings": obj.warnings,
         "snapshot": obj.snapshot,
+        "title": obj.title,
+        "tags": obj.tags,
+        "notes": obj.notes,
+        "starred": obj.starred,
         "user_id": str(obj.user_id),
     }
 
@@ -187,6 +213,56 @@ def delete_history_record(record_id: str, *, user_id: Optional[str] = None) -> b
         return False
     deleted, _ = BacktestRecordModel.objects.filter(record_id=record_id, user_id=user_id).delete()
     return bool(deleted)
+
+
+def update_history_meta(
+    record_id: str,
+    *,
+    user_id: Optional[str],
+    title: Optional[str] = None,
+    tags: Optional[list[str]] = None,
+    notes: Optional[str] = None,
+    starred: Optional[bool] = None,
+) -> Optional[dict[str, Any]]:
+    if not user_id:
+        return None
+    obj = BacktestRecordModel.objects.filter(record_id=record_id, user_id=user_id).first()
+    if not obj:
+        return None
+    update_fields = []
+    if title is not None:
+        obj.title = title
+        update_fields.append("title")
+    if tags is not None:
+        obj.tags = tags
+        update_fields.append("tags")
+    if notes is not None:
+        obj.notes = notes
+        update_fields.append("notes")
+    if starred is not None:
+        obj.starred = bool(starred)
+        update_fields.append("starred")
+    if update_fields:
+        obj.save(update_fields=update_fields)
+    return {
+        "record_id": obj.record_id,
+        "title": obj.title,
+        "tags": obj.tags,
+        "notes": obj.notes,
+        "starred": obj.starred,
+    }
+
+
+def _normalize_tags(raw: Any) -> list[str]:
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        values = [item.strip() for item in raw.replace("，", ",").split(",")]
+        return [item for item in values if item]
+    if isinstance(raw, (list, tuple, set)):
+        values = [str(item).strip() for item in raw if str(item).strip()]
+        return values
+    return []
 
 
 def _compact_interactive_chart(value: Any, *, max_points: int = 800) -> dict[str, Any]:

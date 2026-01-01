@@ -567,6 +567,16 @@ def serialize_session(session: PaperTradingSession, *, include_details: bool = F
     sig_source, sig_at = _extract_last_signal(session.config or {})
     last_signal = (session.config or {}).get("__last_signal") or {}
     last_skip = (session.config or {}).get("__last_skip") or {}
+    curve_preview = []
+    raw_curve = session.equity_curve or []
+    if isinstance(raw_curve, list):
+        for entry in raw_curve[-30:]:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                curve_preview.append(float(entry.get("equity") or 0))
+            except (TypeError, ValueError):
+                continue
     payload = {
         "session_id": str(session.session_id),
         "name": session.name,
@@ -588,6 +598,7 @@ def serialize_session(session: PaperTradingSession, *, include_details: bool = F
         "signal_confidence": last_signal.get("confidence"),
         "risk_guard": last_signal.get("risk_guard"),
         "last_skip": last_skip or None,
+        "equity_preview": curve_preview,
     }
     if include_details:
         curve = session.equity_curve or []

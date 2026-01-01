@@ -8,6 +8,7 @@ from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
 from django.utils.translation import gettext as _
 
+from ..history import get_history_record
 from ..reporting import (
     ReportRenderingError,
     build_report_context,
@@ -22,14 +23,26 @@ SUPPORTED_FORMATS = {"json", "html", "pdf", "csv"}
 
 @login_required
 def export_report(request):
-    raw_snapshot: Any = request.session.get("last_result")
-    if not raw_snapshot:
-        return HttpResponse(
-            _("暂无可导出的回测报告，请先生成一次策略分析。"),
-            status=404,
-            content_type="text/plain; charset=utf-8",
-        )
-    snapshot = load_snapshot(raw_snapshot)
+    history_id = request.GET.get("history_id")
+    snapshot: dict[str, Any] = {}
+    if history_id:
+        record = get_history_record(history_id, user_id=str(request.user.id))
+        if not record or not record.get("snapshot"):
+            return HttpResponse(
+                _("未找到对应的历史回测记录，请重新选择后再导出。"),
+                status=404,
+                content_type="text/plain; charset=utf-8",
+            )
+        snapshot = load_snapshot(record.get("snapshot"))
+    else:
+        raw_snapshot: Any = request.session.get("last_result")
+        if not raw_snapshot:
+            return HttpResponse(
+                _("暂无可导出的回测报告，请先生成一次策略分析。"),
+                status=404,
+                content_type="text/plain; charset=utf-8",
+            )
+        snapshot = load_snapshot(raw_snapshot)
     if not snapshot:
         return HttpResponse(
             _("当前回测数据无法解析，请重新生成一次策略分析。"),

@@ -690,9 +690,27 @@
 
 .market-card-foot {
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
     font-size: 0.78rem;
     color: #64748b;
+}
+.market-backtest {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(37, 99, 235, 0.25);
+    color: #1d4ed8;
+    font-weight: 600;
+    text-decoration: none;
+    background: rgba(37, 99, 235, 0.08);
+}
+.market-backtest:hover {
+    color: #1d4ed8;
+    background: rgba(37, 99, 235, 0.15);
 }
 .market-card--skeleton {
     pointer-events: none;

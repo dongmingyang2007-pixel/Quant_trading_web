@@ -1,28 +1,42 @@
 from __future__ import annotations
 
+import csv
+import io
 import logging
 from dataclasses import asdict
 from typing import Any
 from django.utils import timezone
+from django.db.models import Q
 
 from rest_framework import status
+from rest_framework.renderers import BaseRenderer, BrowsableAPIRenderer, JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.http import HttpResponse
 
 from ..observability import ensure_request_id
 from ..strategies import QuantStrategyError
 from ..task_queue import (
     SyncResult,
+    cancel_task,
     get_task_status,
     submit_backtest_task,
     submit_rl_task,
     submit_training_task,
 )
+from ..history import update_history_meta
 from ..views.api import _build_screener_snapshot
 from ..views.dashboard import build_strategy_input
+from ..models import StrategyPreset
 from paper.engine import create_session, serialize_session
-from paper.models import PaperTradingSession
-from .serializers import StrategyTaskSerializer, TrainingTaskSerializer, PaperSessionCreateSerializer
+from paper.models import PaperTradingSession, PaperTrade
+from .serializers import (
+    StrategyTaskSerializer,
+    TrainingTaskSerializer,
+    PaperSessionCreateSerializer,
+    StrategyPresetSerializer,
+    HistoryMetaSerializer,
+)
 from .throttles import TaskBurstThrottle
 
 
@@ -38,6 +52,20 @@ def _clamp_pagination(request, *, default_limit: int = 20, max_limit: int = 100)
     limit = max(1, min(max_limit, limit))
     offset = max(0, offset)
     return limit, offset
+
+
+class CsvRenderer(BaseRenderer):
+    media_type = "text/csv"
+    format = "csv"
+    charset = "utf-8"
+    render_style = "binary"
+
+    def render(self, data, media_type=None, renderer_context=None):
+        if data is None:
+            return b""
+        if isinstance(data, (bytes, bytearray)):
+            return data
+        return str(data).encode(self.charset or "utf-8")
 
 
 class BaseTaskAPIView(APIView):
@@ -113,6 +141,31 @@ class TaskStatusView(APIView):
         return Response(payload)
 
 
+class TaskCancelView(APIView):
+    def post(self, request, task_id: str):
+        payload = cancel_task(task_id)
+        payload["request_id"] = ensure_request_id(request)
+        return Response(payload)
+
+
+class HistoryMetaView(APIView):
+    def patch(self, request, record_id: str):
+        request_id = ensure_request_id(request)
+        if not request.user.is_authenticated:
+            return Response({"error": "auth_required", "request_id": request_id}, status=status.HTTP_401_UNAUTHORIZED)
+        serializer = HistoryMetaSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        payload = serializer.validated_data
+        if not payload:
+            return Response({"error": "empty_payload", "request_id": request_id}, status=status.HTTP_400_BAD_REQUEST)
+        updated = update_history_meta(record_id, user_id=str(request.user.id), **payload)
+        if not updated:
+            return Response({"error": "not_found", "request_id": request_id}, status=status.HTTP_404_NOT_FOUND)
+        response = dict(updated)
+        response["request_id"] = request_id
+        return Response(response)
+
+
 class ScreenerSnapshotView(APIView):
     """DRF wrapper for screener snapshot API under /api/v1."""
 
@@ -136,11 +189,19 @@ class PaperSessionView(APIView):
     def get(self, request):
         request_id = ensure_request_id(request)
         limit, offset = _clamp_pagination(request)
-        qs = (
-            PaperTradingSession.objects.filter(user=request.user)
-            .order_by("-updated_at")
-            .defer("equity_curve", "config")
-        )
+        qs = PaperTradingSession.objects.filter(user=request.user).order_by("-updated_at").defer("config")
+        status_filter = (request.GET.get("status") or "").strip().lower()
+        if status_filter and status_filter != "all":
+            status_values = [value.strip() for value in status_filter.split(",") if value.strip()]
+            qs = qs.filter(status__in=status_values)
+        query = (request.GET.get("q") or "").strip()
+        if query:
+            qs = qs.filter(Q(ticker__icontains=query) | Q(name__icontains=query))
+        sort = (request.GET.get("sort") or "updated").strip().lower()
+        if sort == "equity":
+            qs = qs.order_by("-last_equity", "-updated_at")
+        elif sort == "cash":
+            qs = qs.order_by("-current_cash", "-updated_at")
         total = qs.count()
         sessions = qs[offset : offset + limit]
         payload = {
@@ -148,7 +209,10 @@ class PaperSessionView(APIView):
             "limit": limit,
             "offset": offset,
             "next_offset": offset + len(sessions),
+            "prev_offset": max(0, offset - limit),
             "total": total,
+            "has_next": offset + len(sessions) < total,
+            "has_prev": offset > 0,
             "request_id": request_id,
         }
         return Response(payload)
@@ -220,3 +284,167 @@ class PaperSessionDetailView(APIView):
             return Response({"error": "not_found", "request_id": request_id}, status=status.HTTP_404_NOT_FOUND)
         session.delete()
         return Response({"deleted": True, "session_id": session_id, "request_id": request_id})
+
+
+class PaperSessionTradesView(APIView):
+    """Export trades for a paper session."""
+
+    renderer_classes = [JSONRenderer, BrowsableAPIRenderer, CsvRenderer]
+
+    def get(self, request, session_id: str):
+        request_id = ensure_request_id(request)
+        session = PaperTradingSession.objects.filter(session_id=str(session_id)).first()
+        if not session:
+            return Response({"error": "not_found", "request_id": request_id}, status=status.HTTP_404_NOT_FOUND)
+        if not request.user.is_authenticated or session.user_id != request.user.id:
+            return Response({"error": "forbidden", "request_id": request_id}, status=status.HTTP_403_FORBIDDEN)
+        limit, offset = _clamp_pagination(request, default_limit=200, max_limit=1000)
+        trades_qs = PaperTrade.objects.filter(session=session).order_by("-executed_at")
+        trades = trades_qs[offset : offset + limit]
+        fmt = (request.GET.get("format") or "csv").strip().lower()
+        payload = [
+            {
+                "symbol": trade.symbol,
+                "side": trade.side,
+                "quantity": float(trade.quantity),
+                "price": float(trade.price),
+                "notional": float(trade.notional),
+                "executed_at": trade.executed_at.isoformat(),
+            }
+            for trade in trades
+        ]
+        if fmt == "json":
+            return Response({"trades": payload, "request_id": request_id})
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(["symbol", "side", "quantity", "price", "notional", "executed_at"])
+        for row in payload:
+            writer.writerow(
+                [
+                    row["symbol"],
+                    row["side"],
+                    row["quantity"],
+                    row["price"],
+                    row["notional"],
+                    row["executed_at"],
+                ]
+            )
+        response = HttpResponse(buffer.getvalue(), content_type="text/csv; charset=utf-8")
+        response["Content-Disposition"] = f'attachment; filename="paper_trades_{session_id}.csv"'
+        response["X-Request-Id"] = request_id
+        return response
+
+
+class StrategyPresetView(APIView):
+    def get(self, request):
+        request_id = ensure_request_id(request)
+        if not request.user.is_authenticated:
+            return Response({"error": "auth_required", "request_id": request_id}, status=status.HTTP_401_UNAUTHORIZED)
+        presets = StrategyPreset.objects.filter(user=request.user).order_by("-updated_at")
+        payload = {
+            "presets": [
+                {
+                    "preset_id": preset.preset_id,
+                    "name": preset.name,
+                    "description": preset.description,
+                    "payload": preset.payload,
+                    "is_default": preset.is_default,
+                    "created_at": preset.created_at,
+                    "updated_at": preset.updated_at,
+                }
+                for preset in presets
+            ],
+            "request_id": request_id,
+        }
+        return Response(payload)
+
+    def post(self, request):
+        request_id = ensure_request_id(request)
+        if not request.user.is_authenticated:
+            return Response({"error": "auth_required", "request_id": request_id}, status=status.HTTP_401_UNAUTHORIZED)
+        serializer = StrategyPresetSerializer(
+            data=request.data, context={"language": getattr(request, "LANGUAGE_CODE", None)}
+        )
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        is_default = bool(data.get("is_default"))
+        if is_default:
+            StrategyPreset.objects.filter(user=request.user).update(is_default=False)
+        preset = StrategyPreset.objects.create(
+            user=request.user,
+            name=data["name"],
+            description=data.get("description", ""),
+            payload=data.get("payload") or {},
+            is_default=is_default,
+        )
+        response = {
+            "preset_id": preset.preset_id,
+            "name": preset.name,
+            "description": preset.description,
+            "payload": preset.payload,
+            "is_default": preset.is_default,
+            "created_at": preset.created_at,
+            "updated_at": preset.updated_at,
+            "request_id": request_id,
+        }
+        return Response(response, status=status.HTTP_201_CREATED)
+
+
+class StrategyPresetDetailView(APIView):
+    def _get_object(self, request, preset_id: str) -> StrategyPreset | None:
+        if not request.user.is_authenticated:
+            return None
+        return StrategyPreset.objects.filter(preset_id=preset_id, user=request.user).first()
+
+    def patch(self, request, preset_id: str):
+        request_id = ensure_request_id(request)
+        preset = self._get_object(request, preset_id)
+        if not preset:
+            return Response({"error": "not_found", "request_id": request_id}, status=status.HTTP_404_NOT_FOUND)
+        serializer = StrategyPresetSerializer(
+            preset,
+            data=request.data,
+            partial=True,
+            context={"language": getattr(request, "LANGUAGE_CODE", None)},
+        )
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        update_fields = []
+        if "name" in data:
+            preset.name = data["name"]
+            update_fields.append("name")
+        if "description" in data:
+            preset.description = data.get("description", "")
+            update_fields.append("description")
+        if "payload" in data:
+            preset.payload = data.get("payload") or {}
+            update_fields.append("payload")
+        if "is_default" in data:
+            preset.is_default = bool(data.get("is_default"))
+            update_fields.append("is_default")
+            if preset.is_default:
+                StrategyPreset.objects.filter(user=request.user).exclude(preset_id=preset.preset_id).update(
+                    is_default=False
+                )
+        if update_fields:
+            update_fields.append("updated_at")
+            preset.save(update_fields=update_fields)
+        response = {
+            "preset_id": preset.preset_id,
+            "name": preset.name,
+            "description": preset.description,
+            "payload": preset.payload,
+            "is_default": preset.is_default,
+            "created_at": preset.created_at,
+            "updated_at": preset.updated_at,
+            "request_id": request_id,
+        }
+        return Response(response)
+
+    def delete(self, request, preset_id: str):
+        request_id = ensure_request_id(request)
+        preset = self._get_object(request, preset_id)
+        if not preset:
+            return Response({"error": "not_found", "request_id": request_id}, status=status.HTTP_404_NOT_FOUND)
+        preset.delete()
+        return Response({"deleted": True, "preset_id": preset_id, "request_id": request_id})

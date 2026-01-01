@@ -22,6 +22,7 @@ from ..cache_utils import build_cache_key, cache_memoize
 from .. import market_data
 from ..observability import ensure_request_id, record_metric, track_latency
 from ..rate_limit import check_rate_limit, rate_limit_key
+from ..models import UserProfile
 
 try:
     import yfinance as yf  # type: ignore
@@ -189,7 +190,19 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
 
     session = request.session
     recent_queries: list[str] = list(session.get("market_recent_queries", []))
-    watchlist: list[str] = list(session.get("market_watchlist", []))
+    profile = None
+    watchlist: list[str] = []
+    if request.user.is_authenticated:
+        profile, _created = UserProfile.objects.get_or_create(user=request.user)
+        watchlist = list(profile.market_watchlist or [])
+    else:
+        watchlist = list(session.get("market_watchlist", []))
+    normalized_watch = []
+    for item in watchlist:
+        normalized = _normalize_query(str(item))
+        if normalized and normalized not in normalized_watch:
+            normalized_watch.append(normalized)
+    watchlist = normalized_watch
 
     mutations_enabled = request.method == "POST"
     recent_action = (params.get("recent") or "").lower() if mutations_enabled else ""
@@ -216,8 +229,12 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
             if watch_action == "add":
                 updated_watch.insert(0, resolved.query)
             watchlist = updated_watch[:10]
-            session["market_watchlist"] = watchlist
-            session_changed = True
+            if profile:
+                profile.market_watchlist = watchlist
+                profile.save(update_fields=["market_watchlist", "updated_at"])
+            else:
+                session["market_watchlist"] = watchlist
+                session_changed = True
 
         if session_changed:
             session["market_recent_queries"] = recent_queries

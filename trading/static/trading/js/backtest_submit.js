@@ -3,6 +3,15 @@
     if (!form) return;
 
     const langIsZh = (form.dataset.lang || document.documentElement.lang || '').toLowerCase().startsWith('zh');
+    const defaultsNode = document.getElementById('advanced-strategy-defaults');
+    let advancedDefaults = {};
+    if (defaultsNode) {
+        try {
+            advancedDefaults = JSON.parse(defaultsNode.textContent || '{}');
+        } catch (error) {
+            console.warn('Failed to parse advanced defaults', error);
+        }
+    }
 
     let activeDock = window.taskDock || null;
     const pendingDockOps = [];
@@ -67,6 +76,28 @@
         pageUnloading = true;
     });
 
+    const resetAdvancedDefaults = () => {
+        if (!advancedDefaults || typeof advancedDefaults !== 'object') return;
+        Object.entries(advancedDefaults).forEach(([key, value]) => {
+            const field = form.querySelector(`[name="${key}"]`);
+            if (!field) return;
+            if (field.type === 'checkbox') {
+                field.checked = Boolean(value);
+                field.dispatchEvent(new Event('change', { bubbles: true }));
+                return;
+            }
+            const option = field.tagName === 'SELECT' ? field.querySelector(`option[value="${value}"]`) : null;
+            if (option || field.tagName !== 'SELECT') {
+                field.value = value ?? '';
+                field.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        });
+    };
+    const resetButton = form.querySelector('[data-role="advanced-reset"]');
+    if (resetButton) {
+        resetButton.addEventListener('click', () => resetAdvancedDefaults());
+    }
+
     const asyncText = langIsZh
         ? {
               queue: '任务已排队，等待执行…',
@@ -123,22 +154,35 @@
             .then((res) => res.json().catch(() => ({})))
             .then((data) => {
                 const state = data.state || '';
+                const meta = data.meta || {};
+                const progress = typeof meta.progress === 'number' && !Number.isNaN(meta.progress) ? meta.progress : null;
                 if (state === 'SUCCESS') {
                     const historyId = data.result && data.result.history_id;
                     updateDockTask(taskId, {
                         status: 'SUCCESS',
                         message: asyncText.success,
                         link: historyId ? `${historyBase}?history_id=${encodeURIComponent(historyId)}` : null,
+                        progress: 100,
                         taskId,
                     });
                     return;
                 }
                 if (state === 'FAILURE' || state === 'REVOKED') {
-                    updateDockTask(taskId, { status: 'FAILURE', message: data.error || asyncText.failure, taskId });
+                    updateDockTask(taskId, {
+                        status: 'FAILURE',
+                        message: data.error || asyncText.failure,
+                        progress,
+                        taskId,
+                    });
                     return;
                 }
-                const runningMsg = state === 'STARTED' ? asyncText.running : state === 'RETRY' ? asyncText.retry : asyncText.queue;
-                updateDockTask(taskId, { status: state || 'PENDING', message: runningMsg, taskId });
+                const runningMsg =
+                    state === 'STARTED' || state === 'PROGRESS'
+                        ? asyncText.running
+                        : state === 'RETRY'
+                        ? asyncText.retry
+                        : asyncText.queue;
+                updateDockTask(taskId, { status: state || 'PENDING', message: runningMsg, progress, taskId });
                 // 继续轮询直到拿到终态，避免长任务或页面挂起后状态停留在排队/运行中
                 window.setTimeout(() => pollTask(taskId, startedAt), TASK_POLL_INTERVAL_MS);
             })

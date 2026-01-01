@@ -693,7 +693,9 @@
 {{ block.super }}
 <script src="{% static 'trading/js/vendor/lightweight-charts.standalone.production.js' %}"></script>
 <script src="{% static 'trading/js/history_delete.js' %}"></script>
+<script src="{% static 'trading/js/history_meta.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
 <script src="{% static 'trading/js/backtest_submit.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
+<script src="{% static 'trading/js/strategy_presets.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js" defer></script>
 <script src="{% static 'trading/js/portfolio_builder.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
 {% endblock %}

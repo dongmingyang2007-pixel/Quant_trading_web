@@ -110,7 +110,7 @@ def get_task_status(task_id: str) -> Dict[str, Any]:
             "error": "Task submission failed before a job id was created.",
         }
     if task_id.startswith("sync-"):
-        return {"task_id": task_id, "state": "SUCCESS"}
+        return {"task_id": task_id, "state": "SUCCESS", "meta": {"progress": 100}}
     if getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False) and not getattr(settings, "CELERY_TASK_STORE_EAGER_RESULT", False):
         return {
             "task_id": task_id,
@@ -121,9 +121,29 @@ def get_task_status(task_id: str) -> Dict[str, Any]:
         return {"task_id": task_id, "state": "UNKNOWN"}
     result = AsyncResult(task_id)
     payload: Dict[str, Any] = {"task_id": task_id, "state": result.state}
+    if result.info:
+        if isinstance(result.info, dict):
+            payload["meta"] = result.info
+        else:
+            payload["meta"] = {"detail": str(result.info)}
     if result.ready():
         try:
             payload["result"] = result.get(propagate=False)
         except Exception as exc:  # pragma: no cover
             payload["error"] = str(exc)
     return payload
+
+
+def cancel_task(task_id: str) -> Dict[str, Any]:
+    if task_id.startswith("pending-"):
+        return {"task_id": task_id, "state": "FAILURE", "error": "Task was never submitted."}
+    if task_id.startswith("sync-"):
+        return {"task_id": task_id, "state": "SUCCESS", "detail": "Sync tasks cannot be cancelled."}
+    if AsyncResult is None:
+        return {"task_id": task_id, "state": "UNKNOWN", "error": "Celery is not available."}
+    result = AsyncResult(task_id)
+    if result.state in {"SUCCESS", "FAILURE", "REVOKED"}:
+        return {"task_id": task_id, "state": result.state}
+    terminate = result.state in {"STARTED", "PROGRESS"}
+    result.revoke(terminate=terminate)
+    return {"task_id": task_id, "state": "REVOKED"}

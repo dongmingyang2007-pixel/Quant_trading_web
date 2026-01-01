@@ -105,6 +105,38 @@
                         <h2 class="h5 mb-0">{% bilingual "Sessions" "会话列表" %}</h2>
                         <span class="text-muted small">{% bilingual "Latest first, click for details" "最新优先，点击查看详情" %}</span>
                     </div>
+                    <div class="paper-session-toolbar">
+                        <div class="paper-session-filters">
+                            <input type="search"
+                                   class="form-control form-control-sm"
+                                   data-role="paper-search"
+                                   placeholder="{% bilingual 'Search ticker or name' '搜索标的或名称' %}">
+                            <select class="form-select form-select-sm" data-role="paper-status">
+                                <option value="all">{% bilingual "All statuses" "全部状态" %}</option>
+                                <option value="running">{% bilingual "Running" "运行中" %}</option>
+                                <option value="paused">{% bilingual "Paused" "已暂停" %}</option>
+                                <option value="stopped">{% bilingual "Stopped" "已停止" %}</option>
+                                <option value="error">{% bilingual "Error" "异常" %}</option>
+                                <option value="draft">{% bilingual "Draft" "草稿" %}</option>
+                            </select>
+                            <select class="form-select form-select-sm" data-role="paper-sort">
+                                <option value="updated">{% bilingual "Sort: latest" "排序：最新" %}</option>
+                                <option value="equity">{% bilingual "Sort: equity" "排序：权益" %}</option>
+                                <option value="cash">{% bilingual "Sort: cash" "排序：现金" %}</option>
+                            </select>
+                        </div>
+                        <div class="paper-session-pagination">
+                            <span class="text-muted small" data-role="paper-count"></span>
+                            <div class="btn-group btn-group-sm" role="group">
+                                <button type="button" class="btn btn-outline-secondary" data-role="paper-prev">
+                                    {% bilingual "Prev" "上一页" %}
+                                </button>
+                                <button type="button" class="btn btn-outline-secondary" data-role="paper-next">
+                                    {% bilingual "Next" "下一页" %}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                     <div class="paper-sessions" data-role="paper-session-list">
                         <p class="text-muted mb-0">{% bilingual "Loading sessions..." "正在加载会话..." %}</p>
                     </div>

@@ -121,6 +121,7 @@ def execute_rl_job(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @shared_task(
+    bind=True,
     autoretry_for=(Exception,),
     retry_backoff=10,
     retry_kwargs={"max_retries": 3},
@@ -128,11 +129,15 @@ def execute_rl_job(payload: Dict[str, Any]) -> Dict[str, Any]:
     ignore_result=False,
     queue="backtests",
 )
-def run_backtest_task(payload: Dict[str, Any]) -> Dict[str, Any]:
-    return execute_backtest(payload)
+def run_backtest_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    self.update_state(state="PROGRESS", meta={"progress": 10, "stage": "bootstrap"})
+    result = execute_backtest(payload)
+    self.update_state(state="PROGRESS", meta={"progress": 90, "stage": "finalizing"})
+    return result
 
 
 @shared_task(
+    bind=True,
     autoretry_for=(Exception,),
     retry_backoff=10,
     retry_kwargs={"max_retries": 3},
@@ -140,11 +145,15 @@ def run_backtest_task(payload: Dict[str, Any]) -> Dict[str, Any]:
     ignore_result=False,
     queue="training",
 )
-def run_training_task(payload: Dict[str, Any]) -> Dict[str, Any]:
-    return execute_training_job(payload)
+def run_training_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    self.update_state(state="PROGRESS", meta={"progress": 15, "stage": "benchmark"})
+    result = execute_training_job(payload)
+    self.update_state(state="PROGRESS", meta={"progress": 90, "stage": "finalizing"})
+    return result
 
 
 @shared_task(
+    bind=True,
     autoretry_for=(Exception,),
     retry_backoff=10,
     retry_kwargs={"max_retries": 3},
@@ -152,8 +161,11 @@ def run_training_task(payload: Dict[str, Any]) -> Dict[str, Any]:
     ignore_result=False,
     queue="rl",
 )
-def run_rl_task(payload: Dict[str, Any]) -> Dict[str, Any]:
-    return execute_rl_job(payload)
+def run_rl_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    self.update_state(state="PROGRESS", meta={"progress": 10, "stage": "rl_pipeline"})
+    result = execute_rl_job(payload)
+    self.update_state(state="PROGRESS", meta={"progress": 90, "stage": "finalizing"})
+    return result
 
 
 @shared_task(

@@ -553,6 +553,7 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
         "turnover": float(sum(abs(target_weights.get(k, 0.0) - current_weights.get(k, 0.0)) for k in set(target_weights) | set(current_weights))),
     }
     interactive_chart = build_interactive_chart_payload(prices, backtest, params)
+    return_series = _build_return_series(backtest)
     result_payload = {
         "ticker": params.ticker.upper(),
         "start_date": params.start_date.strftime("%Y-%m-%d"),
@@ -561,6 +562,7 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
         "benchmark_ticker": benchmark_label if benchmark_metrics else "",
         "benchmark_metrics": benchmark_metrics,
         "recent_rows": format_table(backtest),
+        "return_series": return_series,
         "warnings": warnings,
         "stats": stats,
         "benchmark_stats": benchmark_stats,
@@ -700,6 +702,47 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
     _sanitize_analysis_sections(result_payload)
     result_payload["task_feedback"] = {"remaining_steps": progress_plan["remaining"], "eta_seconds": progress_plan["eta_seconds"]}
     return result_payload
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(numeric):
+        return None
+    return numeric
+
+
+def _build_return_series(backtest: pd.DataFrame) -> list[dict[str, Any]]:
+    if backtest.empty:
+        return []
+    returns: pd.Series | None = None
+    if "strategy_return" in backtest.columns:
+        returns = backtest["strategy_return"].astype(float)
+    elif "daily_return" in backtest.columns:
+        returns = backtest["daily_return"].astype(float)
+    if returns is None:
+        return []
+    if "cum_strategy" in backtest.columns:
+        cum_strategy = backtest["cum_strategy"].astype(float)
+    else:
+        cum_strategy = (1 + returns.fillna(0.0)).cumprod()
+    cum_buy_hold = backtest["cum_buy_hold"].astype(float) if "cum_buy_hold" in backtest.columns else None
+    rows: list[dict[str, Any]] = []
+    for idx in backtest.index:
+        date_value = idx.strftime("%Y-%m-%d") if isinstance(idx, pd.Timestamp) else str(idx)
+        daily_return = _safe_float(returns.loc[idx])
+        entry = {"date": date_value, "daily_return": daily_return}
+        cum_value = _safe_float(cum_strategy.loc[idx])
+        if cum_value is not None:
+            entry["cum_strategy"] = cum_value
+        if cum_buy_hold is not None:
+            buy_hold_value = _safe_float(cum_buy_hold.loc[idx])
+            if buy_hold_value is not None:
+                entry["cum_buy_hold"] = buy_hold_value
+        rows.append(entry)
+    return rows
 
 
 def _sanitize_analysis_sections(payload: dict[str, Any]) -> None:

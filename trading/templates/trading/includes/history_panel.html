@@ -13,11 +13,43 @@
          data-compare-url="{{ compare_url }}">
         <div class="history-compare-status">
             <span class="history-compare-count" data-role="compare-count">0</span>
-            <span class="history-compare-note" data-role="compare-note">{% bilingual "Select 2-3 runs to start comparison." "请选择 2-3 条历史记录以开始对比" %}</span>
+            <span class="history-compare-note" data-role="compare-note">{% bilingual "Select 2-5 runs to start comparison." "请选择 2-5 条历史记录以开始对比" %}</span>
         </div>
         <button type="button" class="hero-button solid small" data-role="compare-launch" disabled>{% bilingual "Compare runs" "对比分析" %}</button>
     </div>
     {% endif %}
+    <div class="history-filter-bar" data-role="history-controls">
+        <div class="history-filter-field">
+            <label class="form-label small mb-1">{% bilingual "Search" "搜索" %}</label>
+            <input type="search"
+                   class="form-control form-control-sm"
+                   data-role="history-search"
+                   placeholder="{% bilingual 'Search title/ticker/tags' '搜索标题/代码/标签' %}">
+        </div>
+        <div class="history-filter-field">
+            <label class="form-label small mb-1">{% bilingual "Tag filter" "标签筛选" %}</label>
+            <select class="form-select form-select-sm" data-role="history-tag-filter">
+                <option value="">{% bilingual "All tags" "全部标签" %}</option>
+                {% for tag in history_tags %}
+                    <option value="{{ tag }}">{{ tag }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="history-filter-field">
+            <label class="form-label small mb-1">{% bilingual "Sort" "排序" %}</label>
+            <select class="form-select form-select-sm" data-role="history-sort">
+                <option value="newest">{% bilingual "Newest first" "最新优先" %}</option>
+                <option value="oldest">{% bilingual "Oldest first" "最早优先" %}</option>
+                <option value="starred">{% bilingual "Starred first" "收藏优先" %}</option>
+            </select>
+        </div>
+        <div class="form-check history-filter-toggle">
+            <input class="form-check-input" type="checkbox" id="{{ accordion_id }}-starred-only" data-role="history-star-filter">
+            <label class="form-check-label" for="{{ accordion_id }}-starred-only">
+                {% bilingual "Starred only" "仅显示收藏" %}
+            </label>
+        </div>
+    </div>
     <div class="history-accordion"
          id="{{ accordion_id }}"
          data-empty-id="{{ empty_id }}"
@@ -25,12 +57,31 @@
          data-delete-url-template="{{ delete_url_template }}"
          data-confirm-delete="{% bilingual 'Are you sure you want to delete this backtest? This action cannot be undone.' '确定删除该历史回测记录吗？此操作不可撤销。' %}"
          data-delete-failed="{% bilingual 'Delete failed. Please try again later.' '删除失败，请稍后重试。' %}"
-         data-delete-network="{% bilingual 'A network error occurred while deleting. Please try again.' '删除时发生网络错误，请稍后再试。' %}">
+         data-delete-network="{% bilingual 'A network error occurred while deleting. Please try again.' '删除时发生网络错误，请稍后再试。' %}"
+         data-meta-url-template="{% url 'trading:api_v1_history_meta' record_id='RECORD_ID' %}"
+         data-meta-saved="{% bilingual 'Metadata saved.' '元信息已保存。' %}"
+         data-meta-failed="{% bilingual 'Failed to save metadata.' '保存失败，请稍后重试。' %}">
         {% for history in history_runs %}
-            <details class="history-item history-details">
+            <details class="history-item history-details"
+                     data-record-id="{{ history.record_id }}"
+                     data-title="{{ history.title|default:''|escape }}"
+                     data-ticker="{{ history.ticker }}"
+                     data-engine="{{ history.engine }}"
+                     data-tags="{{ history.tags|join:', '|escape }}"
+                     data-notes="{{ history.notes|default:''|escape }}"
+                     data-starred="{{ history.starred|yesno:'true,false' }}"
+                     data-timestamp="{{ history.timestamp }}">
                 <summary>
                     <div class="history-meta">
-                        <span class="history-ticker">{{ history.ticker }}</span>
+                        <button type="button"
+                                class="history-star-toggle{% if history.starred %} is-active{% endif %}"
+                                data-role="history-star"
+                                aria-pressed="{% if history.starred %}true{% else %}false{% endif %}"
+                                aria-label="{% bilingual 'Toggle starred' '切换收藏' %}">
+                            ★
+                        </button>
+                        <span class="history-title" data-role="history-title-text">{{ history.title|default:history.ticker }}</span>
+                        <span class="history-ticker{% if not history.title %} d-none{% endif %}" data-role="history-ticker">{{ history.ticker }}</span>
                         <span class="history-engine">{{ history.engine }}</span>
                         <span class="history-period">{{ history.start_date }} → {{ history.end_date }}</span>
                         <span class="history-chevron" aria-hidden="true"></span>
@@ -47,14 +98,52 @@
                                    value="{{ history.record_id }}">
                             {% bilingual "Add to arena" "加入角斗场" %}
                         </label>
-                        <span class="history-compare-hint">{% bilingual "Up to 3 runs" "最多 3 条" %}</span>
+                        <span class="history-compare-hint">{% bilingual "Up to 5 runs" "最多 5 条" %}</span>
                     </div>
                     {% endif %}
                     <div class="history-actions">
                         <a href="{% if load_url %}{{ load_url }}?history_id={{ history.record_id }}{% else %}?history_id={{ history.record_id }}{% endif %}#history-pane"
                            class="hero-button ghost small history-view"
                            data-id="{{ history.record_id }}">{% bilingual "Load run" "载入回测" %}</a>
+                        <a href="{% url 'trading:community' %}?share_history_id={{ history.record_id }}"
+                           class="hero-button ghost small history-share">{% bilingual "Share to community" "分享社区" %}</a>
                         <button type="button" class="hero-button danger small history-delete" data-id="{{ history.record_id }}">{% bilingual "Delete" "删除" %}</button>
+                    </div>
+                    <div class="history-export">
+                        <span class="text-muted small">{% bilingual "Export" "导出" %}</span>
+                        <a class="hero-button ghost small" href="{% url 'trading:export_report' %}?history_id={{ history.record_id }}&format=pdf">PDF</a>
+                        <a class="hero-button ghost small" href="{% url 'trading:export_report' %}?history_id={{ history.record_id }}&format=csv">CSV</a>
+                        <a class="hero-button ghost small" href="{% url 'trading:export_report' %}?history_id={{ history.record_id }}&format=json">JSON</a>
+                        <a class="hero-button ghost small" href="{% url 'trading:export_report' %}?history_id={{ history.record_id }}&format=html">HTML</a>
+                    </div>
+                    <div class="history-meta-editor">
+                        <div class="row g-3 align-items-end">
+                            <div class="col-12 col-lg-4">
+                                <label class="form-label small">{% bilingual "Title" "标题" %}</label>
+                                <input type="text"
+                                       class="form-control form-control-sm"
+                                       data-role="history-title"
+                                       value="{{ history.title|default:'' }}">
+                            </div>
+                            <div class="col-12 col-lg-4">
+                                <label class="form-label small">{% bilingual "Tags" "标签" %}</label>
+                                <input type="text"
+                                       class="form-control form-control-sm"
+                                       data-role="history-tags"
+                                       value="{{ history.tags|join:', ' }}"
+                                       placeholder="{% bilingual 'Comma separated' '英文逗号分隔' %}">
+                            </div>
+                            <div class="col-12 col-lg-4 d-flex flex-wrap align-items-center gap-2">
+                                <button type="button" class="btn btn-outline-primary btn-sm" data-role="history-meta-save">
+                                    {% bilingual "Save meta" "保存元信息" %}
+                                </button>
+                                <span class="text-muted small" data-role="history-meta-status"></span>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small">{% bilingual "Notes" "备注" %}</label>
+                                <textarea class="form-control form-control-sm" rows="2" data-role="history-notes">{{ history.notes|default:'' }}</textarea>
+                            </div>
+                        </div>
                     </div>
                     <div class="history-grid">
                         <div>

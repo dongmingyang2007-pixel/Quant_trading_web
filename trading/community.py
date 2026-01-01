@@ -14,6 +14,7 @@ from .models import (
     CommunityPostComment,
     CommunityPostLike,
     CommunityTopic as CommunityTopicModel,
+    BacktestRecord as BacktestRecordModel,
 )
 from .storage_utils import delete_media_file
 from .observability import record_metric
@@ -32,6 +33,7 @@ class CommunityPost:
     content: str
     image_path: str | None
     created_at: str
+    backtest_record_id: str | None = None
     liked_by: list[str] = field(default_factory=list)
     comments: list[dict[str, Any]] = field(default_factory=list)
     like_events: list[dict[str, Any]] = field(default_factory=list)
@@ -63,6 +65,43 @@ class CommunityComment:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def _format_pct(value: Any, *, digits: int = 2) -> str:
+    try:
+        return f"{float(value) * 100:.{digits}f}%"
+    except (TypeError, ValueError):
+        return "--"
+
+
+def _format_float(value: Any, *, digits: int = 2) -> str:
+    try:
+        return f"{float(value):.{digits}f}"
+    except (TypeError, ValueError):
+        return "--"
+
+
+def _record_field(record: Any, key: str, default: Any = "") -> Any:
+    if isinstance(record, dict):
+        return record.get(key, default)
+    return getattr(record, key, default)
+
+
+def build_backtest_summary(record: Any) -> dict[str, Any]:
+    stats = _record_field(record, "stats") or {}
+    return {
+        "record_id": _record_field(record, "record_id", ""),
+        "ticker": _record_field(record, "ticker", ""),
+        "benchmark": _record_field(record, "benchmark", ""),
+        "engine": _record_field(record, "engine", ""),
+        "start_date": _record_field(record, "start_date", ""),
+        "end_date": _record_field(record, "end_date", ""),
+        "total_return": _format_pct(stats.get("total_return")),
+        "sharpe": _format_float(stats.get("sharpe")),
+        "max_drawdown": _format_pct(stats.get("max_drawdown")),
+        "volatility": _format_pct(stats.get("volatility")),
+        "cagr": _format_pct(stats.get("cagr")),
+    }
 
 
 def _ensure_default_topic() -> CommunityTopicModel:
@@ -142,7 +181,7 @@ def _serialize_comment(comment: CommunityPostComment) -> dict[str, Any]:
     }
 
 
-def _serialize_post(post: CommunityPostModel) -> dict[str, Any]:
+def _serialize_post(post: CommunityPostModel, *, backtest_summaries: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     profile = getattr(post.author, "profile", None)
     user_slug = str(profile.slug) if profile else ""
     avatar_path = ""
@@ -151,6 +190,9 @@ def _serialize_post(post: CommunityPostModel) -> dict[str, Any]:
     comments_qs = post.comments.all()
     comment_entries = [_serialize_comment(comment) for comment in comments_qs]
     liked_ids = [str(pk) for pk in post.liked_by.values_list("id", flat=True)]
+    summary = None
+    if backtest_summaries and post.backtest_record_id:
+        summary = backtest_summaries.get(post.backtest_record_id)
     return {
         "topic_id": post.topic.topic_id,
         "topic_name": post.topic.name,
@@ -161,6 +203,8 @@ def _serialize_post(post: CommunityPostModel) -> dict[str, Any]:
         "author": post.author_display_name,
         "content": post.content,
         "image_path": post.image_path or "",
+        "backtest_record_id": post.backtest_record_id or "",
+        "backtest_summary": summary,
         "created_at": post.created_at.strftime("%Y-%m-%d %H:%M UTC"),
         "liked_by": liked_ids,
         "like_count": len(liked_ids),
@@ -196,7 +240,13 @@ def list_posts(
         qs = qs.filter(author_id=user_id)
     if limit:
         qs = qs[:limit]
-    return [_serialize_post(post) for post in qs]
+    posts = list(qs)
+    backtest_summaries: dict[str, dict[str, Any]] = {}
+    record_ids = {post.backtest_record_id for post in posts if post.backtest_record_id}
+    if record_ids:
+        for record in BacktestRecordModel.objects.filter(record_id__in=record_ids):
+            backtest_summaries[record.record_id] = build_backtest_summary(record)
+    return [_serialize_post(post, backtest_summaries=backtest_summaries) for post in posts]
 
 
 def append_post(post: CommunityPost) -> None:
@@ -210,6 +260,7 @@ def append_post(post: CommunityPost) -> None:
         author_display_name=post.author,
         content=post.content,
         image_path=post.image_path or "",
+        backtest_record_id=post.backtest_record_id or "",
     )
     record_metric(
         "community.post.create",
@@ -252,6 +303,7 @@ def build_post(
     author: str,
     content: str,
     image_path: str | None,
+    backtest_record_id: str | None = None,
 ) -> CommunityPost:
     return CommunityPost(
         topic_id=topic_id or DEFAULT_TOPIC_ID,
@@ -261,6 +313,7 @@ def build_post(
         author=author,
         content=content,
         image_path=image_path,
+        backtest_record_id=backtest_record_id or "",
         created_at=timezone.now().strftime("%Y-%m-%d %H:%M UTC"),
     )
 

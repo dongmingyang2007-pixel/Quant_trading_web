@@ -55,12 +55,15 @@ def run_batch_backtests(
             result = run_quant_pipeline(params)
             stats = result.get("stats", {})
             pnl_series = pd.Series(dtype=float)
-            recent = result.get("recent_rows")
-            if isinstance(recent, list) and recent:
+            return_rows = result.get("return_series")
+            if not isinstance(return_rows, list) or not return_rows:
+                return_rows = result.get("recent_rows")
+            if isinstance(return_rows, list) and return_rows:
                 try:
-                    df_recent = pd.DataFrame(recent)
-                    if "strategy_return" in df_recent:
-                        pnl_series = pd.Series(df_recent["strategy_return"].values, index=range(len(df_recent)))
+                    df_recent = pd.DataFrame(return_rows)
+                    series_col = "daily_return" if "daily_return" in df_recent else "strategy_return"
+                    if series_col in df_recent:
+                        pnl_series = pd.Series(df_recent[series_col].astype(float).values, index=range(len(df_recent)))
                 except Exception:
                     pnl_series = pd.Series(dtype=float)
             pnl_map[f"{ticker}-{engine}"] = pnl_series

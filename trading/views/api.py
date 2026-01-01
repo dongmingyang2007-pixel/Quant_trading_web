@@ -614,10 +614,12 @@ def build_portfolio_api(request):
         if not record:
             continue
         snapshot = record.get("snapshot") or {}
-        recent_rows = snapshot.get("recent_rows") or []
+        return_rows = snapshot.get("return_series")
+        if not isinstance(return_rows, list) or not return_rows:
+            return_rows = snapshot.get("recent_rows") or []
         dates = []
         returns = []
-        for row in recent_rows:
+        for row in return_rows:
             date_value = row.get("date") or row.get("timestamp")
             if not date_value:
                 continue

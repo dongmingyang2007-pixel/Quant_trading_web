@@ -431,6 +431,7 @@
 {% block extra_scripts %}
 <script src="{% static 'trading/js/account_tabs.js' %}"></script>
 <script src="{% static 'trading/js/history_delete.js' %}"></script>
+<script src="{% static 'trading/js/history_meta.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
 <script src="{% static 'trading/js/profile_cropper.js' %}"></script>
 <script src="{% static 'trading/js/paper_trading.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
 <script nonce="{{ csp_nonce }}">

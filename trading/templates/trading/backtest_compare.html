@@ -19,7 +19,7 @@
         </div>
         <div class="arena-actions">
             <a class="hero-button ghost" href="{% url 'trading:backtest' %}#history-pane">{% bilingual "Back to history" "返回历史记录" %}</a>
-            <span class="arena-hint">{% bilingual "Tip: pick up to three records from the history list." "提示：在历史记录中最多选择 3 条参与对比。" %}</span>
+            <span class="arena-hint">{% bilingual "Tip: pick up to five records from the history list." "提示：在历史记录中最多选择 5 条参与对比。" %}</span>
         </div>
     </header>
 
@@ -109,6 +109,88 @@
             </table>
         </div>
     </section>
+
+    {% if correlation_matrix %}
+    <section class="arena-stats arena-correlation">
+        <header class="arena-card-head">
+            <div>
+                <h2>{% bilingual "Correlation Matrix" "相关性矩阵" %}</h2>
+                <p class="text-muted mb-0">{% bilingual "Correlations are computed from the latest return window for quick similarity checks." "相关性基于最近收益窗口计算，用于快速判断策略相似度。" %}</p>
+            </div>
+        </header>
+        <div class="arena-table-wrapper">
+            <table class="table arena-table arena-corr-table align-middle">
+                <thead>
+                    <tr>
+                        <th scope="col">{% bilingual "Strategy" "策略" %}</th>
+                        {% for label in correlation_matrix.labels %}
+                            <th scope="col">{{ label }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in correlation_matrix.rows %}
+                    <tr>
+                        <td><strong>{{ row.label }}</strong></td>
+                        {% for cell in row.cells %}
+                            <td class="arena-corr-cell" style="background-color: {{ cell.color }};">
+                                {% if cell.value is not None %}
+                                    {{ cell.value|floatformat:2 }}
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {% endif %}
+
+    {% if risk_rows %}
+    <section class="arena-stats arena-risk">
+        <header class="arena-card-head">
+            <div>
+                <h2>{% bilingual "Risk Snapshot" "风险对比" %}</h2>
+                <p class="text-muted mb-0">{% bilingual "Downside risk, tail losses, and win rate computed from recent returns." "基于最近收益计算下行风险、尾部损失与胜率。" %}</p>
+            </div>
+        </header>
+        <div class="arena-table-wrapper">
+            <table class="table arena-table align-middle">
+                <thead>
+                    <tr>
+                        <th scope="col">{% bilingual "Strategy" "策略" %}</th>
+                        <th scope="col">{% bilingual "Avg daily" "平均日收益" %}</th>
+                        <th scope="col">{% bilingual "Win rate" "胜率" %}</th>
+                        <th scope="col">{% bilingual "Downside vol" "下行波动" %}</th>
+                        <th scope="col">{% bilingual "VaR 95%" "95% 风险值" %}</th>
+                        <th scope="col">{% bilingual "CVaR 95%" "95% 条件风险值" %}</th>
+                        <th scope="col">{% bilingual "Max drawdown" "最大回撤" %}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in risk_rows %}
+                    <tr>
+                        <td>
+                            <span class="legend-dot legend-dot-inline" style="--legend-color: {{ row.color }}"></span>
+                            <strong>{{ row.ticker }}</strong>
+                            <span class="text-muted small ms-1">{{ row.engine }}</span>
+                        </td>
+                        <td>{% if row.metrics.avg_return_pct is not None %}{{ row.metrics.avg_return_pct|floatformat:2 }}%{% else %}—{% endif %}</td>
+                        <td>{% if row.metrics.win_rate_pct is not None %}{{ row.metrics.win_rate_pct|floatformat:2 }}%{% else %}—{% endif %}</td>
+                        <td>{% if row.metrics.downside_vol_pct is not None %}{{ row.metrics.downside_vol_pct|floatformat:2 }}%{% else %}—{% endif %}</td>
+                        <td>{% if row.metrics.var_95_pct is not None %}{{ row.metrics.var_95_pct|floatformat:2 }}%{% else %}—{% endif %}</td>
+                        <td>{% if row.metrics.cvar_95_pct is not None %}{{ row.metrics.cvar_95_pct|floatformat:2 }}%{% else %}—{% endif %}</td>
+                        <td>{% if row.metrics.max_drawdown_pct is not None %}{{ row.metrics.max_drawdown_pct|floatformat:2 }}%{% else %}—{% endif %}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {% endif %}
     {% endif %}
 </div>
 
