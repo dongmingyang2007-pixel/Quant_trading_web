@@ -117,10 +117,18 @@ class StrategyPresetSerializer(serializers.Serializer):
     updated_at = serializers.DateTimeField(read_only=True)
 
     def validate_payload(self, value: dict[str, Any]) -> dict[str, Any]:
-        form = QuantStrategyForm(value, language=self.context.get("language"))
-        if not form.is_valid():
-            raise serializers.ValidationError(form.errors)
-        cleaned = form.cleaned_data
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Invalid payload.")
+        allowed = set(QuantStrategyForm.base_fields.keys())
+        include_ticker_dates = bool(value.get("include_ticker_dates"))
+        allowed.add("include_ticker_dates")
+        cleaned: dict[str, Any] = {key: val for key, val in value.items() if key in allowed}
+        if not include_ticker_dates:
+            for key in ("ticker", "start_date", "end_date"):
+                cleaned.pop(key, None)
+            cleaned.pop("include_ticker_dates", None)
+        else:
+            cleaned["include_ticker_dates"] = True
         return _serialize_json_payload(cleaned)
 
 

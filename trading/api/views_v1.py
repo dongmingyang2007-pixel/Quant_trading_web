@@ -189,7 +189,7 @@ class PaperSessionView(APIView):
     def get(self, request):
         request_id = ensure_request_id(request)
         limit, offset = _clamp_pagination(request)
-        qs = PaperTradingSession.objects.filter(user=request.user).order_by("-updated_at").defer("config")
+        qs = PaperTradingSession.objects.filter(user=request.user).order_by("-updated_at")
         status_filter = (request.GET.get("status") or "").strip().lower()
         if status_filter and status_filter != "all":
             status_values = [value.strip() for value in status_filter.split(",") if value.strip()]
@@ -205,7 +205,7 @@ class PaperSessionView(APIView):
         total = qs.count()
         sessions = qs[offset : offset + limit]
         payload = {
-            "sessions": [serialize_session(session) for session in sessions],
+            "sessions": [serialize_session(session, include_config=False) for session in sessions],
             "limit": limit,
             "offset": offset,
             "next_offset": offset + len(sessions),

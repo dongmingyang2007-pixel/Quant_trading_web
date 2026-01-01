@@ -35,22 +35,29 @@
     const stageLabels = langIsZh
         ? {
               bootstrap: "准备中",
+              running_backtest: "回测运行中",
               finalizing: "收尾中",
               benchmark: "评估中",
+              running_training: "训练运行中",
               rl_pipeline: "强化学习中",
+              running_rl: "强化学习运行中",
           }
         : {
               bootstrap: "Bootstrapping",
+              running_backtest: "Backtest running",
               finalizing: "Finalizing",
               benchmark: "Benchmarking",
+              running_training: "Training running",
               rl_pipeline: "RL pipeline",
+              running_rl: "RL running",
           };
 
     const labelForStatus = (status) => statusLabels[status] || (langIsZh ? "排队中" : "Queued");
     const labelForStage = (stage) => stageLabels[stage] || stage || "";
     const statusClassFor = (status) => {
         if (status === "SUCCESS") return "success";
-        if (status === "FAILURE" || status === "REVOKED") return "failure";
+        if (status === "FAILURE") return "failure";
+        if (status === "REVOKED") return "cancelled";
         return "pending";
     };
     const shouldHideId = (value) => /^pending-|^history-|^sync-/i.test(String(value || ""));
@@ -394,10 +401,19 @@ const updateTask = (taskId, data) => {
                     });
                     return;
                 }
-                if (state === "FAILURE" || state === "REVOKED") {
+                if (state === "FAILURE") {
                     updateTask(taskId, {
                         status: "FAILURE",
                         message: data.error || (langIsZh ? "执行失败" : "Failed"),
+                        progress,
+                        taskId,
+                    });
+                    return;
+                }
+                if (state === "REVOKED") {
+                    updateTask(taskId, {
+                        status: "REVOKED",
+                        message: langIsZh ? "已取消" : "Cancelled",
                         progress,
                         taskId,
                     });

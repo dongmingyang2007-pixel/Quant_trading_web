@@ -44,6 +44,7 @@ class PaperSessionApiTests(TestCase):
         self.assertEqual(session["ticker"], "AAPL")
         self.assertIn("equity_preview", session)
         self.assertTrue(len(session["equity_preview"]) > 0)
+        self.assertNotIn("config", session)
 
     def test_export_trades_csv(self):
         session = self._create_session()

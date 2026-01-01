@@ -105,6 +105,7 @@
               retry: '任务重试中…',
               success: '任务完成，可随时查看报告。',
               failure: '任务执行失败，请重试。',
+              cancelled: '任务已取消。',
               submitting: '正在提交回测…',
               loadingBanner: '加载中：有任务执行中…',
           }
@@ -114,6 +115,7 @@
               retry: 'Task is retrying…',
               success: 'Task complete. You can view the report anytime.',
               failure: 'Task failed. Please retry.',
+              cancelled: 'Task cancelled.',
               submitting: 'Submitting backtest…',
               loadingBanner: 'Loading: a task is still running…',
           };
@@ -167,10 +169,19 @@
                     });
                     return;
                 }
-                if (state === 'FAILURE' || state === 'REVOKED') {
+                if (state === 'FAILURE') {
                     updateDockTask(taskId, {
                         status: 'FAILURE',
                         message: data.error || asyncText.failure,
+                        progress,
+                        taskId,
+                    });
+                    return;
+                }
+                if (state === 'REVOKED') {
+                    updateDockTask(taskId, {
+                        status: 'REVOKED',
+                        message: asyncText.cancelled,
                         progress,
                         taskId,
                     });

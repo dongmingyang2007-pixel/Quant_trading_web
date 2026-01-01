@@ -133,7 +133,7 @@
             <div class="border rounded-4 p-3 mt-4 backtest-presets"
                  data-role="preset-panel"
                  data-api-endpoint="{% url 'trading:api_v1_presets' %}"
-                 data-detail-template="{% url 'trading:api_v1_preset_detail' preset_id='PRESET_ID' %}">
+                 data-detail-template="{% url 'trading:api_v1_preset_detail' preset_id='00000000-0000-0000-0000-000000000000' %}">
                 <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
                     <div>
                         <h3 class="h6 mb-1">{% if lang_prefix == 'zh' %}策略预设{% else %}Strategy presets{% endif %}</h3>
@@ -177,11 +177,19 @@
                         <button type="button" class="btn btn-outline-secondary btn-sm" data-role="preset-toggle">
                             {% if lang_prefix == 'zh' %}管理预设{% else %}Manage presets{% endif %}
                         </button>
-                        <div class="form-check ms-auto">
-                            <input class="form-check-input" type="checkbox" id="preset-default-flag" data-role="preset-default">
-                            <label class="form-check-label" for="preset-default-flag">
-                                {% if lang_prefix == 'zh' %}设为默认{% else %}Set as default{% endif %}
-                            </label>
+                        <div class="d-flex align-items-center gap-3 ms-auto">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="preset-include-dates" data-role="preset-include-dates">
+                                <label class="form-check-label" for="preset-include-dates">
+                                    {% if lang_prefix == 'zh' %}包含标的/日期{% else %}Include ticker/dates{% endif %}
+                                </label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="preset-default-flag" data-role="preset-default">
+                                <label class="form-check-label" for="preset-default-flag">
+                                    {% if lang_prefix == 'zh' %}设为默认{% else %}Set as default{% endif %}
+                                </label>
+                            </div>
                         </div>
                     </div>
                     <div class="col-12">

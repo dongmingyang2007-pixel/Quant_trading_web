@@ -11,6 +11,7 @@
   const descInput = panel.querySelector('[data-role="preset-description"]');
   const statusEl = panel.querySelector('[data-role="preset-status"]');
   const defaultCheckbox = panel.querySelector('[data-role="preset-default"]');
+  const includeDatesCheckbox = panel.querySelector('[data-role="preset-include-dates"]');
   const listEl = panel.querySelector('[data-role="preset-list"]');
   const managePanel = panel.querySelector('[data-role="preset-manage"]');
 
@@ -97,7 +98,12 @@
 
   const applyPayloadToForm = (payload) => {
     if (!payload || typeof payload !== "object") return;
+    const includeTickerDates = Boolean(payload.include_ticker_dates);
     Object.entries(payload).forEach(([key, value]) => {
+      if (key === "include_ticker_dates") return;
+      if (!includeTickerDates && ["ticker", "start_date", "end_date"].includes(key)) {
+        return;
+      }
       const field = form.querySelector(`[name="${key}"]`);
       if (!field) return;
       if (field.type === "checkbox") {
@@ -111,7 +117,15 @@
 
   const buildDetailUrl = (presetId) => {
     if (!detailTemplate) return "";
-    return detailTemplate.replace("PRESET_ID", encodeURIComponent(presetId));
+    const encoded = encodeURIComponent(presetId);
+    if (detailTemplate.includes("PRESET_ID")) {
+      return detailTemplate.replace("PRESET_ID", encoded);
+    }
+    const uuidPlaceholder = "00000000-0000-0000-0000-000000000000";
+    if (detailTemplate.includes(uuidPlaceholder)) {
+      return detailTemplate.replace(uuidPlaceholder, encoded);
+    }
+    return detailTemplate.replace(/\/?$/, "/") + `${encoded}/`;
   };
 
   const renderSelect = () => {
@@ -148,8 +162,10 @@
       item.dataset.presetId = preset.preset_id;
 
       const payload = preset.payload || {};
-      const ticker = payload.ticker ? String(payload.ticker).toUpperCase() : "";
-      const period = payload.start_date && payload.end_date ? `${payload.start_date} → ${payload.end_date}` : "";
+      const includeTickerDates = Boolean(payload.include_ticker_dates);
+      const ticker = includeTickerDates && payload.ticker ? String(payload.ticker).toUpperCase() : "";
+      const period =
+        includeTickerDates && payload.start_date && payload.end_date ? `${payload.start_date} → ${payload.end_date}` : "";
       const metaLine = [ticker, period].filter(Boolean).join(" · ");
 
       item.innerHTML = `
@@ -205,6 +221,15 @@
       return;
     }
     const payload = buildPayloadFromForm();
+    const includeTickerDates = includeDatesCheckbox ? includeDatesCheckbox.checked : false;
+    if (!includeTickerDates) {
+      ["ticker", "start_date", "end_date"].forEach((key) => delete payload[key]);
+    }
+    if (includeTickerDates) {
+      payload.include_ticker_dates = true;
+    } else {
+      delete payload.include_ticker_dates;
+    }
     const body = {
       name,
       description: (descInput && descInput.value.trim()) || "",
@@ -281,6 +306,9 @@
       descInput.value = preset.description || "";
       if (defaultCheckbox) {
         defaultCheckbox.checked = Boolean(preset.is_default);
+      }
+      if (includeDatesCheckbox) {
+        includeDatesCheckbox.checked = Boolean(preset.payload && preset.payload.include_ticker_dates);
       }
     });
   }

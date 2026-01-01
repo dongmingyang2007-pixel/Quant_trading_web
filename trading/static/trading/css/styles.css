@@ -7060,6 +7060,11 @@ a:hover { text-decoration: underline; }
     border-color: rgba(220, 38, 38, 0.4);
     background: rgba(220, 38, 38, 0.08);
 }
+.task-pill .status.cancelled {
+    color: #64748b;
+    border-color: rgba(148, 163, 184, 0.5);
+    background: rgba(148, 163, 184, 0.12);
+}
 .task-pill .status.pending {
     color: #ca8a04;
     border-color: rgba(202, 138, 4, 0.4);

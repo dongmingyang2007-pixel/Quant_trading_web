@@ -7,8 +7,8 @@ from django.test import TestCase
 from django.urls import reverse
 
 
-def _preset_payload(ticker: str = "AAPL") -> dict[str, object]:
-    return {
+def _preset_payload(ticker: str = "AAPL", *, include_ticker_dates: bool = False) -> dict[str, object]:
+    payload = {
         "ticker": ticker,
         "benchmark_ticker": "SPY",
         "start_date": "2023-01-01",
@@ -16,6 +16,9 @@ def _preset_payload(ticker: str = "AAPL") -> dict[str, object]:
         "capital": "250000",
         "ml_mode": "light",
     }
+    if include_ticker_dates:
+        payload["include_ticker_dates"] = True
+    return payload
 
 
 class StrategyPresetApiTests(TestCase):
@@ -28,7 +31,7 @@ class StrategyPresetApiTests(TestCase):
         create_payload = {
             "name": "Core Trend",
             "description": "Primary setup",
-            "payload": _preset_payload(),
+            "payload": _preset_payload(include_ticker_dates=True),
             "is_default": True,
         }
         response = self.client.post(
@@ -53,7 +56,7 @@ class StrategyPresetApiTests(TestCase):
                 {
                     "name": "Swing Setup",
                     "description": "",
-                    "payload": _preset_payload("MSFT"),
+                    "payload": _preset_payload("MSFT", include_ticker_dates=True),
                     "is_default": True,
                 }
             ),
@@ -81,3 +84,22 @@ class StrategyPresetApiTests(TestCase):
         response = self.client.delete(reverse("trading:api_v1_preset_detail", kwargs={"preset_id": preset_id}))
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["deleted"])
+
+    def test_preset_strips_ticker_dates_by_default(self):
+        create_payload = {
+            "name": "No Dates",
+            "description": "",
+            "payload": _preset_payload(),
+            "is_default": False,
+        }
+        response = self.client.post(
+            reverse("trading:api_v1_presets"),
+            data=json.dumps(create_payload),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        data = response.json()
+        payload = data["payload"]
+        self.assertNotIn("ticker", payload)
+        self.assertNotIn("start_date", payload)
+        self.assertNotIn("end_date", payload)

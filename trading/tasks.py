@@ -6,6 +6,7 @@ from typing import Any, Dict, List, get_args, get_origin, get_type_hints
 
 from celery import shared_task
 from django.conf import settings
+from django.utils import timezone
 
 from .strategies import StrategyInput, run_quant_pipeline
 from .history import BacktestRecord, append_history, sanitize_snapshot
@@ -120,6 +121,10 @@ def execute_rl_job(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"history_id": history_id, "result": sanitize_snapshot(rl_summary)}
 
 
+def _progress_meta(progress: int, stage: str) -> Dict[str, Any]:
+    return {"progress": progress, "stage": stage, "updated_at": timezone.now().isoformat()}
+
+
 @shared_task(
     bind=True,
     autoretry_for=(Exception,),
@@ -130,9 +135,10 @@ def execute_rl_job(payload: Dict[str, Any]) -> Dict[str, Any]:
     queue="backtests",
 )
 def run_backtest_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-    self.update_state(state="PROGRESS", meta={"progress": 10, "stage": "bootstrap"})
+    self.update_state(state="PROGRESS", meta=_progress_meta(10, "bootstrap"))
+    self.update_state(state="PROGRESS", meta=_progress_meta(50, "running_backtest"))
     result = execute_backtest(payload)
-    self.update_state(state="PROGRESS", meta={"progress": 90, "stage": "finalizing"})
+    self.update_state(state="PROGRESS", meta=_progress_meta(90, "finalizing"))
     return result
 
 
@@ -146,9 +152,10 @@ def run_backtest_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     queue="training",
 )
 def run_training_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-    self.update_state(state="PROGRESS", meta={"progress": 15, "stage": "benchmark"})
+    self.update_state(state="PROGRESS", meta=_progress_meta(15, "benchmark"))
+    self.update_state(state="PROGRESS", meta=_progress_meta(50, "running_training"))
     result = execute_training_job(payload)
-    self.update_state(state="PROGRESS", meta={"progress": 90, "stage": "finalizing"})
+    self.update_state(state="PROGRESS", meta=_progress_meta(90, "finalizing"))
     return result
 
 
@@ -162,9 +169,10 @@ def run_training_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     queue="rl",
 )
 def run_rl_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-    self.update_state(state="PROGRESS", meta={"progress": 10, "stage": "rl_pipeline"})
+    self.update_state(state="PROGRESS", meta=_progress_meta(10, "rl_pipeline"))
+    self.update_state(state="PROGRESS", meta=_progress_meta(50, "running_rl"))
     result = execute_rl_job(payload)
-    self.update_state(state="PROGRESS", meta={"progress": 90, "stage": "finalizing"})
+    self.update_state(state="PROGRESS", meta=_progress_meta(90, "finalizing"))
     return result
 
 

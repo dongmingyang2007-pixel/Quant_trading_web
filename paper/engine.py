@@ -563,10 +563,17 @@ def run_pending_sessions(limit: int = 20, price_cache: dict[str, object] | None 
     return results
 
 
-def serialize_session(session: PaperTradingSession, *, include_details: bool = False, trades_limit: int = 20) -> dict[str, Any]:
-    sig_source, sig_at = _extract_last_signal(session.config or {})
-    last_signal = (session.config or {}).get("__last_signal") or {}
-    last_skip = (session.config or {}).get("__last_skip") or {}
+def serialize_session(
+    session: PaperTradingSession,
+    *,
+    include_details: bool = False,
+    trades_limit: int = 20,
+    include_config: bool = True,
+) -> dict[str, Any]:
+    config_payload = session.config or {}
+    sig_source, sig_at = _extract_last_signal(config_payload)
+    last_signal = config_payload.get("__last_signal") or {}
+    last_skip = config_payload.get("__last_skip") or {}
     curve_preview = []
     raw_curve = session.equity_curve or []
     if isinstance(raw_curve, list):
@@ -591,7 +598,6 @@ def serialize_session(session: PaperTradingSession, *, include_details: bool = F
         "last_run_at": session.last_run_at.isoformat() if session.last_run_at else None,
         "next_run_at": session.next_run_at.isoformat() if session.next_run_at else None,
         "created_at": session.created_at.isoformat() if session.created_at else None,
-        "config": session.config or {},
         "pnl_pct": float(session.last_equity) / float(session.initial_cash or 1) - 1 if session.initial_cash else None,
         "signal_source": sig_source,
         "last_signal_at": sig_at,
@@ -600,6 +606,8 @@ def serialize_session(session: PaperTradingSession, *, include_details: bool = F
         "last_skip": last_skip or None,
         "equity_preview": curve_preview,
     }
+    if include_config:
+        payload["config"] = config_payload
     if include_details:
         curve = session.equity_curve or []
         payload["equity_curve"] = curve[-200:] if len(curve) > 200 else curve
