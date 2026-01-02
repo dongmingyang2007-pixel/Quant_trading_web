@@ -30,6 +30,7 @@
             id="analysis-form"
             data-task-endpoint="{% url 'trading:api_v1_backtest_tasks' %}"
             data-task-status-template="{% url 'trading:api_v1_task_status' task_id='TASK_ID_PLACEHOLDER' %}"
+            data-preflight-endpoint="{% url 'trading:api_v1_backtest_preflight' %}"
             data-history-base="{% url 'trading:backtest' %}"
             data-lang="{{ request.LANGUAGE_CODE|default:'zh-hans' }}"
         >
@@ -270,6 +271,48 @@
                                         {% if lang_prefix == 'zh' %}滑点（bps）{% else %}Slippage (bps){% endif %}
                                     </label>
                                     {{ form.slippage_bps }}
+                                </div>
+                                <div class="col-12">
+                                    <div class="text-muted small fw-semibold mt-2">{% if lang_prefix == 'zh' %}执行现实性{% else %}Execution realism{% endif %}</div>
+                                    <div class="text-muted small mb-0">
+                                        {% if lang_prefix == 'zh' %}配置成交参与率、成交口径与冲击成本，帮助评估真实可执行性。{% else %}Configure fills, return path, and impact costs to reflect real-world execution.{% endif %}
+                                    </div>
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.return_path.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}执行口径{% else %}Return path{% endif %}
+                                    </label>
+                                    {{ form.return_path }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.max_adv_participation.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}ADV 参与率上限{% else %}Max ADV participation{% endif %}
+                                    </label>
+                                    {{ form.max_adv_participation }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.execution_liquidity_buffer.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}流动性缓冲{% else %}Liquidity buffer{% endif %}
+                                    </label>
+                                    {{ form.execution_liquidity_buffer }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.execution_penalty_bps.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}执行冲击惩罚（bps）{% else %}Execution penalty (bps){% endif %}
+                                    </label>
+                                    {{ form.execution_penalty_bps }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.limit_move_threshold.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}涨跌幅限制阈值{% else %}Limit move threshold{% endif %}
+                                    </label>
+                                    {{ form.limit_move_threshold }}
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label" for="{{ form.borrow_cost_bps.id_for_label }}">
+                                        {% if lang_prefix == 'zh' %}融券成本（bps）{% else %}Borrow cost (bps){% endif %}
+                                    </label>
+                                    {{ form.borrow_cost_bps }}
                                 </div>
                                 <div class="col-12 col-md-4">
                                     <label class="form-label" for="{{ form.min_holding_days.id_for_label }}">

@@ -16,6 +16,7 @@ urlpatterns = [
     path("api/ai_chat/stream/", views.ai_chat_stream, name="ai_chat_stream"),
     path("api/backtest/task/", views.enqueue_backtest_task, name="enqueue_backtest_task"),
     path("api/backtest/task/<str:task_id>/", views.backtest_task_status, name="backtest_task_status"),
+    path("api/v1/backtests/preflight/", api_v1.PreflightView.as_view(), name="api_v1_backtest_preflight"),
     path("api/v1/backtests/tasks/", api_v1.BacktestTaskView.as_view(), name="api_v1_backtest_tasks"),
     path("api/v1/training/tasks/", api_v1.TrainingTaskView.as_view(), name="api_v1_training_tasks"),
     path("api/v1/rl/tasks/", api_v1.RLTaskView.as_view(), name="api_v1_rl_tasks"),

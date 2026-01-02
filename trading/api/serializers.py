@@ -26,6 +26,12 @@ class StrategyTaskSerializer(serializers.Serializer):
     volatility_target = serializers.FloatField(required=False)
     transaction_cost_bps = serializers.FloatField(required=False)
     slippage_bps = serializers.FloatField(required=False)
+    return_path = serializers.CharField(required=False, allow_blank=True)
+    max_adv_participation = serializers.FloatField(required=False)
+    execution_liquidity_buffer = serializers.FloatField(required=False)
+    execution_penalty_bps = serializers.FloatField(required=False)
+    limit_move_threshold = serializers.FloatField(required=False, allow_null=True)
+    borrow_cost_bps = serializers.FloatField(required=False)
     min_holding_days = serializers.IntegerField(required=False)
     entry_threshold = serializers.FloatField(required=False)
     exit_threshold = serializers.FloatField(required=False)
@@ -44,6 +50,44 @@ class StrategyTaskSerializer(serializers.Serializer):
     allow_short = serializers.BooleanField(required=False)
     execution_delay_days = serializers.IntegerField(required=False)
     client_request_id = serializers.CharField(required=False, allow_blank=True)
+
+    _EMPTY_TO_NONE_FIELDS = {
+        "capital",
+        "short_window",
+        "long_window",
+        "rsi_period",
+        "volatility_target",
+        "transaction_cost_bps",
+        "slippage_bps",
+        "max_adv_participation",
+        "execution_liquidity_buffer",
+        "execution_penalty_bps",
+        "limit_move_threshold",
+        "borrow_cost_bps",
+        "min_holding_days",
+        "entry_threshold",
+        "exit_threshold",
+        "train_window",
+        "test_window",
+        "val_ratio",
+        "embargo_days",
+        "hyperopt_trials",
+        "hyperopt_timeout",
+        "max_leverage",
+        "max_drawdown_stop",
+        "daily_exposure_limit",
+        "execution_delay_days",
+    }
+
+    def to_internal_value(self, data: Any) -> dict[str, Any]:
+        if isinstance(data, dict):
+            cleaned = dict(data)
+            for key in self._EMPTY_TO_NONE_FIELDS:
+                value = cleaned.get(key)
+                if isinstance(value, str) and value.strip() == "":
+                    cleaned[key] = None
+            data = cleaned
+        return super().to_internal_value(data)
 
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         form_payload = dict(attrs)

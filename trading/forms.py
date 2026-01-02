@@ -44,6 +44,16 @@ class QuantStrategyForm(forms.Form):
         ("balanced", "Balanced"),
         ("aggressive", "Aggressive"),
     ]
+    RETURN_PATH_CHOICES_ZH = [
+        ("close_to_close", "收盘→收盘（默认）"),
+        ("close_to_open", "收盘→次日开盘（隔夜）"),
+        ("open_to_close", "开盘→收盘（盘中）"),
+    ]
+    RETURN_PATH_CHOICES_EN = [
+        ("close_to_close", "Close-to-close (default)"),
+        ("close_to_open", "Close-to-open (overnight)"),
+        ("open_to_close", "Open-to-close (intraday)"),
+    ]
 
     ticker = forms.CharField(
         max_length=16,
@@ -135,6 +145,56 @@ class QuantStrategyForm(forms.Form):
         initial=ADVANCED_STRATEGY_DEFAULTS["slippage_bps"],
         label="滑点（bps）",
         help_text="滑点假设（bps）。",
+        widget=forms.NumberInput(attrs={"step": "0.1"}),
+    )
+    return_path = forms.ChoiceField(
+        label="执行口径",
+        choices=RETURN_PATH_CHOICES_ZH,
+        required=False,
+        initial=ADVANCED_STRATEGY_DEFAULTS["return_path"],
+        help_text="回测收益使用的价格路径。",
+    )
+    max_adv_participation = forms.FloatField(
+        min_value=0,
+        max_value=1,
+        required=False,
+        initial=ADVANCED_STRATEGY_DEFAULTS["max_adv_participation"],
+        label="ADV 参与率上限",
+        help_text="单日成交额参与率上限（0-1）。",
+        widget=forms.NumberInput(attrs={"step": "0.01"}),
+    )
+    execution_liquidity_buffer = forms.FloatField(
+        min_value=0,
+        max_value=1,
+        required=False,
+        initial=ADVANCED_STRATEGY_DEFAULTS["execution_liquidity_buffer"],
+        label="流动性缓冲",
+        help_text="执行时使用的流动性缓冲比例（0-1）。",
+        widget=forms.NumberInput(attrs={"step": "0.01"}),
+    )
+    execution_penalty_bps = forms.FloatField(
+        min_value=0,
+        required=False,
+        initial=ADVANCED_STRATEGY_DEFAULTS["execution_penalty_bps"],
+        label="执行冲击惩罚（bps）",
+        help_text="冲击成本惩罚（bps）。",
+        widget=forms.NumberInput(attrs={"step": "0.1"}),
+    )
+    limit_move_threshold = forms.FloatField(
+        min_value=0,
+        max_value=1,
+        required=False,
+        initial=ADVANCED_STRATEGY_DEFAULTS["limit_move_threshold"],
+        label="涨跌幅限制阈值",
+        help_text="触及涨跌停的阈值（0-1），为空则忽略。",
+        widget=forms.NumberInput(attrs={"step": "0.001"}),
+    )
+    borrow_cost_bps = forms.FloatField(
+        min_value=0,
+        required=False,
+        initial=ADVANCED_STRATEGY_DEFAULTS["borrow_cost_bps"],
+        label="融券成本（bps）",
+        help_text="空头借券成本（bps）。",
         widget=forms.NumberInput(attrs={"step": "0.1"}),
     )
     min_holding_days = forms.IntegerField(
@@ -285,6 +345,12 @@ class QuantStrategyForm(forms.Form):
             "volatility_target": ("Volatility target", "目标波动率"),
             "transaction_cost_bps": ("Transaction cost (bps)", "交易成本（bps）"),
             "slippage_bps": ("Slippage (bps)", "滑点（bps）"),
+            "return_path": ("Return path", "执行口径"),
+            "max_adv_participation": ("Max ADV participation", "ADV 参与率上限"),
+            "execution_liquidity_buffer": ("Liquidity buffer", "流动性缓冲"),
+            "execution_penalty_bps": ("Execution penalty (bps)", "执行冲击惩罚（bps）"),
+            "limit_move_threshold": ("Limit move threshold", "涨跌幅限制阈值"),
+            "borrow_cost_bps": ("Borrow cost (bps)", "融券成本（bps）"),
             "min_holding_days": ("Min holding days", "最短持仓天数"),
             "entry_threshold": ("Entry threshold", "入场阈值"),
             "exit_threshold": ("Exit threshold", "离场阈值"),
@@ -351,6 +417,30 @@ class QuantStrategyForm(forms.Form):
             "slippage_bps": (
                 "Slippage assumption (bps).",
                 "滑点假设（bps）。",
+            ),
+            "return_path": (
+                "Return path used for realized P&L.",
+                "回测收益使用的价格路径。",
+            ),
+            "max_adv_participation": (
+                "Max daily participation vs ADV (0-1).",
+                "单日成交额参与率上限（0-1）。",
+            ),
+            "execution_liquidity_buffer": (
+                "Liquidity buffer for execution impact (0-1).",
+                "执行时使用的流动性缓冲比例（0-1）。",
+            ),
+            "execution_penalty_bps": (
+                "Execution impact penalty in bps.",
+                "冲击成本惩罚（bps）。",
+            ),
+            "limit_move_threshold": (
+                "Daily move threshold to block fills (0-1). Leave blank to disable.",
+                "触及涨跌停的阈值（0-1），为空则忽略。",
+            ),
+            "borrow_cost_bps": (
+                "Borrow cost for short positions (bps).",
+                "空头借券成本（bps）。",
             ),
             "min_holding_days": (
                 "Minimum holding days per position.",
@@ -432,6 +522,9 @@ class QuantStrategyForm(forms.Form):
         self.fields["risk_profile"].choices = (
             self.RISK_PROFILE_CHOICES_ZH if self.lang_is_zh else self.RISK_PROFILE_CHOICES_EN
         )
+        self.fields["return_path"].choices = (
+            self.RETURN_PATH_CHOICES_ZH if self.lang_is_zh else self.RETURN_PATH_CHOICES_EN
+        )
         self.warnings: list[str] = []
         self.fields["ticker"].widget.attrs.update({"placeholder": "NVDA"})
         self.fields["benchmark_ticker"].widget.attrs.update({"placeholder": "SPY"})
@@ -445,6 +538,12 @@ class QuantStrategyForm(forms.Form):
             "volatility_target",
             "transaction_cost_bps",
             "slippage_bps",
+            "return_path",
+            "max_adv_participation",
+            "execution_liquidity_buffer",
+            "execution_penalty_bps",
+            "limit_move_threshold",
+            "borrow_cost_bps",
             "min_holding_days",
             "entry_threshold",
             "exit_threshold",

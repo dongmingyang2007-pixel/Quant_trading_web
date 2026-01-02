@@ -454,6 +454,13 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
     stats["validation_report"] = {"walk_forward": walk_forward_report, "purged_kfold": purged_schedule}
     stats["tail_risk_summary"] = compute_tail_risk_summary(backtest.get("strategy_return"))
     metadata = collect_repro_metadata(params)
+    metadata["requested_start"] = params.start_date.isoformat()
+    metadata["requested_end"] = params.end_date.isoformat()
+    if not prices.empty:
+        meta_start = prices.index[0]
+        meta_end = prices.index[-1]
+        metadata["effective_start"] = str(meta_start.date()) if hasattr(meta_start, "date") else str(meta_start)
+        metadata["effective_end"] = str(meta_end.date()) if hasattr(meta_end, "date") else str(meta_end)
     data_signature = build_data_signature(
         prices,
         columns=["adj close", "open", "high", "low", "close", "volume"],

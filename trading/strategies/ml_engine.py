@@ -990,6 +990,7 @@ def run_ml_backtest(
         params,
         leverage=leverage,
     )
+    adv_hits = int(exec_stats.get("adv_hard_cap_hits") or 0)
 
     perf_total = float(df_for_backtest["cum_strategy"].iloc[-1] - 1) if not df_for_backtest.empty else 0.0
     ret_series = df_for_backtest["strategy_return"].fillna(0.0)
@@ -1032,6 +1033,16 @@ def run_ml_backtest(
             "exec_cost_total": float(df_for_backtest["execution_cost"].sum()) if "execution_cost" in df_for_backtest else 0.0,
             "txn_cost_total": float(df_for_backtest["transaction_cost"].sum()) if "transaction_cost" in df_for_backtest else 0.0,
         },
+        "execution_stats": {
+            "avg_coverage": exec_stats.get("avg_coverage"),
+            "unfilled_ratio": exec_stats.get("unfilled_ratio"),
+            "avg_spread_bps": exec_stats.get("avg_spread_bps"),
+            "halt_days": exec_stats.get("halt_days"),
+            "limit_days": exec_stats.get("limit_days"),
+            "participation": exec_stats.get("participation"),
+            "effective_participation": exec_stats.get("effective_participation"),
+            "adv_hard_cap_hits": adv_hits,
+        },
         "cpcv": cpcv or {},
         "stress_test": stress_report or {},
         "drift": {"psi_returns": psi_ret, "psi_probabilities": psi_proba},
@@ -1057,7 +1068,6 @@ def run_ml_backtest(
                 stats.setdefault("risk_events", []).append("阈值敏感度高：最佳/最差 Sharpe 差异显著，建议收紧阈值或降低杠杆。")
         except Exception:
             pass
-    adv_hits = int(exec_stats.get("adv_hard_cap_hits") or 0)
     if adv_hits:
         stats.setdefault("risk_events", [])
         stats["risk_events"].append(

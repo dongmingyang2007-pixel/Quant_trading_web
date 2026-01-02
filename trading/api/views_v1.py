@@ -17,6 +17,7 @@ from django.http import HttpResponse
 
 from ..observability import ensure_request_id
 from ..strategies import QuantStrategyError
+from ..strategies.core import fetch_price_data
 from ..task_queue import (
     SyncResult,
     cancel_task,
@@ -29,6 +30,7 @@ from ..history import update_history_meta
 from ..views.api import _build_screener_snapshot
 from ..views.dashboard import build_strategy_input
 from ..models import StrategyPreset
+from ..preprocessing import sanitize_price_history
 from paper.engine import create_session, serialize_session
 from paper.models import PaperTradingSession, PaperTrade
 from .serializers import (
@@ -127,6 +129,63 @@ class BacktestTaskView(BaseTaskAPIView):
             cached_payload["_status"] = status_code
             cache.set(f"backtest:client:{client_request_id}", cached_payload, timeout=self._CLIENT_CACHE_TTL)
         return Response(response_payload, status=status_code)
+
+
+class PreflightView(BaseTaskAPIView):
+    def post(self, request):
+        request_id = ensure_request_id(request)
+        serializer = StrategyTaskSerializer(data=request.data, context=self._build_context(request))
+        serializer.is_valid(raise_exception=True)
+        cleaned = serializer.validated_data["_cleaned"]
+        strategy_input, _ = build_strategy_input(cleaned, request_id=request_id, user=request.user)
+        try:
+            prices, fetch_warnings = fetch_price_data(
+                strategy_input.ticker,
+                strategy_input.start_date,
+                strategy_input.end_date,
+            )
+        except QuantStrategyError as exc:
+            return Response({"error": str(exc), "request_id": request_id}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            logging.getLogger(__name__).exception("Preflight data fetch failed")
+            return Response({"error": "Preflight failed.", "request_id": request_id}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        prices, quality_report = sanitize_price_history(prices)
+        rows = int(prices.shape[0]) if prices is not None else 0
+        effective_start = None
+        effective_end = None
+        if rows:
+            start_idx = prices.index[0]
+            end_idx = prices.index[-1]
+            effective_start = str(start_idx.date()) if hasattr(start_idx, "date") else str(start_idx)
+            effective_end = str(end_idx.date()) if hasattr(end_idx, "date") else str(end_idx)
+        data_quality = quality_report.to_dict() if quality_report else {}
+        notes = list(fetch_warnings or [])
+        if quality_report and quality_report.notes:
+            notes.extend(quality_report.notes)
+        min_required = max(
+            strategy_input.long_window + strategy_input.rsi_period,
+            strategy_input.long_window * 3,
+            strategy_input.train_window + strategy_input.test_window,
+            200,
+        )
+        if rows and rows < min_required:
+            notes.append(f"数据行数 {rows} 低于最小要求 {min_required}，回测将自动扩展窗口。")
+        response_payload = {
+            "request_id": request_id,
+            "ticker": strategy_input.ticker,
+            "requested_start": strategy_input.start_date.isoformat(),
+            "requested_end": strategy_input.end_date.isoformat(),
+            "effective_start": effective_start,
+            "effective_end": effective_end,
+            "rows": rows,
+            "min_required": min_required,
+            "data_quality": data_quality,
+            "notes": notes,
+            "source": getattr(prices, "attrs", {}).get("data_source"),
+            "cache_path": getattr(prices, "attrs", {}).get("cache_path"),
+        }
+        return Response(response_payload, status=status.HTTP_200_OK)
 
 
 class TrainingTaskView(BaseTaskAPIView):

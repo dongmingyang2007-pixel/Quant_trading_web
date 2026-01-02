@@ -593,6 +593,7 @@ def run_rl_policy_backtest(
         params,
         leverage=rl_backtest["leverage"],
     )
+    adv_hits = int(exec_stats.get("adv_hard_cap_hits") or 0)
 
     metrics, stats = summarize_backtest(
         rl_backtest,
@@ -603,9 +604,18 @@ def run_rl_policy_backtest(
         shap_img=base_stats.get("shap_img"),
     )
     stats["rl_playbook"] = agent.playbook
+    stats["execution_stats"] = {
+        "avg_coverage": exec_stats.get("avg_coverage"),
+        "unfilled_ratio": exec_stats.get("unfilled_ratio"),
+        "avg_spread_bps": exec_stats.get("avg_spread_bps"),
+        "halt_days": exec_stats.get("halt_days"),
+        "limit_days": exec_stats.get("limit_days"),
+        "participation": exec_stats.get("participation"),
+        "effective_participation": exec_stats.get("effective_participation"),
+        "adv_hard_cap_hits": adv_hits,
+    }
     events = list(stats.get("risk_events", []))
     events.extend(overlay_events)
-    adv_hits = int(exec_stats.get("adv_hard_cap_hits") or 0)
     if adv_hits > 0:
         events.append(f"RL 回测：ADV 参与率上限({(params.max_adv_participation or 0.1):.0%}) 压缩 {adv_hits} 次仓位。")
     events.extend(rl_execution_events)

@@ -109,6 +109,7 @@ def run_event_backtest(
 
     backtest["transaction_cost"] = txn_cost
     backtest["execution_cost"] = exec_cost
+    backtest["fill_coverage"] = coverage
     backtest["borrow_cost"] = borrow_cost
     backtest["strategy_return_gross"] = gross
     backtest["strategy_return"] = gross - txn_cost - exec_cost - borrow_cost

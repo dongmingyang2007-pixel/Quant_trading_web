@@ -148,6 +148,12 @@ class BacktestTaskApiTests(TestCase):
                 "volatility_target": 0.18,
                 "transaction_cost_bps": 9.5,
                 "slippage_bps": 6.0,
+                "return_path": "open_to_close",
+                "max_adv_participation": 0.12,
+                "execution_liquidity_buffer": 0.08,
+                "execution_penalty_bps": 7.5,
+                "limit_move_threshold": 0.095,
+                "borrow_cost_bps": 1.2,
                 "min_holding_days": 2,
                 "entry_threshold": 0.62,
                 "exit_threshold": 0.38,
@@ -180,6 +186,12 @@ class BacktestTaskApiTests(TestCase):
         self.assertEqual(submitted["long_window"], 80)
         self.assertEqual(submitted["rsi_period"], 14)
         self.assertEqual(submitted["execution_delay_days"], 3)
+        self.assertEqual(submitted["return_path"], "open_to_close")
+        self.assertAlmostEqual(submitted["max_adv_participation"], 0.12)
+        self.assertAlmostEqual(submitted["execution_liquidity_buffer"], 0.08)
+        self.assertAlmostEqual(submitted["execution_penalty_bps"], 7.5)
+        self.assertAlmostEqual(submitted["limit_move_threshold"], 0.095)
+        self.assertAlmostEqual(submitted["borrow_cost_bps"], 1.2)
         self.assertFalse(submitted["allow_short"])
 
     def test_api_v1_task_status_endpoint(self):

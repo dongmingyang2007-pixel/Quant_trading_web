@@ -61,6 +61,7 @@
     const taskEndpoint = form.dataset.taskEndpoint || (typeof TASK_ENDPOINT !== 'undefined' ? TASK_ENDPOINT : '');
     const statusTemplate =
         form.dataset.taskStatusTemplate || (typeof TASK_STATUS_TEMPLATE !== 'undefined' ? TASK_STATUS_TEMPLATE : '');
+    const preflightEndpoint = form.dataset.preflightEndpoint || '';
     const historyBase =
         form.dataset.historyBase ||
         (typeof HISTORY_LOAD_BASE !== 'undefined' && HISTORY_LOAD_BASE) ||
@@ -180,6 +181,104 @@
         if (!params.end_date) params.end_date = todayIso;
         if (!params.start_date) params.start_date = todayIso;
         return params;
+    };
+
+    const runPreflight = async (params) => {
+        if (!preflightEndpoint) return null;
+        const response = await fetch(preflightEndpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken,
+            },
+            body: JSON.stringify(params),
+        });
+        if (!response.ok) {
+            throw new Error(`Preflight HTTP ${response.status}`);
+        }
+        const payload = await response.json().catch(() => null);
+        return payload && typeof payload === 'object' ? payload : null;
+    };
+
+    const buildPreflightWarnings = (payload) => {
+        const warnings = [];
+        const rows = Number(payload && payload.rows ? payload.rows : 0);
+        const minRequired = Number(payload && payload.min_required ? payload.min_required : 0);
+        const requestedStart = payload && payload.requested_start ? String(payload.requested_start) : '';
+        const requestedEnd = payload && payload.requested_end ? String(payload.requested_end) : '';
+        const effectiveStart = payload && payload.effective_start ? String(payload.effective_start) : '';
+        const effectiveEnd = payload && payload.effective_end ? String(payload.effective_end) : '';
+        if (!rows) {
+            warnings.push(langIsZh ? '没有可用数据行，可能无法回测。' : 'No available rows found for this window.');
+        } else if (minRequired && rows < minRequired) {
+            warnings.push(
+                langIsZh
+                    ? `数据量不足：${rows} 行 < 最小要求 ${minRequired} 行。`
+                    : `Insufficient rows: ${rows} < minimum ${minRequired}.`
+            );
+        }
+        if (requestedStart && effectiveStart && requestedStart !== effectiveStart) {
+            warnings.push(
+                langIsZh
+                    ? `起始日期已调整：${requestedStart} → ${effectiveStart}。`
+                    : `Start date adjusted: ${requestedStart} → ${effectiveStart}.`
+            );
+        }
+        if (requestedEnd && effectiveEnd && requestedEnd !== effectiveEnd) {
+            warnings.push(
+                langIsZh
+                    ? `结束日期已调整：${requestedEnd} → ${effectiveEnd}。`
+                    : `End date adjusted: ${requestedEnd} → ${effectiveEnd}.`
+            );
+        }
+        const quality = payload && payload.data_quality && typeof payload.data_quality === 'object' ? payload.data_quality : {};
+        const missingRatio = Number(quality.missing_ratio || 0);
+        if (missingRatio > 0.05) {
+            warnings.push(
+                langIsZh
+                    ? `缺失比例偏高：${(missingRatio * 100).toFixed(1)}%。`
+                    : `High missing ratio: ${(missingRatio * 100).toFixed(1)}%.`
+            );
+        }
+        const zeroVolumeDays = Number(quality.zero_volume_days || 0);
+        if (zeroVolumeDays > 0) {
+            warnings.push(
+                langIsZh
+                    ? `存在 ${zeroVolumeDays} 天零成交量。`
+                    : `${zeroVolumeDays} zero-volume days detected.`
+            );
+        }
+        const stalePriceDays = Number(quality.stale_price_days || 0);
+        if (stalePriceDays > 0) {
+            warnings.push(
+                langIsZh
+                    ? `存在 ${stalePriceDays} 天价格无变动。`
+                    : `${stalePriceDays} stale-price days detected.`
+            );
+        }
+        const notes = Array.isArray(payload && payload.notes) ? payload.notes : [];
+        if (notes.length) {
+            const trimmed = notes.slice(0, 3).map((note) => String(note));
+            warnings.push(...trimmed);
+        }
+        return warnings;
+    };
+
+    const confirmPreflight = async (params) => {
+        if (!preflightEndpoint) return true;
+        try {
+            const payload = await runPreflight(params);
+            if (!payload) return true;
+            const warnings = buildPreflightWarnings(payload);
+            if (!warnings.length) return true;
+            const heading = langIsZh ? '预检查提示' : 'Preflight alerts';
+            const prompt = langIsZh ? '是否继续提交回测？' : 'Proceed with the backtest?';
+            const message = `${heading}\n${warnings.map((item) => `- ${item}`).join('\n')}\n\n${prompt}`;
+            return window.confirm(message);
+        } catch (error) {
+            console.warn('Preflight failed:', error);
+            return true;
+        }
     };
 
     const pollTask = (taskId, startedAt) => {
@@ -378,13 +477,17 @@
         }
     };
 
-    form.addEventListener('submit', (event) => {
+    form.addEventListener('submit', async (event) => {
         if (!taskEndpoint) {
             alert(langIsZh ? '未配置异步回测端点，将使用传统提交。' : 'Async endpoint missing, falling back to sync submit.');
             return;
         }
         event.preventDefault();
         const params = serializeFormParams();
+        const proceed = await confirmPreflight(params);
+        if (!proceed) {
+            return;
+        }
         const submissionId = createClientRequestId();
         params.client_request_id = submissionId;
         upsertPendingSubmission({

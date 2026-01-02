@@ -126,6 +126,17 @@ def backtest_sma_strategy(
             "position",
         ],
     )
+    adv_hits = int(exec_stats.get("adv_hard_cap_hits") or 0)
+    stats["execution_stats"] = {
+        "avg_coverage": exec_stats.get("avg_coverage"),
+        "unfilled_ratio": exec_stats.get("unfilled_ratio"),
+        "avg_spread_bps": exec_stats.get("avg_spread_bps"),
+        "halt_days": exec_stats.get("halt_days"),
+        "limit_days": exec_stats.get("limit_days"),
+        "participation": exec_stats.get("participation"),
+        "effective_participation": exec_stats.get("effective_participation"),
+        "adv_hard_cap_hits": adv_hits,
+    }
     stats["cost_assumptions"] = {
         "slippage_model": params.slippage_model,
         "cost_rate": cost_rate,
@@ -138,7 +149,6 @@ def backtest_sma_strategy(
     aggregate_events = []
     if overlay_events:
         aggregate_events.extend(overlay_events)
-    adv_hits = int(exec_stats.get("adv_hard_cap_hits") or 0)
     if adv_hits > 0:
         participation = params.max_adv_participation or 0.1
         aggregate_events.append(f"因 ADV 参与率上限({participation:.0%}) 压缩 {adv_hits} 次仓位，避免不可成交。")

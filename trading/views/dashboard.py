@@ -146,6 +146,12 @@ def build_strategy_input(cleaned: dict[str, Any], *, request_id: str, user) -> t
     _override("volatility_target", float)
     _override("transaction_cost_bps", float)
     _override("slippage_bps", float)
+    _override("return_path", str)
+    _override("max_adv_participation", float)
+    _override("execution_liquidity_buffer", float)
+    _override("execution_penalty_bps", float)
+    _override("limit_move_threshold", float)
+    _override("borrow_cost_bps", float)
     _override("min_holding_days", int)
     _override("entry_threshold", float)
     _override("exit_threshold", float)
@@ -182,6 +188,10 @@ def build_strategy_input(cleaned: dict[str, Any], *, request_id: str, user) -> t
         volatility_target=config["volatility_target"],
         transaction_cost_bps=config["transaction_cost_bps"],
         slippage_bps=config["slippage_bps"],
+        execution_penalty_bps=config.get("execution_penalty_bps", 6.0),
+        execution_liquidity_buffer=config.get("execution_liquidity_buffer", 0.05),
+        max_adv_participation=config.get("max_adv_participation", 0.1),
+        borrow_cost_bps=config.get("borrow_cost_bps", 0.0),
         min_holding_days=config["min_holding_days"],
         train_window=config["train_window"],
         test_window=config["test_window"],

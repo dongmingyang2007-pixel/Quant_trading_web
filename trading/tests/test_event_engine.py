@@ -9,6 +9,7 @@ from django.test import SimpleTestCase
 
 from trading.strategies import StrategyInput
 from trading.strategies.event_engine import compute_realized_returns, run_event_backtest
+from trading.strategies.ma_cross import backtest_sma_strategy
 
 
 class EventEngineTests(SimpleTestCase):
@@ -71,3 +72,32 @@ class EventEngineTests(SimpleTestCase):
         realized = compute_realized_returns(frame, params)
         self.assertEqual(float(realized.iloc[0]), 0.0)
         self.assertAlmostEqual(float(realized.iloc[1]), 0.11, places=6)
+
+    def test_backtest_sma_sets_execution_stats(self):
+        idx = pd.date_range("2024-01-01", periods=12, freq="B")
+        base = np.linspace(100.0, 112.0, len(idx))
+        frame = pd.DataFrame(
+            {
+                "adj close": base,
+                "close": base,
+                "open": base,
+                "volume": np.full(len(idx), 1_000_000.0),
+                "adv": np.full(len(idx), 1_000_000_000.0),
+                "sma_short": base,
+                "sma_long": base - 1.0,
+                "rsi": np.full(len(idx), 55.0),
+            },
+            index=idx,
+        )
+        params = self._params(return_path="close_to_close", execution_delay_days=1)
+
+        backtest, _, stats = backtest_sma_strategy(
+            frame,
+            params,
+            summarize_backtest_fn=lambda *_args, **_kwargs: ([], {}),
+            compute_oos_report=lambda *_args, **_kwargs: None,
+        )
+
+        self.assertFalse(backtest.empty)
+        self.assertIn("execution_stats", stats)
+        self.assertIn("avg_coverage", stats["execution_stats"])
