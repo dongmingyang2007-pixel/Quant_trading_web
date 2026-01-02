@@ -9,7 +9,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from .strategies import StrategyInput, run_quant_pipeline
-from .history import BacktestRecord, append_history, sanitize_snapshot
+from .history import BacktestRecord, append_history, compact_history_snapshot, sanitize_snapshot
 from .train_ml import run_engine_benchmark
 from paper.engine import run_pending_sessions
 
@@ -64,10 +64,18 @@ def _persist_history(result: Dict[str, Any], user_id: str | None) -> str | None:
     snapshot = sanitize_snapshot(result)
     payload = dict(result)
     payload["snapshot"] = snapshot
+    safe_payload = sanitize_snapshot(payload)
     try:
-        record = BacktestRecord.from_payload(payload, user_id=user_id)
-        append_history(record)
-        return record.record_id
+        record = BacktestRecord.from_payload(safe_payload, user_id=user_id)
+        if append_history(record):
+            return record.record_id
+        compact_snapshot = compact_history_snapshot(payload)
+        compact_payload = dict(safe_payload)
+        compact_payload["snapshot"] = compact_snapshot
+        compact_record = BacktestRecord.from_payload(compact_payload, user_id=user_id)
+        if append_history(compact_record):
+            return compact_record.record_id
+        return None
     except Exception:
         return None
 

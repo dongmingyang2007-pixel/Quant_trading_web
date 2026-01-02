@@ -415,8 +415,20 @@ def build_related_portfolios(
 
 def build_statistical_baselines(prices: pd.DataFrame, params: StrategyInput) -> dict[str, Any]:
     """Generate ARIMA/VAR baselines to benchmark ML策略."""
-    closes = prices.get("adj close", pd.Series(dtype=float)).dropna()
-    volumes = prices.get("volume", pd.Series(dtype=float)).dropna()
+    def _with_inferred_freq(series: pd.Series) -> pd.Series:
+        if series.empty or not isinstance(series.index, pd.DatetimeIndex):
+            return series
+        freq = series.index.freq or pd.infer_freq(series.index)
+        if not freq:
+            freq = "B"
+        try:
+            series = series.asfreq(freq)
+        except ValueError:
+            series = series.asfreq("B")
+        return series.ffill()
+
+    closes = _with_inferred_freq(prices.get("adj close", pd.Series(dtype=float))).dropna()
+    volumes = _with_inferred_freq(prices.get("volume", pd.Series(dtype=float))).dropna()
     baseline: dict[str, Any] = {"arima": None, "var": None, "diagnostics": []}
 
     if ARIMA is not None and closes.shape[0] >= 60:

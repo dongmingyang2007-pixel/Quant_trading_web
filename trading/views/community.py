@@ -79,11 +79,13 @@ def community(request):
     topic_meta = get_topic(requested_topic)
     share_record = None
     share_error = None
+    share_record_id = ""
     share_history_id = (request.GET.get("share_history_id") or "").strip()
     if share_history_id:
         record = get_history_record(share_history_id, user_id=str(user.id))
         if record:
             share_record = build_backtest_summary(record)
+            share_record_id = share_record.get("record_id") or ""
         else:
             share_error = "未找到对应的回测记录，无法分享。" if is_zh else "Backtest record not found. Unable to share."
 
@@ -235,6 +237,7 @@ def community(request):
             "active_topic": topic_meta,
             "share_record": share_record,
             "share_history_id": share_history_id,
+            "share_record_id": share_record_id,
         },
     )
 

@@ -9,6 +9,13 @@
     const historyBase = bodyDataset.taskHistoryBase || "";
     const cancelTemplate = bodyDataset.taskCancelTemplate || "";
     const pollInterval = 5000;
+
+    const fab = document.getElementById("task-fab");
+    const fabCount = document.getElementById("task-fab-count");
+    const fabSpinner = document.getElementById("task-fab-spinner");
+    const centerBody = document.getElementById("task-center-body");
+    const clearBtn = document.getElementById("task-center-clear");
+
     const statusLabels = langIsZh
         ? {
               SUBMIT: "已提交",
@@ -41,6 +48,8 @@
               running_training: "训练运行中",
               rl_pipeline: "强化学习中",
               running_rl: "强化学习运行中",
+              cancelled: "已取消",
+              failed: "失败",
           }
         : {
               bootstrap: "Bootstrapping",
@@ -50,6 +59,8 @@
               running_training: "Training running",
               rl_pipeline: "RL pipeline",
               running_rl: "RL running",
+              cancelled: "Cancelled",
+              failed: "Failed",
           };
 
     const labelForStatus = (status) => statusLabels[status] || (langIsZh ? "排队中" : "Queued");
@@ -60,6 +71,8 @@
         if (status === "REVOKED") return "cancelled";
         return "pending";
     };
+    const isTerminal = (status) => ["SUCCESS", "FAILURE", "REVOKED"].includes(status);
+    const isRunning = (status) => ["PENDING", "STARTED", "PROGRESS", "RETRY", "SUBMIT", "SUBMITTED", ""].includes(status);
     const shouldHideId = (value) => /^pending-|^history-|^sync-/i.test(String(value || ""));
     const shortenId = (value) => {
         const raw = String(value || "").trim();
@@ -67,6 +80,7 @@
         if (raw.length <= 6) return raw.toUpperCase();
         return raw.slice(-6).toUpperCase();
     };
+
     const copyTaskId = (value, button) => {
         if (!value) return;
         const original = button ? button.textContent : "";
@@ -134,64 +148,33 @@
         }
     };
 
-    const buildStatusUrl = (taskId) =>
-        statusTemplate && taskId
-            ? statusTemplate.replace("TASK_ID_PLACEHOLDER", encodeURIComponent(taskId))
-            : "";
-    const buildCancelUrl = (taskId) =>
-        cancelTemplate && taskId
-            ? cancelTemplate.replace("TASK_ID_PLACEHOLDER", encodeURIComponent(taskId))
-            : "";
+    const flushSnapshot = () => Array.from(tasks.entries()).map(([id, val]) => ({ id, ...val }));
 
-const dock =
-    document.getElementById("task-dock") ||
-    (() => {
-        const node = document.createElement("div");
-        node.id = "task-dock";
-            node.className = "task-dock minimized";
-            node.innerHTML = `
-                <div id="task-dock-header" class="task-dock-header">
-                    <div class="task-header-left">
-                        <span class="task-dot"></span>
-                        <span class="task-title">${langIsZh ? "回测任务" : "Backtest Tasks"}</span>
-                    </div>
-                    <div class="task-header-right">
-                        <span id="task-count" class="task-count">0</span>
-                        <button id="task-toggle" class="task-toggle" aria-label="${langIsZh ? "展开/折叠任务" : "Toggle tasks"}">▾</button>
-                    </div>
-                </div>
-                <div id="task-dock-body" class="task-dock-body" hidden></div>
-            `;
+    const broadcastSnapshot = (detail) => {
+        window.dispatchEvent(
+            new CustomEvent("taskdock:update", {
+                detail,
+            })
+        );
+    };
+
+    const toastContainer =
+        document.getElementById("task-toast-container") ||
+        (() => {
+            const node = document.createElement("div");
+            node.id = "task-toast-container";
             document.body.appendChild(node);
             return node;
         })();
 
-const dockHeader = dock.querySelector("#task-dock-header");
-const dockBody = dock.querySelector("#task-dock-body");
-const dockToggle = dock.querySelector("#task-toggle");
-const dockCount = dock.querySelector("#task-count");
-const dockClear = dock.querySelector("#task-clear");
-const toastContainer =
-    document.getElementById("task-toast-container") ||
-    (() => {
-        const node = document.createElement("div");
-        node.id = "task-toast-container";
-        document.body.appendChild(node);
-        return node;
-    })();
-let dockMinimized = true;
-let dragState = null;
-
-const tasks = new Map();
-
-const showToast = (task) => {
-    if (!toastContainer || !task) return;
-    const label = task.ticker || (langIsZh ? "回测任务" : "Backtest task");
-    const linkLabel = langIsZh ? "查看报告" : "View report";
-    const message = task.message || (langIsZh ? "回测完成，可查看报告。" : "Backtest finished. View the report.");
-    const toast = document.createElement("div");
-    toast.className = "task-toast";
-    toast.innerHTML = `
+    const showToast = (task) => {
+        if (!toastContainer || !task) return;
+        const label = task.ticker || (langIsZh ? "回测任务" : "Backtest task");
+        const message = langIsZh ? "任务完成，可查看报告。" : "Task complete. You can view the report.";
+        const linkLabel = langIsZh ? "查看报告" : "View report";
+        const toast = document.createElement("div");
+        toast.className = "task-toast";
+        toast.innerHTML = `
         <div class="task-toast-head">
             <span class="task-toast-label">${label}</span>
             <span class="task-toast-status success">${labelForStatus("SUCCESS")}</span>
@@ -200,36 +183,73 @@ const showToast = (task) => {
         <div class="task-toast-body">${message}</div>
         ${task.link ? `<a href="${task.link}" target="_blank" rel="noopener" class="task-toast-link">${linkLabel}</a>` : ""}
     `;
-    const close = () => {
-        toast.classList.add("is-leaving");
-        window.setTimeout(() => toast.remove(), 220);
+        const close = () => {
+            toast.classList.add("is-leaving");
+            window.setTimeout(() => toast.remove(), 220);
+        };
+        toast.querySelector(".task-toast-close")?.addEventListener("click", (event) => {
+            event.stopPropagation();
+            close();
+        });
+        toast.addEventListener("click", () => {
+            if (task.link) {
+                window.open(task.link, "_blank", "noopener");
+            }
+            close();
+        });
+        toastContainer.appendChild(toast);
+        window.setTimeout(close, 4200);
     };
-    toast.querySelector(".task-toast-close")?.addEventListener("click", (event) => {
-        event.stopPropagation();
-        close();
-    });
-    toast.addEventListener("click", () => {
-        if (task.link) {
-            window.open(task.link, "_blank", "noopener");
+
+    const buildStatusUrl = (taskId) =>
+        statusTemplate && taskId ? statusTemplate.replace("TASK_ID_PLACEHOLDER", encodeURIComponent(taskId)) : "";
+    const buildCancelUrl = (taskId) =>
+        cancelTemplate && taskId ? cancelTemplate.replace("TASK_ID_PLACEHOLDER", encodeURIComponent(taskId)) : "";
+
+    const tasks = new Map();
+
+    const updateFabState = () => {
+        const count = tasks.size;
+        if (fab) {
+            fab.hidden = count === 0;
         }
-        close();
-    });
-    toastContainer.appendChild(toast);
-    window.setTimeout(close, 4200);
-};
+        if (fabCount) {
+            if (count > 0) {
+                fabCount.hidden = false;
+                fabCount.textContent = String(count);
+            } else {
+                fabCount.hidden = true;
+                fabCount.textContent = "0";
+            }
+        }
+        const running = Array.from(tasks.values()).some((task) => isRunning(String(task.status || "").toUpperCase()));
+        if (fabSpinner) {
+            fabSpinner.hidden = !running;
+        }
+    };
 
     const renderTasks = () => {
-        if (!dockBody) return;
-        dockBody.innerHTML = "";
+        if (!centerBody) return;
+        centerBody.innerHTML = "";
         if (tasks.size === 0) {
             const empty = document.createElement("div");
-            empty.className = "task-pill";
-            empty.innerHTML = `<div class="task-meta">${langIsZh ? "暂无任务" : "No tasks yet"}</div>`;
-            dockBody.appendChild(empty);
+            empty.className = "task-center-empty";
+            empty.innerHTML = `
+                <div class="fw-semibold mb-2">${langIsZh ? "暂无回测任务" : "No backtest tasks yet"}</div>
+                <div class="text-muted small mb-3">${
+                    langIsZh ? "提交回测后会在这里展示进度与结果。" : "Submit a backtest to track progress here."
+                }</div>
+                <a class="btn btn-primary btn-sm" href="${historyBase || "/backtest/"}">${
+                    langIsZh ? "去回测" : "Go to backtest"
+                }</a>
+            `;
+            centerBody.appendChild(empty);
+            updateFabState();
+            return;
         }
         tasks.forEach((task, mapId) => {
-            const pill = document.createElement("div");
-            pill.className = "task-pill";
+            const card = document.createElement("div");
+            card.className = "task-card";
             const label = task.ticker || "Task";
             const normalizedStatus = String(task.status || "PENDING").toUpperCase();
             const statusClass = statusClassFor(normalizedStatus);
@@ -246,11 +266,11 @@ const showToast = (task) => {
                 : progressValue !== null
                   ? `${Math.round(progressValue)}%`
                   : "";
-            pill.innerHTML = `
+            card.innerHTML = `
                 <h6>
                     ${label}
                     ${shortId ? `<span class="task-id" title="${rawId}">#${shortId}</span>` : ""}
-                    <span class="status ${statusClass}">${statusText}</span>
+                    <span class="task-status ${statusClass}">${statusText}</span>
                 </h6>
                 <div class="task-meta">
                     ${task.message ? `<span>${task.message}</span>` : ""}
@@ -277,41 +297,38 @@ const showToast = (task) => {
                 });
                 actions.appendChild(copyBtn);
             }
-            if (rawId && cancelTemplate && !shouldHideId(rawId)) {
-                const isTerminal = ["SUCCESS", "FAILURE", "REVOKED"].includes(normalizedStatus);
-                if (!isTerminal) {
-                    const cancelBtn = document.createElement("button");
-                    cancelBtn.type = "button";
-                    cancelBtn.className = "task-cancel";
-                    cancelBtn.textContent = langIsZh ? "取消" : "Cancel";
-                    cancelBtn.addEventListener("click", (event) => {
-                        event.stopPropagation();
-                        cancelBtn.disabled = true;
-                        cancelBtn.textContent = langIsZh ? "取消中..." : "Cancelling...";
-                        const url = buildCancelUrl(rawId);
-                        if (!url) return;
-                        fetch(url, {
-                            method: "POST",
-                            headers: {
-                                "X-CSRFToken": getCsrfToken(),
-                                "X-Requested-With": "XMLHttpRequest",
-                            },
-                        })
-                            .then((res) => res.json().catch(() => ({})))
-                            .then((data) => {
-                                updateTask(mapId, {
-                                    status: data.state || "REVOKED",
-                                    message: langIsZh ? "已取消" : "Cancelled",
-                                    taskId: rawId,
-                                });
-                            })
-                            .catch(() => {
-                                cancelBtn.disabled = false;
-                                cancelBtn.textContent = langIsZh ? "取消" : "Cancel";
+            if (rawId && cancelTemplate && !shouldHideId(rawId) && !isTerminal(normalizedStatus)) {
+                const cancelBtn = document.createElement("button");
+                cancelBtn.type = "button";
+                cancelBtn.className = "task-cancel";
+                cancelBtn.textContent = langIsZh ? "取消" : "Cancel";
+                cancelBtn.addEventListener("click", (event) => {
+                    event.stopPropagation();
+                    cancelBtn.disabled = true;
+                    cancelBtn.textContent = langIsZh ? "取消中..." : "Cancelling...";
+                    const url = buildCancelUrl(rawId);
+                    if (!url) return;
+                    fetch(url, {
+                        method: "POST",
+                        headers: {
+                            "X-CSRFToken": getCsrfToken(),
+                            "X-Requested-With": "XMLHttpRequest",
+                        },
+                    })
+                        .then((res) => res.json().catch(() => ({})))
+                        .then((data) => {
+                            updateTask(mapId, {
+                                status: data.state || "REVOKED",
+                                message: langIsZh ? "已取消" : "Cancelled",
+                                taskId: rawId,
                             });
-                    });
-                    actions.appendChild(cancelBtn);
-                }
+                        })
+                        .catch(() => {
+                            cancelBtn.disabled = false;
+                            cancelBtn.textContent = langIsZh ? "取消" : "Cancel";
+                        });
+                });
+                actions.appendChild(cancelBtn);
             }
             const dismiss = document.createElement("button");
             dismiss.textContent = langIsZh ? "移除" : "Dismiss";
@@ -324,36 +341,32 @@ const showToast = (task) => {
                 renderTasks();
             });
             actions.appendChild(dismiss);
-            pill.appendChild(actions);
-            dockBody.appendChild(pill);
+            card.appendChild(actions);
+            centerBody.appendChild(card);
         });
-        dockCount.textContent = tasks.size;
-        dockBody.hidden = dockMinimized;
-        dock.classList.toggle("minimized", dockMinimized);
+        updateFabState();
     };
 
-    const flushSnapshot = () => Array.from(tasks.entries()).map(([id, val]) => ({ id, ...val }));
-
-    const broadcastSnapshot = (detail) => {
-        window.dispatchEvent(
-            new CustomEvent("taskdock:update", {
-                detail,
-            })
-        );
-    };
-
-const updateTask = (taskId, data) => {
-    if (!taskId) return;
-    const existing = tasks.get(taskId) || {};
-    const prevSize = tasks.size;
-    const merged = { ...existing, ...data };
-        if (data && data.taskId) {
-            merged.taskId = data.taskId;
-        } else if (existing.taskId) {
-            merged.taskId = existing.taskId;
+    const maybeNotify = (taskId, task) => {
+        const status = String(task.status || "").toUpperCase();
+        if (status === "SUCCESS" && !task.notified) {
+            showToast(task);
+            updateTask(taskId, { notified: true });
         }
-        if (data && data.meta) {
-            merged.meta = { ...(existing.meta || {}), ...(data.meta || {}) };
+    };
+
+    const updateTask = (taskId, data) => {
+        if (!taskId) return;
+        const existing = tasks.get(taskId) || {};
+        const merged = { ...existing, ...data };
+        if (data.status) {
+            merged.status = String(data.status || "").toUpperCase();
+        }
+        if (data.progress !== undefined && data.progress === null) {
+            merged.progress = null;
+        }
+        if (data.meta && typeof data.meta === "object") {
+            merged.meta = { ...(existing.meta || {}), ...data.meta };
             if (typeof data.meta.progress === "number") {
                 merged.progress = data.meta.progress;
             }
@@ -361,22 +374,19 @@ const updateTask = (taskId, data) => {
                 merged.stage = data.meta.stage;
             }
         }
-    tasks.set(taskId, merged);
-    if (merged.status === "SUCCESS" && existing.status !== "SUCCESS") {
-        showToast(merged);
-    }
-    while (tasks.size > 5) {
-        const oldestKey = tasks.keys().next().value;
-        tasks.delete(oldestKey);
-    }
-        renderTasks();
-        if (tasks.size > prevSize) {
-            dockMinimized = false;
-            renderTasks();
+        if (merged.notified === undefined) {
+            merged.notified = false;
         }
+        tasks.set(taskId, merged);
+        while (tasks.size > 5) {
+            const oldestKey = tasks.keys().next().value;
+            tasks.delete(oldestKey);
+        }
+        renderTasks();
         const snapshot = flushSnapshot();
         saveStore(snapshot);
         broadcastSnapshot({ id: taskId, task: tasks.get(taskId), tasks: snapshot });
+        maybeNotify(taskId, merged);
     };
 
     const pollTask = (taskId) => {
@@ -444,7 +454,11 @@ const updateTask = (taskId, data) => {
         tasks.clear();
         store.tasks.forEach((item) => {
             if (item && item.id) {
-                tasks.set(item.id, item);
+                const merged = { ...item };
+                if (merged.notified === undefined) {
+                    merged.notified = false;
+                }
+                tasks.set(item.id, merged);
             }
         });
         renderTasks();
@@ -452,58 +466,21 @@ const updateTask = (taskId, data) => {
         store.tasks.forEach((item) => {
             if (!item || !item.id) return;
             const status = String(item.status || "").toUpperCase();
-            const isTerminal = ["SUCCESS", "FAILURE", "REVOKED"].includes(status);
-            if (!isTerminal) {
+            if (!isTerminal(status)) {
                 window.setTimeout(() => pollTask(item.id), 500);
+            } else if (status === "SUCCESS" && !item.notified) {
+                maybeNotify(item.id, item);
             }
         });
     };
 
-    const handleDrag = (event) => {
-        if (!dragState) return;
-        const dx = event.clientX - dragState.startX;
-        const dy = event.clientY - dragState.startY;
-        dock.style.left = `${dragState.startLeft + dx}px`;
-        dock.style.top = `${dragState.startTop + dy}px`;
-    };
-    const stopDrag = () => {
-        dragState = null;
-        document.removeEventListener("mousemove", handleDrag);
-        document.removeEventListener("mouseup", stopDrag);
-    };
-
-    if (dockToggle) {
-        dockToggle.addEventListener("click", (event) => {
-            event.stopPropagation();
-            dockMinimized = !dockMinimized;
-            renderTasks();
-        });
-    }
-    if (dockClear) {
-        dockClear.addEventListener("click", (event) => {
-            event.stopPropagation();
+    if (clearBtn) {
+        clearBtn.addEventListener("click", () => {
             tasks.clear();
-            renderTasks();
-            const snapshot = [];
+            const snapshot = flushSnapshot();
             saveStore(snapshot);
-            broadcastSnapshot({ id: null, task: null, tasks: snapshot });
-        });
-    }
-    if (dockHeader) {
-        dockHeader.addEventListener("mousedown", (event) => {
-            dragState = {
-                startX: event.clientX,
-                startY: event.clientY,
-                startLeft: dock.offsetLeft,
-                startTop: dock.offsetTop,
-            };
-            document.addEventListener("mousemove", handleDrag);
-            document.addEventListener("mouseup", stopDrag);
-        });
-        dockHeader.addEventListener("click", () => {
-            if (dragState) return;
-            dockMinimized = !dockMinimized;
             renderTasks();
+            broadcastSnapshot({ id: null, task: null, tasks: snapshot });
         });
     }
 

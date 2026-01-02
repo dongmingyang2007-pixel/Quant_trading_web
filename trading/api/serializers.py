@@ -43,9 +43,12 @@ class StrategyTaskSerializer(serializers.Serializer):
     daily_exposure_limit = serializers.FloatField(required=False)
     allow_short = serializers.BooleanField(required=False)
     execution_delay_days = serializers.IntegerField(required=False)
+    client_request_id = serializers.CharField(required=False, allow_blank=True)
 
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
-        form = QuantStrategyForm(attrs, language=self.context.get("language"))
+        form_payload = dict(attrs)
+        form_payload.pop("client_request_id", None)
+        form = QuantStrategyForm(form_payload, language=self.context.get("language"))
         if not form.is_valid():
             raise serializers.ValidationError(form.errors)
         attrs["_cleaned"] = form.cleaned_data

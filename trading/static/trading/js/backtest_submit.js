@@ -68,6 +68,7 @@
     const csrfInput = form.querySelector('input[name=csrfmiddlewaretoken]');
     const csrfToken = csrfInput ? csrfInput.value : '';
     const TASK_POLL_INTERVAL_MS = 2500;
+    const PENDING_SUBMIT_KEY = 'backtestPendingSubmissions';
     let pageUnloading = false;
     window.addEventListener('beforeunload', () => {
         pageUnloading = true;
@@ -75,6 +76,48 @@
     window.addEventListener('pagehide', () => {
         pageUnloading = true;
     });
+
+    const loadPendingSubmissions = () => {
+        try {
+            const raw = localStorage.getItem(PENDING_SUBMIT_KEY);
+            const parsed = raw ? JSON.parse(raw) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (_error) {
+            return [];
+        }
+    };
+
+    const savePendingSubmissions = (entries) => {
+        try {
+            if (!entries || !entries.length) {
+                localStorage.removeItem(PENDING_SUBMIT_KEY);
+                return;
+            }
+            localStorage.setItem(PENDING_SUBMIT_KEY, JSON.stringify(entries));
+        } catch (_error) {
+            // ignore storage failures
+        }
+    };
+
+    const upsertPendingSubmission = (entry) => {
+        if (!entry || !entry.id) return;
+        const entries = loadPendingSubmissions().filter((item) => item && item.id !== entry.id);
+        entries.push(entry);
+        savePendingSubmissions(entries);
+    };
+
+    const removePendingSubmission = (id) => {
+        if (!id) return;
+        const entries = loadPendingSubmissions().filter((item) => item && item.id !== id);
+        savePendingSubmissions(entries);
+    };
+
+    const createClientRequestId = () => {
+        if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+            return window.crypto.randomUUID();
+        }
+        return `client-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+    };
 
     const resetAdvancedDefaults = () => {
         if (!advancedDefaults || typeof advancedDefaults !== 'object') return;
@@ -236,6 +279,7 @@
     });
 
     const submitAsync = (params, placeholderId) => {
+        const submissionId = params && params.client_request_id ? params.client_request_id : null;
         return fetch(taskEndpoint, {
             method: 'POST',
             headers: {
@@ -272,6 +316,9 @@
                     });
             })
             .then((data) => {
+                if (submissionId) {
+                    removePendingSubmission(submissionId);
+                }
                 const ticker = params.ticker || 'Task';
                 const created = new Date().toLocaleTimeString();
                 if (placeholderId) {
@@ -338,6 +385,15 @@
         }
         event.preventDefault();
         const params = serializeFormParams();
+        const submissionId = createClientRequestId();
+        params.client_request_id = submissionId;
+        upsertPendingSubmission({
+            id: submissionId,
+            endpoint: taskEndpoint,
+            payload: params,
+            createdAt: Date.now(),
+            attempts: 0,
+        });
         const ticker = params.ticker || 'Task';
         const created = new Date().toLocaleTimeString();
         const placeholderId = `pending-${Date.now()}`;

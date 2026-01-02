@@ -303,7 +303,8 @@ def backtest(request):
                     user_id = str(request.user.id) if request.user.is_authenticated else None
                     history_payload = dict(result)
                     history_payload["snapshot"] = history_snapshot
-                    append_history(BacktestRecord.from_payload(history_payload, user_id=user_id))
+                    safe_payload = sanitize_snapshot(history_payload)
+                    append_history(BacktestRecord.from_payload(safe_payload, user_id=user_id))
                 except Exception:
                     pass
                 result_json = json.dumps(history_snapshot, ensure_ascii=False, default=str)

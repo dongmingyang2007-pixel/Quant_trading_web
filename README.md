@@ -61,16 +61,19 @@ pip install -r requirements-rl.txt   # 强化学习相关
 - `OLLAMA_ENDPOINT` / `OLLAMA_MODEL` / `AI_PROVIDER` / `GEMINI_API_KEY`：LLM 洞察与外部模型（可选）。
 - `METRICS_MAX_BYTES`：遥测文件大小轮转阈值。
 
-## 异步任务（Celery）
-同步模式（默认）：
-- `CELERY_ALWAYS_EAGER=1` 或不配置 `CELERY_BROKER_URL`。
-
-异步模式（需要 Redis）：
+## 异步任务（Celery / Local runner）
+推荐（生产或长回测）：启用 Redis + Celery。
 ```bash
 celery -A quant_trading_site worker -l info -Q backtests,training,rl,paper_trading
 celery -A quant_trading_site beat -l info
 ```
 Celery beat 的调度文件默认写入 `storage_bundle/`。
+
+本地开发（未配置 Redis 时）：回测会自动使用本地线程执行器（Local runner）。
+- 任务状态写入数据库，刷新/跳转后仍可查询。
+- 限制：仅限当前进程；服务重启会中断；不支持跨进程分发；并发由 `LOCAL_TASK_WORKERS` 控制（默认 2）。
+
+如需强制同步（调试用，不建议长回测）：`CELERY_ALWAYS_EAGER=1`。
 
 ## 屏幕图表分析（可选）
 浏览器页面提供“屏幕波型分析”，使用本地屏幕捕获与图形解析。

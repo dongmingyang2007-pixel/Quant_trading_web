@@ -35,6 +35,37 @@ class BacktestRecord(models.Model):
         return f"{self.ticker} {self.start_date}->{self.end_date} ({self.user_id})"
 
 
+class TaskExecution(models.Model):
+    task_id = models.CharField(max_length=64, unique=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="task_executions",
+    )
+    kind = models.CharField(max_length=32, default="backtest")
+    state = models.CharField(max_length=16, default="PENDING")
+    meta = models.JSONField(default=dict, blank=True)
+    result = models.JSONField(default=dict, blank=True)
+    error = models.TextField(blank=True, default="")
+    cancel_requested = models.BooleanField(default=False)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["task_id"]),
+            models.Index(fields=["user", "-created_at"]),
+        ]
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:  # pragma: no cover
+        return f"{self.task_id} ({self.state})"
+
+
 class StrategyPreset(models.Model):
     preset_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="strategy_presets")

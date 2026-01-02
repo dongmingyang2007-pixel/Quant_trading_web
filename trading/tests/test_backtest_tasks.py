@@ -5,8 +5,12 @@ from types import SimpleNamespace
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, SimpleTestCase, override_settings
+from django.core.cache import cache
 from django.urls import reverse
 from unittest import mock
+
+from trading.models import TaskExecution
+from trading.task_queue import get_task_status, submit_backtest_task
 
 
 def _form_payload() -> dict[str, str]:
@@ -26,9 +30,11 @@ class BacktestTaskApiTests(TestCase):
         self.user = User.objects.create_user(username="celery", password="secret123")
         self.client.force_login(self.user)
 
-    @override_settings(CELERY_TASK_ALWAYS_EAGER=True, TASK_RETURN_SNAPSHOT=False)
+    @override_settings(CELERY_TASK_ALWAYS_EAGER=True, TASK_RETURN_SNAPSHOT=False, CELERY_BROKER_URL="memory://")
+    @mock.patch("trading.task_queue.LOCAL_EXECUTOR")
     @mock.patch("trading.task_queue.execute_backtest")
-    def test_enqueue_backtest_task_returns_history_for_sync(self, mock_execute):
+    def test_enqueue_backtest_task_returns_local_task(self, mock_execute, mock_executor):
+        mock_executor.submit.return_value = None
         mock_execute.return_value = {"history_id": "history-1"}
         response = self.client.post(
             reverse("trading:enqueue_backtest_task"),
@@ -37,14 +43,12 @@ class BacktestTaskApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertTrue(payload["task_id"].startswith("sync-"))
-        self.assertEqual(payload["state"], "SUCCESS")
-        self.assertIn("result", payload)
-        self.assertEqual(payload["result"]["history_id"], "history-1")
-        self.assertNotIn("result", payload["result"])
-        mock_execute.assert_called_once()
+        self.assertTrue(payload["task_id"].startswith("local-"))
+        self.assertEqual(payload["state"], "PENDING")
+        self.assertNotIn("result", payload)
+        mock_executor.submit.assert_called_once()
 
-    @override_settings(CELERY_TASK_ALWAYS_EAGER=False)
+    @override_settings(CELERY_TASK_ALWAYS_EAGER=False, CELERY_BROKER_URL="redis://localhost:6379/0")
     @mock.patch("trading.task_queue.execute_backtest")
     def test_enqueue_backtest_task_returns_task_id_for_async(self, mock_execute):
         dummy_task = SimpleNamespace(id="celery-42", state="PENDING")
@@ -97,24 +101,42 @@ class BacktestTaskApiTests(TestCase):
         self.assertEqual(payload["result"]["history_id"], "hist-rl")
         mock_execute.assert_called_once()
 
-    @override_settings(CELERY_TASK_ALWAYS_EAGER=True)
+    @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_BROKER_URL="memory://")
+    @mock.patch("trading.task_queue.LOCAL_EXECUTOR")
     @mock.patch("trading.task_queue.execute_backtest")
-    def test_api_v1_backtest_endpoint(self, mock_execute):
+    def test_api_v1_backtest_endpoint(self, mock_execute, mock_executor):
+        mock_executor.submit.return_value = None
         mock_execute.return_value = {"history_id": "api-history"}
         response = self.client.post(
             reverse("trading:api_v1_backtest_tasks"),
             data=json.dumps(_form_payload()),
             content_type="application/json",
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
         payload = response.json()
-        self.assertEqual(payload["result"]["history_id"], "api-history")
-        self.assertNotIn("result", payload["result"])
+        self.assertTrue(payload["task_id"].startswith("local-"))
 
-    @override_settings(CELERY_TASK_ALWAYS_EAGER=True)
-    @mock.patch("trading.task_queue.execute_backtest")
-    def test_api_v1_backtest_accepts_advanced_fields(self, mock_execute):
-        mock_execute.return_value = {"history_id": "adv-history"}
+    @override_settings(CELERY_TASK_ALWAYS_EAGER=False)
+    @mock.patch("trading.api.views_v1.submit_backtest_task")
+    def test_api_v1_backtest_dedupes_client_request_id(self, mock_submit):
+        cache.clear()
+        dummy_task = SimpleNamespace(id="celery-88", state="PENDING")
+        mock_submit.return_value = dummy_task
+        payload = _form_payload()
+        payload["client_request_id"] = "client-abc"
+        url = reverse("trading:api_v1_backtest_tasks")
+        first = self.client.post(url, data=json.dumps(payload), content_type="application/json")
+        second = self.client.post(url, data=json.dumps(payload), content_type="application/json")
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(second.json()["task_id"], "celery-88")
+        mock_submit.assert_called_once()
+
+    @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_BROKER_URL="memory://")
+    @mock.patch("trading.api.views_v1.submit_backtest_task")
+    def test_api_v1_backtest_accepts_advanced_fields(self, mock_submit):
+        dummy_task = SimpleNamespace(id="local-adv", state="PENDING")
+        mock_submit.return_value = dummy_task
         payload = _form_payload()
         payload.update(
             {
@@ -150,8 +172,8 @@ class BacktestTaskApiTests(TestCase):
             data=json.dumps(payload),
             content_type="application/json",
         )
-        self.assertEqual(response.status_code, 200)
-        submitted = mock_execute.call_args[0][0]
+        self.assertEqual(response.status_code, 202)
+        submitted = mock_submit.call_args[0][0]
         self.assertEqual(submitted["strategy_engine"], "rl_policy")
         self.assertEqual(submitted["risk_profile"], "aggressive")
         self.assertEqual(submitted["short_window"], 20)
@@ -166,6 +188,51 @@ class BacktestTaskApiTests(TestCase):
         data = response.json()
         self.assertEqual(data["task_id"], "sync-test")
         self.assertEqual(data["state"], "SUCCESS")
+
+
+class LocalTaskExecutionTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username="local", password="secret123")
+
+    def test_task_execution_crud(self):
+        execution = TaskExecution.objects.create(
+            task_id="local-crud",
+            user=self.user,
+            kind="backtest",
+            state="PENDING",
+            meta={"progress": 0},
+        )
+        self.assertEqual(TaskExecution.objects.count(), 1)
+        TaskExecution.objects.filter(task_id="local-crud").update(state="PROGRESS", meta={"progress": 40})
+        execution.refresh_from_db()
+        self.assertEqual(execution.state, "PROGRESS")
+        self.assertEqual(execution.meta["progress"], 40)
+        execution.delete()
+        self.assertEqual(TaskExecution.objects.count(), 0)
+
+    def test_get_task_status_for_local_task(self):
+        TaskExecution.objects.create(
+            task_id="local-status",
+            user=self.user,
+            kind="backtest",
+            state="PROGRESS",
+            meta={"progress": 55, "stage": "running_backtest"},
+        )
+        payload = get_task_status("local-status")
+        self.assertEqual(payload["task_id"], "local-status")
+        self.assertEqual(payload["state"], "PROGRESS")
+        self.assertEqual(payload["meta"]["progress"], 55)
+
+    @override_settings(CELERY_TASK_ALWAYS_EAGER=False, CELERY_BROKER_URL="memory://")
+    @mock.patch("trading.task_queue.LOCAL_EXECUTOR")
+    def test_submit_backtest_task_falls_back_to_local(self, mock_executor):
+        mock_executor.submit.return_value = None
+        job = submit_backtest_task({"user_id": self.user.id, "ticker": "AAPL"})
+        self.assertTrue(job.id.startswith("local-"))
+        execution = TaskExecution.objects.get(task_id=job.id)
+        self.assertEqual(execution.state, "PENDING")
+        self.assertEqual(execution.kind, "backtest")
 
 
 class ExecuteBacktestReturnTests(SimpleTestCase):

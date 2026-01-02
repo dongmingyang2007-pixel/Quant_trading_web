@@ -319,7 +319,7 @@ CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", CELERY_BROKER_UR
 # Celery 官方内存 backend 需要 cache 前缀，否则会尝试导入名为 memory 的后端模块
 if CELERY_RESULT_BACKEND == "memory://":
     CELERY_RESULT_BACKEND = "cache+memory://"
-CELERY_TASK_ALWAYS_EAGER = os.environ.get("CELERY_ALWAYS_EAGER", "1" if CELERY_BROKER_URL == "memory://" else "0") in {
+CELERY_TASK_ALWAYS_EAGER = os.environ.get("CELERY_ALWAYS_EAGER", "0") in {
     "1",
     "true",
     "True",

@@ -6,6 +6,7 @@ import logging
 from dataclasses import asdict
 from typing import Any
 from django.utils import timezone
+from django.core.cache import cache
 from django.db.models import Q
 
 from rest_framework import status
@@ -88,11 +89,21 @@ class BaseTaskAPIView(APIView):
 
 
 class BacktestTaskView(BaseTaskAPIView):
+    _CLIENT_CACHE_TTL = 60 * 60
+
     def post(self, request):
         request_id = ensure_request_id(request)
         serializer = StrategyTaskSerializer(data=request.data, context=self._build_context(request))
         serializer.is_valid(raise_exception=True)
         cleaned = serializer.validated_data["_cleaned"]
+        client_request_id = (serializer.validated_data.get("client_request_id") or "").strip()
+        if client_request_id:
+            cached = cache.get(f"backtest:client:{client_request_id}")
+            if isinstance(cached, dict):
+                payload = dict(cached)
+                status_code = payload.pop("_status", status.HTTP_202_ACCEPTED)
+                payload["request_id"] = request_id
+                return Response(payload, status=status_code)
         strategy_input, _ = build_strategy_input(cleaned, request_id=request_id, user=request.user)
         try:
             job = submit_backtest_task(asdict(strategy_input))
@@ -101,7 +112,21 @@ class BacktestTaskView(BaseTaskAPIView):
         except Exception:
             logging.getLogger(__name__).exception("Backtest job submission failed")
             return Response({"error": "Backtest execution failed."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        return self._prepare_response(job, request_id)
+        response_payload = {
+            "task_id": getattr(job, "id", ""),
+            "state": getattr(job, "state", "PENDING"),
+            "request_id": request_id,
+        }
+        status_code = status.HTTP_202_ACCEPTED
+        if isinstance(job, SyncResult):
+            response_payload["result"] = job.result
+            status_code = status.HTTP_200_OK
+        if client_request_id:
+            cached_payload = dict(response_payload)
+            cached_payload.pop("request_id", None)
+            cached_payload["_status"] = status_code
+            cache.set(f"backtest:client:{client_request_id}", cached_payload, timeout=self._CLIENT_CACHE_TTL)
+        return Response(response_payload, status=status_code)
 
 
 class TrainingTaskView(BaseTaskAPIView):

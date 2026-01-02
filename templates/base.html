@@ -162,21 +162,36 @@
             </footer>
         </div>
     </div>
-    <!-- 全局任务栏（固定在右下，不随页面切换消失） -->
-    <div id="task-dock" class="task-dock minimized shadow" aria-live="polite" aria-label="{% bilingual "Backtest tasks" "回测任务" %}">
-        <div id="task-dock-header" class="task-dock-header">
-            <div class="task-header-left">
-                <span class="task-dot"></span>
-                <span class="task-title">{% bilingual "Backtest Tasks" "回测任务" %}</span>
-            </div>
-            <div class="task-header-right">
-                <span id="task-count" class="task-count">0</span>
-                <button id="task-clear" class="task-toggle task-toggle-muted" aria-label="{% bilingual "Clear tasks" "清空任务" %}">🗑</button>
-                <button id="task-toggle" class="task-toggle" aria-label="{% bilingual "Toggle tasks" "展开/折叠任务" %}"></button>
+    <button id="task-fab"
+            class="task-fab"
+            type="button"
+            data-bs-toggle="offcanvas"
+            data-bs-target="#task-center"
+            aria-controls="task-center"
+            aria-label="{% bilingual 'Backtest tasks' '回测任务' %}"
+            hidden>
+        <span class="task-fab-icon">TASK</span>
+        <span id="task-fab-count" class="task-fab-badge" hidden>0</span>
+        <span id="task-fab-spinner" class="task-fab-spinner" hidden></span>
+    </button>
+    <div class="offcanvas offcanvas-end task-center"
+         tabindex="-1"
+         id="task-center"
+         aria-labelledby="task-center-title">
+        <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="task-center-title">{% bilingual "Backtest Tasks" "回测任务" %}</h5>
+            <div class="d-flex align-items-center gap-2">
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="task-center-clear">
+                    {% bilingual "Clear" "清空" %}
+                </button>
+                <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="{% bilingual 'Close' '关闭' %}"></button>
             </div>
         </div>
-        <div id="task-dock-body" class="task-dock-body" hidden></div>
+        <div class="offcanvas-body">
+            <div id="task-center-body"></div>
+        </div>
     </div>
+    <div id="task-toast-container"></div>
 
     <main class="container-xl pb-5">
         {% block content %}{% endblock %}

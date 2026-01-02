@@ -112,7 +112,7 @@
                     <input type="hidden" name="action" value="create_post">
                     <input type="hidden" name="topic" value="{{ post_form.topic.value|default:active_topic.topic_id }}" data-role="topic-input">
                     <input type="hidden" name="image_cropped_data" value="{{ post_form.image_cropped_data.value|default_if_none:'' }}" data-role="cropped-data">
-                    <input type="hidden" name="backtest_record_id" value="{{ post_form.backtest_record_id.value|default_if_none:share_record.record_id|default_if_none:'' }}">
+                    <input type="hidden" name="backtest_record_id" value="{{ post_form.backtest_record_id.value|default_if_none:share_record_id|default_if_none:'' }}">
                     <div class="compose-topic-bar">
                         <span class="badge bg-primary-subtle text-primary-emphasis" data-role="selected-topic">
                             #{{ active_topic.name }}
