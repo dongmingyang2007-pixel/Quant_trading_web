@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import fields
 from datetime import date, datetime
+import logging
 from typing import Any, Dict, List, get_args, get_origin, get_type_hints
 
 from celery import shared_task
@@ -9,12 +10,19 @@ from django.conf import settings
 from django.utils import timezone
 
 from .strategies import StrategyInput, run_quant_pipeline
-from .history import BacktestRecord, append_history, compact_history_snapshot, sanitize_snapshot
+from .history import (
+    BacktestRecord,
+    append_fallback_history,
+    append_history,
+    compact_history_snapshot,
+    sanitize_snapshot,
+)
 from .train_ml import run_engine_benchmark
 from paper.engine import run_pending_sessions
 
 
 _STRATEGY_INPUT_TYPES = get_type_hints(StrategyInput)
+LOGGER = logging.getLogger(__name__)
 
 
 def _is_date_type(type_hint: object | None) -> bool:
@@ -62,22 +70,38 @@ def _persist_history(result: Dict[str, Any], user_id: str | None) -> str | None:
     if not user_id:
         return None
     snapshot = sanitize_snapshot(result)
-    payload = dict(result)
-    payload["snapshot"] = snapshot
+    payload = {
+        "ticker": result.get("ticker"),
+        "benchmark_ticker": result.get("benchmark_ticker") or "",
+        "engine": result.get("engine") or "",
+        "start_date": result.get("start_date") or "",
+        "end_date": result.get("end_date") or "",
+        "metrics": result.get("metrics") or [],
+        "stats": result.get("stats") or {},
+        "params": result.get("params") or {},
+        "warnings": result.get("warnings") or [],
+        "snapshot": snapshot,
+        "title": result.get("title") or "",
+        "tags": result.get("tags") or [],
+    }
     safe_payload = sanitize_snapshot(payload)
+    record = BacktestRecord.from_payload(safe_payload, user_id=user_id)
     try:
-        record = BacktestRecord.from_payload(safe_payload, user_id=user_id)
         if append_history(record):
             return record.record_id
+        if not append_fallback_history(record):
+            LOGGER.warning("Backtest history fallback write failed for %s", record.record_id)
         compact_snapshot = compact_history_snapshot(payload)
         compact_payload = dict(safe_payload)
         compact_payload["snapshot"] = compact_snapshot
         compact_record = BacktestRecord.from_payload(compact_payload, user_id=user_id)
         if append_history(compact_record):
             return compact_record.record_id
-        return None
+        return record.record_id
     except Exception:
-        return None
+        LOGGER.exception("Backtest history persist failed, fallback to file for %s", record.record_id)
+        append_fallback_history(record)
+        return record.record_id
 
 
 def execute_backtest(payload: Dict[str, Any]) -> Dict[str, Any]:
