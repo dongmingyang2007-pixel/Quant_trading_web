@@ -89,14 +89,13 @@ def _persist_history(result: Dict[str, Any], user_id: str | None) -> str | None:
     try:
         if append_history(record):
             return record.record_id
+        compact_snapshot = compact_history_snapshot(snapshot)
+        if compact_snapshot:
+            record.snapshot = compact_snapshot
+        if append_history(record):
+            return record.record_id
         if not append_fallback_history(record):
             LOGGER.warning("Backtest history fallback write failed for %s", record.record_id)
-        compact_snapshot = compact_history_snapshot(payload)
-        compact_payload = dict(safe_payload)
-        compact_payload["snapshot"] = compact_snapshot
-        compact_record = BacktestRecord.from_payload(compact_payload, user_id=user_id)
-        if append_history(compact_record):
-            return compact_record.record_id
         return record.record_id
     except Exception:
         LOGGER.exception("Backtest history persist failed, fallback to file for %s", record.record_id)

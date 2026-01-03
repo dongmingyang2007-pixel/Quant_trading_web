@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load django_bootstrap5 humanize i18n static %}
+{% load django_bootstrap5 humanize i18n static html_filters %}
 
 {% block title %}{% trans "Flagship Strategy Backtest" %}{% endblock %}
 
@@ -167,6 +167,70 @@
     color: #1d4ed8;
     font-weight: 600;
     font-size: 0.85rem;
+}
+
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border: 1px solid transparent;
+}
+
+.status-badge.good {
+    background: rgba(34, 197, 94, 0.16);
+    color: #166534;
+    border-color: rgba(34, 197, 94, 0.3);
+}
+
+.status-badge.neutral {
+    background: rgba(234, 179, 8, 0.16);
+    color: #854d0e;
+    border-color: rgba(234, 179, 8, 0.32);
+}
+
+.status-badge.weak {
+    background: rgba(248, 113, 113, 0.16);
+    color: #991b1b;
+    border-color: rgba(248, 113, 113, 0.3);
+}
+
+.meta-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.meta-value {
+    min-width: 0;
+    max-width: 360px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.meta-copy {
+    border: 1px solid rgba(148, 163, 184, 0.6);
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 0.72rem;
+    background: #fff;
+    color: #0f172a;
+    cursor: pointer;
+}
+
+.meta-copy[disabled] {
+    opacity: 0.6;
+    cursor: default;
+}
+
+@media (max-width: 991.98px) {
+    .meta-value {
+        max-width: 240px;
+    }
 }
 
     font-size: 0.78rem;
@@ -985,6 +1049,13 @@
                             {% if result.engine_label %}
                                 <span class="hero-chip">{% trans "Engine:" %} {{ result.engine_label }}</span>
                             {% endif %}
+                            {% if result.confidence_label or result.confidence_score %}
+                                <span class="hero-chip">
+                                    {% bilingual "Confidence" "置信度" %}：
+                                    {% if result.confidence_label %}{{ result.confidence_label }}{% endif %}
+                                    {% if result.confidence_score %} ({{ result.confidence_score|floatformat:2 }}){% endif %}
+                                </span>
+                            {% endif %}
                         </div>
                     </div>
                     <span class="summary-period">{% blocktrans with start=result.start_date end=result.end_date %}Window: {{ start }} → {{ end }}{% endblocktrans %}</span>
@@ -1074,13 +1145,45 @@
                             <div class="col-12 col-lg-6">
                                 <p class="text-muted small mb-2">{% bilingual "Fill coverage" "成交覆盖" %}</p>
                                 <ul class="panel-list muted">
-                                    <li>{% bilingual "Avg coverage" "平均覆盖率" %}：{{ result.stats.execution_stats.avg_coverage|floatformat:2|default:"-" }}</li>
-                                    <li>{% bilingual "Unfilled ratio" "未成交比例" %}：{{ result.stats.execution_stats.unfilled_ratio|floatformat:2|default:"-" }}</li>
+                                    <li class="meta-row">
+                                        <span>{% bilingual "Avg coverage" "平均覆盖率" %}：</span>
+                                        <span>{{ result.stats.execution_stats.avg_coverage|percent:1|default:"-" }}</span>
+                                        {% with coverage=result.stats.execution_stats.avg_coverage %}
+                                            {% if coverage %}
+                                                {% if coverage >= 0.9 %}
+                                                    <span class="status-badge good">{% bilingual "Strong" "良好" %}</span>
+                                                {% elif coverage >= 0.75 %}
+                                                    <span class="status-badge neutral">{% bilingual "Fair" "一般" %}</span>
+                                                {% else %}
+                                                    <span class="status-badge weak">{% bilingual "Weak" "偏弱" %}</span>
+                                                {% endif %}
+                                            {% endif %}
+                                        {% endwith %}
+                                    </li>
+                                    <li>{% bilingual "Unfilled ratio" "未成交比例" %}：{{ result.stats.execution_stats.unfilled_ratio|percent:1|default:"-" }}</li>
                                     <li>{% bilingual "Avg spread (bps)" "平均点差 (bps)" %}：{{ result.stats.execution_stats.avg_spread_bps|floatformat:2|default:"-" }}</li>
                                     <li>{% bilingual "Halt days" "停牌天数" %}：{{ result.stats.execution_stats.halt_days|default:"0" }}</li>
                                     <li>{% bilingual "Limit days" "涨跌停天数" %}：{{ result.stats.execution_stats.limit_days|default:"0" }}</li>
                                     <li>{% bilingual "ADV cap hits" "ADV 上限触发次数" %}：{{ result.stats.execution_stats.adv_hard_cap_hits|default:"0" }}</li>
                                 </ul>
+                                <div class="mt-3">
+                                    <p class="text-muted small mb-2">{% bilingual "Execution assumptions" "执行假设" %}</p>
+                                    <ul class="panel-list muted small">
+                                        <li title="return_path / label_return_path">
+                                            {% bilingual "Path" "口径" %}：{{ result.stats.execution_assumptions.return_path|default:"-" }} / {{ result.stats.execution_assumptions.label_return_path|default:"-" }}
+                                        </li>
+                                        <li title="adv_participation / effective_participation">
+                                            {% bilingual "Participation" "参与率" %}：
+                                            {{ result.stats.execution_stats.effective_participation|percent:1|default:"-" }}
+                                        </li>
+                                        <li title="cost_rate / borrow_bps / execution_mode">
+                                            {% bilingual "Cost settings" "成本假设" %}：
+                                            {{ result.stats.cost_assumptions.cost_rate|percent:2|default:"-" }} ·
+                                            {{ result.stats.cost_assumptions.long_borrow_bps|default:"-" }}/{{ result.stats.cost_assumptions.short_borrow_bps|default:"-" }} bps ·
+                                            {{ result.stats.cost_assumptions.execution_mode|default:"-" }}
+                                        </li>
+                                    </ul>
+                                </div>
                             </div>
                             <div class="col-12 col-lg-6">
                                 <p class="text-muted small mb-2">{% bilingual "Cost breakdown" "成本拆解" %}</p>
@@ -1103,16 +1206,37 @@
                                     <li>{% bilingual "Source" "来源" %}：{{ result.metadata.data_signature.source|default:"-" }}</li>
                                     <li>{% bilingual "Rows" "行数" %}：{{ result.metadata.data_signature.rows|default:"0" }}</li>
                                     <li>{% bilingual "Data range" "数据区间" %}：{{ result.metadata.data_signature.start|default:"-" }} → {{ result.metadata.data_signature.end|default:"-" }}</li>
-                                    <li>{% bilingual "Hash" "哈希" %}：{{ result.metadata.data_signature.hash|default:"-" }}</li>
-                                    <li>{% bilingual "Cache path" "缓存路径" %}：{{ result.metadata.data_signature.cache_path|default:"-" }}</li>
+                                    <li class="meta-row">
+                                        <span>{% bilingual "Hash" "哈希" %}：</span>
+                                        <span class="meta-value" title="{{ result.metadata.data_signature.hash|default:"-" }}">{{ result.metadata.data_signature.hash|default:"-" }}</span>
+                                        {% if result.metadata.data_signature.hash %}
+                                            <button type="button" class="meta-copy" data-copy-value="{{ result.metadata.data_signature.hash }}" aria-label="{% bilingual "Copy hash" "复制哈希" %}">{% bilingual "Copy" "复制" %}</button>
+                                        {% endif %}
+                                    </li>
+                                    <li class="meta-row">
+                                        <span>{% bilingual "Cache path" "缓存路径" %}：</span>
+                                        <span class="meta-value" title="{{ result.metadata.data_signature.cache_path|default:"-" }}">{{ result.metadata.data_signature.cache_path|default:"-" }}</span>
+                                        {% if result.metadata.data_signature.cache_path %}
+                                            <button type="button" class="meta-copy" data-copy-value="{{ result.metadata.data_signature.cache_path }}" aria-label="{% bilingual "Copy path" "复制路径" %}">{% bilingual "Copy" "复制" %}</button>
+                                        {% endif %}
+                                    </li>
                                     <li>{% bilingual "Requested window" "请求区间" %}：{{ result.metadata.requested_start|default:"-" }} → {{ result.metadata.requested_end|default:"-" }}</li>
                                     <li>{% bilingual "Effective window" "实际区间" %}：{{ result.metadata.effective_start|default:"-" }} → {{ result.metadata.effective_end|default:"-" }}</li>
                                 </ul>
+                                {% if result.metadata.data_signature.source == "csv_cache" %}
+                                    <div class="alert alert-warning small mb-0">
+                                        {% bilingual "Using local CSV cache because online data was unavailable." "当前使用本地 CSV 缓存，线上行情暂不可用。" %}
+                                    </div>
+                                {% elif not result.metadata.data_signature.source %}
+                                    <div class="alert alert-warning small mb-0">
+                                        {% bilingual "Online data source not detected. Please verify the data fetch." "未检测到线上数据来源，请检查行情获取是否正常。" %}
+                                    </div>
+                                {% endif %}
                             </div>
                             <div class="col-12 col-lg-6">
                                 <p class="text-muted small mb-2">{% bilingual "Quality checks" "质量检查" %}</p>
                                 <ul class="panel-list muted">
-                                    <li>{% bilingual "Missing ratio" "缺失比例" %}：{{ result.stats.data_quality.missing_ratio|floatformat:2|default:"0" }}</li>
+                                    <li>{% bilingual "Missing ratio" "缺失比例" %}：{{ result.stats.data_quality.missing_ratio|percent:1|default:"-" }}</li>
                                     <li>{% bilingual "Zero volume days" "零成交量天数" %}：{{ result.stats.data_quality.zero_volume_days|default:"0" }}</li>
                                     <li>{% bilingual "Stale price days" "价格无变动天数" %}：{{ result.stats.data_quality.stale_price_days|default:"0" }}</li>
                                 </ul>
@@ -2193,6 +2317,54 @@ document.addEventListener('DOMContentLoaded', () => {
     const form = document.getElementById('analysis-form');
     const navItems = Array.from(document.querySelectorAll('.backtest-tab'));
     const panels = Array.from(document.querySelectorAll('.backtest-panel'));
+    const copyButtons = Array.from(document.querySelectorAll('.meta-copy[data-copy-value]'));
+    const copyLabel = langIsZh ? '复制' : 'Copy';
+    const copiedLabel = langIsZh ? '已复制' : 'Copied';
+
+    const copyText = async (value) => {
+        if (!value) return false;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            try {
+                await navigator.clipboard.writeText(value);
+                return true;
+            } catch (_error) {
+                // fallback
+            }
+        }
+        const textarea = document.createElement('textarea');
+        textarea.value = value;
+        textarea.setAttribute('readonly', 'readonly');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        let ok = false;
+        try {
+            ok = document.execCommand('copy');
+        } catch (_error) {
+            ok = false;
+        }
+        textarea.remove();
+        return ok;
+    };
+
+    copyButtons.forEach((button) => {
+        const raw = button.dataset.copyValue || '';
+        if (!raw) {
+            button.disabled = true;
+            return;
+        }
+        const original = button.textContent || copyLabel;
+        button.addEventListener('click', async () => {
+            const ok = await copyText(raw);
+            if (!ok) return;
+            button.textContent = copiedLabel;
+            window.setTimeout(() => {
+                button.textContent = original;
+            }, 1200);
+        });
+    });
 
     function activatePanel(name) {
         let targetPanel = null;

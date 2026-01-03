@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
@@ -113,6 +113,57 @@ def _prepare_result_payload(payload: dict[str, Any]) -> None:
     flows = payload.get("capital_flows")
     if isinstance(flows, dict):
         payload["capital_flows_summary"] = flows.get("_summary")
+
+
+def _normalize_history_snapshot(payload: dict[str, Any]) -> None:
+    if not isinstance(payload, dict):
+        return
+    stats = payload.get("stats")
+    if isinstance(stats, dict):
+        if "execution_stats" not in stats:
+            execution = stats.get("execution")
+            if isinstance(execution, dict):
+                stats["execution_stats"] = execution
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict) or not metadata:
+        repro = payload.get("repro")
+        if isinstance(repro, dict) and repro:
+            metadata = dict(repro)
+        else:
+            metadata = {}
+    params = payload.get("params")
+    if not isinstance(params, dict):
+        params = {}
+
+    def _stringify_date(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, (date, datetime)):
+            return value.isoformat()
+        return str(value).strip()
+
+    def _fallback_value(*keys: str) -> str:
+        for key in keys:
+            val = params.get(key) if key in params else payload.get(key)
+            text = _stringify_date(val)
+            if text:
+                return text
+        return ""
+
+    if not metadata.get("requested_start"):
+        fallback_start = _fallback_value("start_date")
+        if fallback_start:
+            metadata["requested_start"] = fallback_start
+    if not metadata.get("requested_end"):
+        fallback_end = _fallback_value("end_date")
+        if fallback_end:
+            metadata["requested_end"] = fallback_end
+    if not metadata.get("effective_start") and metadata.get("requested_start"):
+        metadata["effective_start"] = metadata["requested_start"]
+    if not metadata.get("effective_end") and metadata.get("requested_end"):
+        metadata["effective_end"] = metadata["requested_end"]
+
+    payload["metadata"] = metadata
 
 
 def build_strategy_input(cleaned: dict[str, Any], *, request_id: str, user) -> tuple[StrategyInput, dict[str, Any]]:
@@ -273,6 +324,7 @@ def backtest(request):
                 strategy_params, config = build_strategy_input(cleaned, request_id=request_id, user=request.user)
 
                 result = run_quant_pipeline(strategy_params)
+                _normalize_history_snapshot(result)
                 _ensure_ai_model_metadata(result)
                 _prepare_result_payload(result)
                 result["include_ai"] = True
@@ -339,6 +391,7 @@ def backtest(request):
             record = get_history_record(history_id, user_id=user_id)
             if record and record.get("snapshot"):
                 snapshot = record["snapshot"]
+                _normalize_history_snapshot(snapshot)
                 result = snapshot
                 _ensure_ai_model_metadata(result)
                 _prepare_result_payload(result)
