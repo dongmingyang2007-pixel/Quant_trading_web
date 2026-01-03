@@ -347,7 +347,7 @@
         const container = document.getElementById('analysis-form-card') || form;
         if (!container) return;
         const hasRunning = (tasksSnapshot || []).some((t) =>
-            ['PENDING', 'STARTED', 'RETRY', 'SUBMIT', ''].includes((t.status || '').toUpperCase())
+            ['PENDING', 'STARTED', 'RETRY', 'SUBMIT', 'PROGRESS', 'SUBMITTED', ''].includes((t.status || '').toUpperCase())
         );
         let banner = document.getElementById(bannerId);
         if (!hasRunning) {

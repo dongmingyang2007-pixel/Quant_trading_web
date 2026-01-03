@@ -786,7 +786,7 @@ def _build_progress_plan(params: StrategyInput, payload: dict[str, Any]) -> dict
     return {"steps": steps, "remaining": remaining, "eta_seconds": eta_seconds, "message": message}
 
 
-_CACHE_EXCLUDED_FIELDS = {"request_id", "user_id", "exec_latency_ms"}
+_CACHE_EXCLUDED_FIELDS = {"request_id", "exec_latency_ms"}
 
 
 def _params_cache_signature(params: StrategyInput) -> str:
@@ -820,6 +820,14 @@ def run_quant_pipeline(params: StrategyInput) -> dict[str, Any]:
             cached = cache_get_object(cache_key)
             if isinstance(cached, dict):
                 result_payload = copy.deepcopy(cached)
+                params_payload = result_payload.get("params")
+                if not isinstance(params_payload, dict):
+                    params_payload = {}
+                    result_payload["params"] = params_payload
+                if params.request_id:
+                    params_payload["request_id"] = params.request_id
+                if params.user_id is not None:
+                    params_payload["user_id"] = params.user_id
                 success = True
                 record_metric("backtest.cache_hit", ticker=params.ticker.upper())
                 return result_payload

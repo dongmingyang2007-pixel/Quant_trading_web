@@ -66,8 +66,13 @@ def _deserialize_strategy_input(payload: Dict[str, Any]) -> StrategyInput:
     return StrategyInput(**converted)
 
 
-def _persist_history(result: Dict[str, Any], user_id: str | None) -> str | None:
-    if not user_id:
+def _persist_history(result: Dict[str, Any], user_id_override: str | None = None) -> str | None:
+    resolved_user_id = user_id_override
+    if resolved_user_id is None:
+        params = result.get("params") if isinstance(result, dict) else None
+        if isinstance(params, dict):
+            resolved_user_id = params.get("user_id")
+    if not resolved_user_id:
         return None
     snapshot = sanitize_snapshot(result)
     payload = {
@@ -85,7 +90,7 @@ def _persist_history(result: Dict[str, Any], user_id: str | None) -> str | None:
         "tags": result.get("tags") or [],
     }
     safe_payload = sanitize_snapshot(payload)
-    record = BacktestRecord.from_payload(safe_payload, user_id=user_id)
+    record = BacktestRecord.from_payload(safe_payload, user_id=str(resolved_user_id))
     try:
         if append_history(record):
             return record.record_id
@@ -106,7 +111,8 @@ def _persist_history(result: Dict[str, Any], user_id: str | None) -> str | None:
 def execute_backtest(payload: Dict[str, Any]) -> Dict[str, Any]:
     params = _deserialize_strategy_input(payload)
     result = run_quant_pipeline(params)
-    history_id = _persist_history(result, getattr(params, "user_id", None))
+    user_override = getattr(params, "user_id", None)
+    history_id = _persist_history(result, user_id_override=str(user_override) if user_override else None)
     if getattr(settings, "TASK_RETURN_SNAPSHOT", False):
         safe_result = sanitize_snapshot(result)
         return {
@@ -143,7 +149,8 @@ def execute_training_job(payload: Dict[str, Any]) -> Dict[str, Any]:
 def execute_rl_job(payload: Dict[str, Any]) -> Dict[str, Any]:
     params = _deserialize_strategy_input(payload)
     result = run_quant_pipeline(params)
-    history_id = _persist_history(result, getattr(params, "user_id", None))
+    user_override = getattr(params, "user_id", None)
+    history_id = _persist_history(result, user_id_override=str(user_override) if user_override else None)
     rl_summary = {
         "playbook": result.get("rl_playbook"),
         "stats": result.get("stats"),

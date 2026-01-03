@@ -365,9 +365,16 @@ def fetch_price_data(ticker: str, start: date, end: date) -> Tuple[pd.DataFrame,
             elif col == "volume":
                 data[col] = 0.0
         to_cache = data[cache_cols].copy()
-        to_cache = to_cache.reset_index().rename(columns={"index": "date"})
+        to_cache.index = pd.to_datetime(to_cache.index)
+        to_cache.index.name = "date"
+        to_cache = to_cache.reset_index()
+        if "Date" in to_cache.columns and "date" not in to_cache.columns:
+            to_cache = to_cache.rename(columns={"Date": "date"})
+        if "date" not in to_cache.columns:
+            to_cache = to_cache.rename(columns={to_cache.columns[0]: "date"})
         to_cache["date"] = pd.to_datetime(to_cache["date"]).dt.strftime("%Y-%m-%d")
         to_cache.to_csv(cache_file, index=False)
+        cache_path = os.fspath(cache_file)
     except Exception:
         # Non-fatal: caching should not break pipeline
         pass

@@ -46,7 +46,7 @@ class HistoryCompactTests(SimpleTestCase):
             "warnings": [],
             "metadata": {"data_signature": {"source": "yfinance", "rows": 10}},
         }
-        history_id = _persist_history(result, user_id="1")
+        history_id = _persist_history(result, user_id_override="1")
         self.assertEqual(history_id, record_ids[0])
         self.assertEqual(record_ids[0], record_ids[1])
         mock_append_fallback.assert_not_called()
