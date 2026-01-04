@@ -48,6 +48,7 @@
               running_training: "训练运行中",
               rl_pipeline: "强化学习中",
               running_rl: "强化学习运行中",
+              running_robustness: "稳健性评估中",
               cancelled: "已取消",
               failed: "失败",
           }
@@ -59,6 +60,7 @@
               running_training: "Training running",
               rl_pipeline: "RL pipeline",
               running_rl: "RL running",
+              running_robustness: "Robustness running",
               cancelled: "Cancelled",
               failed: "Failed",
           };

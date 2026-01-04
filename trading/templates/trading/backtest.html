@@ -336,6 +336,90 @@
     display: inline-block;
 }
 
+.robustness-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.robustness-metric-toggle {
+    display: inline-flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.robustness-metric-toggle button {
+    border: 1px solid #e2e8f0;
+    border-radius: 999px;
+    padding: 4px 12px;
+    background: #f8fafc;
+    font-size: 0.82rem;
+    color: #0f172a;
+    cursor: pointer;
+}
+
+.robustness-metric-toggle button.active {
+    background: #0f172a;
+    color: #fff;
+    border-color: #0f172a;
+}
+
+.robustness-heatmap-group {
+    margin-top: 12px;
+    padding: 12px;
+    border-radius: 16px;
+    border: 1px solid #e2e8f0;
+    background: #f8fafc;
+}
+
+.robustness-heatmap-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    margin-bottom: 8px;
+}
+
+.robustness-heatmap-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+}
+
+.robustness-heatmap-table th,
+.robustness-heatmap-table td {
+    padding: 6px 8px;
+    text-align: center;
+    border: 1px solid #e2e8f0;
+}
+
+.robustness-heatmap-table th {
+    background: #f1f5f9;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.robustness-heatmap-cell {
+    color: #0f172a;
+    font-weight: 600;
+}
+
+.robustness-heatmap-cell small {
+    display: block;
+    font-weight: 400;
+    color: #475569;
+}
+
+.robustness-recommend {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(59, 130, 246, 0.08);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    font-size: 0.88rem;
+    color: #1e3a8a;
+}
+
 @media (max-width: 991.98px) {
     .overview-signal-chart {
         height: 220px;
@@ -872,6 +956,7 @@
 <script src="{% static 'trading/js/history_meta.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
 <script src="{% static 'trading/js/backtest_submit.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
 <script src="{% static 'trading/js/backtest_overview_charts.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
+<script src="{% static 'trading/js/robustness_lab.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
 <script src="{% static 'trading/js/strategy_presets.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js" defer></script>
 <script src="{% static 'trading/js/portfolio_builder.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
@@ -1388,6 +1473,27 @@
                         {% endif %}
                         {% endwith %}
                         {% endwith %}
+                    </div>
+                    <div class="report-card" id="robustness-lab">
+                        <div class="robustness-toolbar">
+                            <div>
+                                <h3 class="panel-title">{% bilingual "Robustness Lab" "稳健性实验室" %}</h3>
+                                <p class="text-muted small mb-0">{% bilingual "Run a compact grid to compare cost, liquidity, and thresholds." "对成本、流动性与阈值做小网格测试，评估稳健区间。" %}</p>
+                            </div>
+                            <button type="button" class="hero-button solid small" id="robustness-run">
+                                {% bilingual "Run robustness" "运行稳健性测试" %}
+                            </button>
+                        </div>
+                        <div class="robustness-metric-toggle mt-3" id="robustness-metric-toggle">
+                            <button type="button" data-metric="sharpe" class="active">Sharpe</button>
+                            <button type="button" data-metric="max_drawdown">{% bilingual "Max DD" "最大回撤" %}</button>
+                            <button type="button" data-metric="avg_coverage">{% bilingual "Coverage" "成交覆盖" %}</button>
+                        </div>
+                        <p class="text-muted small mt-2 mb-2" id="robustness-status">
+                            {% bilingual "Ready to evaluate robustness." "准备就绪，可进行稳健性评估。" %}
+                        </p>
+                        <div id="robustness-heatmaps"></div>
+                        <div class="robustness-recommend" id="robustness-recommend" hidden></div>
                     </div>
                     <div class="report-card">
                         <h3 class="panel-title">{% bilingual "Execution & Costs" "成交与成本诊断" %}</h3>

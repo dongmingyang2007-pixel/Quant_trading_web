@@ -25,6 +25,7 @@ from ..task_queue import (
     cancel_task,
     get_task_status,
     submit_backtest_task,
+    submit_robustness_task,
     submit_rl_task,
     submit_training_task,
 )
@@ -226,6 +227,24 @@ class RLTaskView(BaseTaskAPIView):
         cleaned = serializer.validated_data["_cleaned"]
         strategy_input, _ = build_strategy_input(cleaned, request_id=request_id, user=request.user)
         job = submit_rl_task(asdict(strategy_input))
+        return self._prepare_response(job, request_id)
+
+
+class RobustnessTaskView(BaseTaskAPIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [BasicAuthentication, SessionAuthentication]
+
+    def post(self, request):
+        request_id = ensure_request_id(request)
+        serializer = StrategyTaskSerializer(data=request.data, context=self._build_context(request))
+        serializer.is_valid(raise_exception=True)
+        cleaned = serializer.validated_data["_cleaned"]
+        strategy_input, _ = build_strategy_input(cleaned, request_id=request_id, user=request.user)
+        payload: dict[str, Any] = asdict(strategy_input)
+        robustness_config = request.data.get("robustness")
+        if isinstance(robustness_config, dict):
+            payload["robustness"] = robustness_config
+        job = submit_robustness_task(payload)
         return self._prepare_response(job, request_id)
 
 

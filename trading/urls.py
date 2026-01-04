@@ -18,6 +18,7 @@ urlpatterns = [
     path("api/backtest/task/<str:task_id>/", views.backtest_task_status, name="backtest_task_status"),
     path("api/v1/backtests/preflight/", api_v1.PreflightView.as_view(), name="api_v1_backtest_preflight"),
     path("api/v1/backtests/tasks/", api_v1.BacktestTaskView.as_view(), name="api_v1_backtest_tasks"),
+    path("api/v1/backtests/robustness/", api_v1.RobustnessTaskView.as_view(), name="api_v1_backtest_robustness"),
     path("api/v1/training/tasks/", api_v1.TrainingTaskView.as_view(), name="api_v1_training_tasks"),
     path("api/v1/rl/tasks/", api_v1.RLTaskView.as_view(), name="api_v1_rl_tasks"),
     path("api/v1/tasks/<str:task_id>/", api_v1.TaskStatusView.as_view(), name="api_v1_task_status"),

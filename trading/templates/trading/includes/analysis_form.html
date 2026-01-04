@@ -31,6 +31,7 @@
             data-task-endpoint="{% url 'trading:api_v1_backtest_tasks' %}"
             data-task-status-template="{% url 'trading:api_v1_task_status' task_id='TASK_ID_PLACEHOLDER' %}"
             data-preflight-endpoint="{% url 'trading:api_v1_backtest_preflight' %}"
+            data-robustness-endpoint="{% url 'trading:api_v1_backtest_robustness' %}"
             data-history-base="{% url 'trading:backtest' %}"
             data-lang="{{ request.LANGUAGE_CODE|default:'zh-hans' }}"
         >

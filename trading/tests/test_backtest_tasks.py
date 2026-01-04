@@ -194,6 +194,20 @@ class BacktestTaskApiTests(TestCase):
         self.assertAlmostEqual(submitted["borrow_cost_bps"], 1.2)
         self.assertFalse(submitted["allow_short"])
 
+    @override_settings(CELERY_TASK_ALWAYS_EAGER=False)
+    @mock.patch("trading.api.views_v1.submit_robustness_task")
+    def test_api_v1_robustness_endpoint(self, mock_submit):
+        dummy_task = SimpleNamespace(id="celery-robust", state="PENDING")
+        mock_submit.return_value = dummy_task
+        payload = _form_payload()
+        response = self.client.post(
+            reverse("trading:api_v1_backtest_robustness"),
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["task_id"], "celery-robust")
+
     def test_api_v1_task_status_endpoint(self):
         response = self.client.get(reverse("trading:api_v1_task_status", kwargs={"task_id": "sync-test"}))
         self.assertEqual(response.status_code, 200)
