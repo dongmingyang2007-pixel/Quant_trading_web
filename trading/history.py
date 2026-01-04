@@ -343,6 +343,7 @@ _COMPACT_SNAPSHOT_KEYS = {
     "repro",
     "market_context",
     "return_series",
+    "overview_series",
     "recent_rows",
     "interactive_chart",
     "recommendations",

@@ -277,6 +277,16 @@ def fetch_price_data(ticker: str, start: date, end: date) -> Tuple[pd.DataFrame,
     warnings: list[str] = []
     data_source = "yfinance"
     cache_path: str | None = None
+
+    def _shorten_error(exc: Exception | None) -> str:
+        if not exc:
+            return ""
+        message = str(exc).strip().replace("\n", " ")
+        if not message:
+            return exc.__class__.__name__
+        if len(message) > 140:
+            return f"{message[:137]}..."
+        return message
     try:
         import yfinance as yf
     except ImportError as exc:  # pragma: no cover - dependency load
@@ -312,12 +322,20 @@ def fetch_price_data(ticker: str, start: date, end: date) -> Tuple[pd.DataFrame,
                 raise QuantStrategyError(
                     f"本地缓存文件缺少列 {missing}. 请确保包含 Close, Adj Close, Volume."
                 )
+            reason = _shorten_error(download_error)
+            fallback_note = (
+                f"线上行情下载失败，已回退到本地缓存。原因：{reason}"
+                if reason
+                else "线上行情返回为空，已回退到本地缓存。"
+            )
+            warnings.append(fallback_note)
             warnings.append(
                 f"已从本地缓存 {cache_file} 读取数据。若需最新行情，请联网后刷新缓存。"
             )
             data = cached.loc[(cached.index.date >= start) & (cached.index.date <= end)]
             data_source = "csv_cache"
             cache_path = os.fspath(cache_file)
+            data.attrs["data_fetch_note"] = fallback_note
         else:
             if download_error:
                 raise QuantStrategyError(

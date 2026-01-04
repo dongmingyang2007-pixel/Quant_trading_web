@@ -15,11 +15,13 @@ class HistoryCompactTests(SimpleTestCase):
             "metadata": {"data_signature": {"source": "yfinance", "rows": 10}},
             "repro": {"git_commit": "abc123"},
             "market_context": {"headline": "demo"},
+            "overview_series": {"series": [{"date": "2024-01-01", "probability": 0.5}], "events": [], "thresholds": {}},
         }
         compacted = compact_history_snapshot(payload)
         self.assertIn("metadata", compacted)
         self.assertIn("repro", compacted)
         self.assertIn("market_context", compacted)
+        self.assertIn("overview_series", compacted)
         self.assertEqual(compacted["metadata"]["data_signature"]["source"], "yfinance")
 
     @mock.patch("trading.tasks.append_fallback_history")

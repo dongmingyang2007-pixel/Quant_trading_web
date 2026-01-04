@@ -99,7 +99,7 @@ import time
 import numpy as np
 import pandas as pd
 from dataclasses import asdict, replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Optional
 from django.utils.translation import gettext_lazy as _
 from django.conf import settings
@@ -469,6 +469,9 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
         metadata["data_signature"] = data_signature
         if data_signature.get("source"):
             metadata["data_source"] = data_signature.get("source")
+    fetch_note = getattr(prices, "attrs", {}).get("data_fetch_note")
+    if fetch_note:
+        metadata["data_fetch_note"] = fetch_note
     data_quality = quality_report.to_dict() if quality_report else {}
     data_risks: list[str] = []
     if auxiliary.financials or auxiliary.fundamentals:
@@ -487,6 +490,9 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
         stats["data_quality"] = data_quality
     if data_risks:
         stats["data_risks"] = data_risks
+    reliability = _build_reliability(stats, metadata)
+    if reliability:
+        stats["reliability"] = reliability
     label_meta = {
         "label_style": params.label_style,
         "tb_up": params.tb_up,
@@ -561,6 +567,7 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
     }
     interactive_chart = build_interactive_chart_payload(prices, backtest, params)
     return_series = _build_return_series(backtest)
+    overview_series = _build_overview_series(backtest, params, stats)
     result_payload = {
         "ticker": params.ticker.upper(),
         "start_date": params.start_date.strftime("%Y-%m-%d"),
@@ -570,6 +577,7 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
         "benchmark_metrics": benchmark_metrics,
         "recent_rows": format_table(backtest),
         "return_series": return_series,
+        "overview_series": overview_series,
         "warnings": warnings,
         "stats": stats,
         "benchmark_stats": benchmark_stats,
@@ -750,6 +758,275 @@ def _build_return_series(backtest: pd.DataFrame) -> list[dict[str, Any]]:
                 entry["cum_buy_hold"] = buy_hold_value
         rows.append(entry)
     return rows
+
+
+def _build_overview_series(
+    backtest: pd.DataFrame,
+    params: StrategyInput,
+    stats: dict[str, Any] | None = None,
+    *,
+    max_points: int = 420,
+) -> dict[str, Any]:
+    if backtest.empty:
+        return {"series": [], "events": [], "thresholds": {}}
+    frame = backtest.tail(max_points).copy()
+    series: list[dict[str, Any]] = []
+    for idx, row in frame.iterrows():
+        date_value = idx.strftime("%Y-%m-%d") if isinstance(idx, pd.Timestamp) else str(idx)
+        entry: dict[str, Any] = {"date": date_value}
+        if "probability" in frame.columns:
+            entry["probability"] = _safe_float(row.get("probability"))
+        if "position" in frame.columns:
+            entry["position"] = _safe_float(row.get("position"))
+        elif "exposure" in frame.columns:
+            entry["position"] = _safe_float(row.get("exposure"))
+        if "fill_coverage" in frame.columns:
+            entry["coverage"] = _safe_float(row.get("fill_coverage"))
+        if "signal" in frame.columns:
+            entry["signal"] = _safe_float(row.get("signal"))
+        series.append(entry)
+
+    events: list[dict[str, Any]] = []
+    prev_pos = 0.0
+    limit_threshold = getattr(params, "limit_move_threshold", None)
+    prices = frame.get("adj close") if "adj close" in frame.columns else frame.get("close")
+    price_change = None
+    if prices is not None:
+        try:
+            price_change = prices.pct_change().abs()
+        except Exception:
+            price_change = None
+    for idx, row in frame.iterrows():
+        date_value = idx.strftime("%Y-%m-%d") if isinstance(idx, pd.Timestamp) else str(idx)
+        pos_val = row.get("position") if "position" in frame.columns else row.get("exposure")
+        pos = _safe_float(pos_val) or 0.0
+        if prev_pos <= 0 < pos:
+            events.append({"date": date_value, "type": "entry", "label": "Entry"})
+        elif prev_pos >= 0 > pos:
+            events.append({"date": date_value, "type": "entry", "label": "Short"})
+        elif prev_pos > 0 >= pos:
+            events.append({"date": date_value, "type": "exit", "label": "Exit"})
+        elif prev_pos < 0 <= pos:
+            events.append({"date": date_value, "type": "exit", "label": "Cover"})
+        prev_pos = pos
+
+        if "volume" in frame.columns and row.get("volume", 0) <= 0:
+            events.append({"date": date_value, "type": "halt", "label": "Halt"})
+        if price_change is not None and limit_threshold and limit_threshold > 0:
+            try:
+                change = price_change.get(idx)
+                if change is not None and float(change) >= float(limit_threshold):
+                    events.append({"date": date_value, "type": "limit", "label": "Limit"})
+            except Exception:
+                pass
+
+    events = events[-30:]
+    if stats:
+        exec_stats = stats.get("execution_stats") if isinstance(stats, dict) else None
+        adv_hits = None
+        if isinstance(exec_stats, dict):
+            adv_hits = exec_stats.get("adv_hard_cap_hits")
+        if adv_hits is None and isinstance(stats, dict):
+            adv_hits = stats.get("adv_hits")
+        adv_hits_val = _safe_float(adv_hits)
+        if adv_hits_val and series:
+            events.append({"date": series[-1]["date"], "type": "adv", "label": f"ADV cap ×{int(adv_hits_val)}"})
+    thresholds = {
+        "entry": getattr(params, "entry_threshold", None),
+        "exit": getattr(params, "exit_threshold", None),
+    }
+    return {"series": series, "events": events, "thresholds": thresholds}
+
+
+def _clamp_score(value: Any) -> int:
+    numeric = _safe_float(value)
+    if numeric is None:
+        return 0
+    return max(0, min(100, int(round(numeric))))
+
+
+def _build_reliability(stats: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
+    reasons: list[str] = []
+    actions: list[dict[str, str]] = []
+
+    def _penalize(score: float, amount: float, reason: str) -> float:
+        if amount <= 0:
+            return score
+        if reason and reason not in reasons:
+            reasons.append(reason)
+        return score - amount
+
+    def _parse_date_value(value: Any) -> date | None:
+        if isinstance(value, date):
+            return value
+        if isinstance(value, str) and value:
+            try:
+                return date.fromisoformat(value[:10])
+            except ValueError:
+                return None
+        return None
+
+    data_score = 100.0
+    data_quality = stats.get("data_quality") if isinstance(stats, dict) else {}
+    if not isinstance(data_quality, dict):
+        data_quality = {}
+    missing_ratio = _safe_float(data_quality.get("missing_ratio"))
+    if missing_ratio is not None:
+        if missing_ratio > 0.1:
+            data_score = _penalize(data_score, 30, "缺失比例偏高，数据完整性不足。")
+        elif missing_ratio > 0.05:
+            data_score = _penalize(data_score, 18, "缺失比例偏高，建议关注数据质量。")
+    zero_volume = _safe_float(data_quality.get("zero_volume_days"))
+    if zero_volume is not None and zero_volume > 0:
+        data_score = _penalize(data_score, min(12, zero_volume), "存在零成交量交易日，执行与信号可靠性受限。")
+    stale_days = _safe_float(data_quality.get("stale_price_days"))
+    if stale_days is not None and stale_days > 0:
+        data_score = _penalize(data_score, min(10, stale_days / 5), "价格无变动日偏多，可能存在停牌或低流动性。")
+
+    data_signature = metadata.get("data_signature") if isinstance(metadata, dict) else {}
+    if not isinstance(data_signature, dict):
+        data_signature = {}
+    data_source = data_signature.get("source") or metadata.get("data_source")
+    if data_source == "csv_cache":
+        data_score = _penalize(data_score, 12, "已降级为本地缓存数据，线上行情不可用。")
+    elif not data_source:
+        data_score = _penalize(data_score, 8, "未检测到数据来源，可能影响可复现性。")
+
+    requested_start = _parse_date_value(metadata.get("requested_start") if isinstance(metadata, dict) else None)
+    requested_end = _parse_date_value(metadata.get("requested_end") if isinstance(metadata, dict) else None)
+    effective_start = _parse_date_value(metadata.get("effective_start") if isinstance(metadata, dict) else None)
+    effective_end = _parse_date_value(metadata.get("effective_end") if isinstance(metadata, dict) else None)
+    if requested_start and effective_start and effective_start > requested_start:
+        data_score = _penalize(data_score, 8, "实际数据起点晚于请求区间，样本外推风险上升。")
+    if requested_end and effective_end and effective_end < requested_end:
+        data_score = _penalize(data_score, 6, "实际数据终点早于请求区间，结果可能偏乐观。")
+
+    model_score = 100.0
+    model_signals = 0
+    penalized_sharpe = _safe_float(stats.get("validation_penalized_sharpe")) if isinstance(stats, dict) else None
+    if penalized_sharpe is not None:
+        model_signals += 1
+        if penalized_sharpe < 0:
+            model_score = _penalize(model_score, 25, "样本外 Penalized Sharpe 低于 0，模型稳定性偏弱。")
+        elif penalized_sharpe < 0.4:
+            model_score = _penalize(model_score, 12, "样本外 Sharpe 较低，需谨慎看待。")
+    validation_summary = stats.get("validation_summary_compact") if isinstance(stats, dict) else None
+    sharpe_summary = validation_summary.get("sharpe") if isinstance(validation_summary, dict) else None
+    if isinstance(sharpe_summary, dict):
+        model_signals += 1
+        mean_val = _safe_float(sharpe_summary.get("mean"))
+        std_val = _safe_float(sharpe_summary.get("std"))
+        if mean_val is not None and std_val is not None and mean_val - std_val < 0:
+            model_score = _penalize(model_score, 10, "样本外 Sharpe 波动较大，稳定性不足。")
+    auc = _safe_float(stats.get("auc")) if isinstance(stats, dict) else None
+    if auc is not None:
+        model_signals += 1
+        if auc < 0.55:
+            model_score = _penalize(model_score, 10, "AUC 偏低，方向预测可靠性不足。")
+    calibration = stats.get("calibration") if isinstance(stats, dict) else None
+    brier = _safe_float(calibration.get("brier")) if isinstance(calibration, dict) else None
+    if brier is not None:
+        model_signals += 1
+        if brier > 0.25:
+            model_score = _penalize(model_score, 8, "Brier 偏高，概率校准效果一般。")
+    cpcv = stats.get("cpcv") if isinstance(stats, dict) else None
+    if isinstance(cpcv, dict) and cpcv:
+        model_signals += 1
+        p10 = _safe_float(cpcv.get("p10_sharpe"))
+        worst = _safe_float(cpcv.get("worst_sharpe"))
+        if worst is not None and worst < 0:
+            model_score = _penalize(model_score, 12, "CPCV 最差 Sharpe 为负，部分折表现失稳。")
+        if p10 is not None and p10 < 0.2:
+            model_score = _penalize(model_score, 8, "CPCV 10% 分位 Sharpe 较低，需控制风险。")
+    drift = stats.get("drift") if isinstance(stats, dict) else None
+    if isinstance(drift, dict):
+        model_signals += 1
+        psi_ret = _safe_float(drift.get("psi_returns")) or 0.0
+        psi_prob = _safe_float(drift.get("psi_probabilities")) or 0.0
+        psi_val = max(psi_ret, psi_prob)
+        if psi_val > 0.25:
+            model_score = _penalize(model_score, 10, "检测到分布漂移（PSI 偏高），建议重新训练。")
+    threshold_stability = stats.get("threshold_stability") if isinstance(stats, dict) else None
+    if isinstance(threshold_stability, dict):
+        model_signals += 1
+        worst = threshold_stability.get("worst") if isinstance(threshold_stability.get("worst"), dict) else {}
+        worst_sharpe = _safe_float(worst.get("sharpe")) if isinstance(worst, dict) else None
+        if worst_sharpe is not None and worst_sharpe < 0:
+            model_score = _penalize(model_score, 8, "阈值敏感度较高，最差 Sharpe 为负。")
+
+    if model_signals == 0:
+        model_score = _penalize(model_score, 30, "模型验证指标不足，可信度需谨慎。")
+
+    exec_score = 100.0
+    exec_signals = 0
+    exec_stats = stats.get("execution_stats") if isinstance(stats, dict) else None
+    if isinstance(exec_stats, dict):
+        exec_signals += 1
+        avg_coverage = _safe_float(exec_stats.get("avg_coverage"))
+        if avg_coverage is not None:
+            if avg_coverage < 0.7:
+                exec_score = _penalize(exec_score, 20, "成交覆盖率偏低，执行假设可能过乐观。")
+            elif avg_coverage < 0.85:
+                exec_score = _penalize(exec_score, 8, "成交覆盖率一般，建议收紧仓位。")
+        unfilled = _safe_float(exec_stats.get("unfilled_ratio"))
+        if unfilled is not None and unfilled > 0.25:
+            exec_score = _penalize(exec_score, 10, "未成交比例偏高，需降低参与率。")
+        adv_hits = _safe_float(exec_stats.get("adv_hard_cap_hits"))
+        if adv_hits is not None and adv_hits > 0:
+            exec_score = _penalize(exec_score, min(10, adv_hits * 0.5), "多次触发 ADV 上限，真实成交受限。")
+        halt_days = _safe_float(exec_stats.get("halt_days"))
+        if halt_days is not None and halt_days > 0:
+            exec_score = _penalize(exec_score, 6, "存在停牌/无成交交易日。")
+        limit_days = _safe_float(exec_stats.get("limit_days"))
+        if limit_days is not None and limit_days > 0:
+            exec_score = _penalize(exec_score, 4, "存在涨跌停交易日，成交受限。")
+    cost_ratio = _safe_float(stats.get("cost_ratio")) if isinstance(stats, dict) else None
+    if cost_ratio is not None:
+        exec_signals += 1
+        if cost_ratio > 0.12:
+            exec_score = _penalize(exec_score, 10, "成本占比较高，收益可能被侵蚀。")
+
+    if exec_signals == 0:
+        exec_score = _penalize(exec_score, 25, "执行诊断指标不足，成交可信度偏低。")
+
+    data_score = _clamp_score(data_score)
+    model_score = _clamp_score(model_score)
+    exec_score = _clamp_score(exec_score)
+    score = _clamp_score(data_score * 0.4 + model_score * 0.4 + exec_score * 0.2)
+
+    if score >= 85:
+        label = "Excellent"
+    elif score >= 70:
+        label = "Good"
+    elif score >= 55:
+        label = "Caution"
+    else:
+        label = "High risk"
+
+    def _add_action(label_text: str, href: str) -> None:
+        if not label_text or not href:
+            return
+        if any(action.get("href") == href for action in actions):
+            return
+        actions.append({"label": label_text, "href": href})
+
+    if data_score < 80:
+        _add_action("查看数据质量面板", "#data-quality-card")
+    if exec_score < 75:
+        _add_action("以更保守成本假设复跑", "#config-pane")
+    if model_score < 75:
+        _add_action("加入历史对比", "#history-pane")
+    if not actions:
+        _add_action("打开专业数据面板", "#expert-pane")
+        _add_action("加入历史对比", "#history-pane")
+
+    return {
+        "score": score,
+        "label": label,
+        "subscores": {"data": data_score, "model": model_score, "execution": exec_score},
+        "reasons": reasons[:6],
+        "actions": actions[:3],
+    }
 
 
 def _sanitize_analysis_sections(payload: dict[str, Any]) -> None:

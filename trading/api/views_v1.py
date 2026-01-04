@@ -10,6 +10,8 @@ from django.core.cache import cache
 from django.db.models import Q
 
 from rest_framework import status
+from rest_framework.authentication import BasicAuthentication, SessionAuthentication
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.renderers import BaseRenderer, BrowsableAPIRenderer, JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -92,6 +94,8 @@ class BaseTaskAPIView(APIView):
 
 class BacktestTaskView(BaseTaskAPIView):
     _CLIENT_CACHE_TTL = 60 * 60
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [BasicAuthentication, SessionAuthentication]
 
     def post(self, request):
         request_id = ensure_request_id(request)
@@ -100,7 +104,9 @@ class BacktestTaskView(BaseTaskAPIView):
         cleaned = serializer.validated_data["_cleaned"]
         client_request_id = (serializer.validated_data.get("client_request_id") or "").strip()
         if client_request_id:
-            cached = cache.get(f"backtest:client:{client_request_id}")
+            user_key = str(getattr(request.user, "id", None) or getattr(request.user, "pk", None) or "anonymous")
+            cache_key = f"backtest:client:{user_key}:{client_request_id}"
+            cached = cache.get(cache_key)
             if isinstance(cached, dict):
                 payload = dict(cached)
                 status_code = payload.pop("_status", status.HTTP_202_ACCEPTED)
@@ -127,11 +133,16 @@ class BacktestTaskView(BaseTaskAPIView):
             cached_payload = dict(response_payload)
             cached_payload.pop("request_id", None)
             cached_payload["_status"] = status_code
-            cache.set(f"backtest:client:{client_request_id}", cached_payload, timeout=self._CLIENT_CACHE_TTL)
+            user_key = str(getattr(request.user, "id", None) or getattr(request.user, "pk", None) or "anonymous")
+            cache_key = f"backtest:client:{user_key}:{client_request_id}"
+            cache.set(cache_key, cached_payload, timeout=self._CLIENT_CACHE_TTL)
         return Response(response_payload, status=status_code)
 
 
 class PreflightView(BaseTaskAPIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [BasicAuthentication, SessionAuthentication]
+
     def post(self, request):
         request_id = ensure_request_id(request)
         serializer = StrategyTaskSerializer(data=request.data, context=self._build_context(request))
@@ -219,6 +230,9 @@ class RLTaskView(BaseTaskAPIView):
 
 
 class TaskStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [BasicAuthentication, SessionAuthentication]
+
     def get(self, request, task_id: str):
         payload = get_task_status(task_id)
         payload["request_id"] = ensure_request_id(request)
@@ -226,6 +240,9 @@ class TaskStatusView(APIView):
 
 
 class TaskCancelView(APIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [BasicAuthentication, SessionAuthentication]
+
     def post(self, request, task_id: str):
         payload = cancel_task(task_id)
         payload["request_id"] = ensure_request_id(request)

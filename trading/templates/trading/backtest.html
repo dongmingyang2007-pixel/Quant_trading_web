@@ -227,7 +227,119 @@
     cursor: default;
 }
 
+.reliability-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.reliability-score-box {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    border-radius: 14px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+}
+
+.reliability-score {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.reliability-subgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+}
+
+.reliability-subscore {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 10px 12px;
+}
+
+.reliability-subscore span {
+    display: block;
+    font-size: 0.82rem;
+    color: #64748b;
+    margin-bottom: 4px;
+}
+
+.reliability-subscore strong {
+    font-size: 1.05rem;
+    color: #0f172a;
+}
+
+.reliability-metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+}
+
+.reliability-metric {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    font-size: 0.9rem;
+}
+
+.reliability-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.reliability-actions a {
+    text-decoration: none;
+}
+
+.overview-signal-chart {
+    height: 260px;
+    border-radius: 16px;
+    border: 1px solid #e2e8f0;
+    background: #f8fafc;
+}
+
+.overview-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 8px;
+    font-size: 0.85rem;
+    color: #64748b;
+}
+
+.overview-legend .legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.overview-legend .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
 @media (max-width: 991.98px) {
+    .overview-signal-chart {
+        height: 220px;
+    }
     .meta-value {
         max-width: 240px;
     }
@@ -759,6 +871,7 @@
 <script src="{% static 'trading/js/history_delete.js' %}"></script>
 <script src="{% static 'trading/js/history_meta.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
 <script src="{% static 'trading/js/backtest_submit.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
+<script src="{% static 'trading/js/backtest_overview_charts.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
 <script src="{% static 'trading/js/strategy_presets.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js" defer></script>
 <script src="{% static 'trading/js/portfolio_builder.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
@@ -1139,6 +1252,143 @@
                     </div>
                 {% endif %}
                 {% if result.stats %}
+                    <div class="report-card reliability-card" id="reliability-card">
+                        <div class="reliability-head">
+                            <div>
+                                <h3 class="panel-title">{% bilingual "Reliability Cockpit" "可信度驾驶舱" %}</h3>
+                                <p class="text-muted small mb-0">{% bilingual "Score derived from data, model, and execution diagnostics." "基于数据、模型与执行诊断的综合评分。" %}</p>
+                            </div>
+                            <div class="reliability-score-box">
+                                <div class="reliability-score">{{ result.stats.reliability.score|default:"-" }}</div>
+                                {% if result.stats.reliability.label %}
+                                    {% if result.stats.reliability.label == "Excellent" %}
+                                        <span class="status-badge good">Excellent</span>
+                                    {% elif result.stats.reliability.label == "Good" %}
+                                        <span class="status-badge neutral">Good</span>
+                                    {% elif result.stats.reliability.label == "Caution" %}
+                                        <span class="status-badge weak">Caution</span>
+                                    {% else %}
+                                        <span class="status-badge weak">High risk</span>
+                                    {% endif %}
+                                {% else %}
+                                    <span class="status-badge neutral">{% bilingual "Pending" "待评估" %}</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="reliability-subgrid">
+                            <div class="reliability-subscore">
+                                <span>{% bilingual "Data score" "数据评分" %}</span>
+                                <strong>{{ result.stats.reliability.subscores.data|default:"-" }}</strong>
+                            </div>
+                            <div class="reliability-subscore">
+                                <span>{% bilingual "Model score" "模型评分" %}</span>
+                                <strong>{{ result.stats.reliability.subscores.model|default:"-" }}</strong>
+                            </div>
+                            <div class="reliability-subscore">
+                                <span>{% bilingual "Execution score" "执行评分" %}</span>
+                                <strong>{{ result.stats.reliability.subscores.execution|default:"-" }}</strong>
+                            </div>
+                        </div>
+                        <div class="reliability-metric-grid">
+                            <div class="reliability-metric" title="{% bilingual 'AUC measures directional prediction accuracy.' 'AUC 衡量方向预测准确度。' %}">
+                                <span>AUC</span>
+                                <strong>{{ result.stats.auc|floatformat:3|default:"-" }}</strong>
+                            </div>
+                            <div class="reliability-metric" title="{% bilingual 'Brier score reflects probability calibration (lower is better).' 'Brier 反映概率校准（越低越好）。' %}">
+                                <span>Brier</span>
+                                <strong>{{ result.stats.calibration.brier|floatformat:4|default:"-" }}</strong>
+                            </div>
+                            <div class="reliability-metric" title="{% bilingual 'PSI flags distribution drift between periods.' 'PSI 衡量分布漂移。' %}">
+                                <span>PSI</span>
+                                <strong>
+                                    {% if result.stats.drift %}
+                                        {{ result.stats.drift.psi_returns|floatformat:2|default:"-" }} /
+                                        {{ result.stats.drift.psi_probabilities|floatformat:2|default:"-" }}
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </strong>
+                            </div>
+                            <div class="reliability-metric" title="{% bilingual 'CPCV p10/worst Sharpe across folds.' 'CPCV 10% 分位 / 最差 Sharpe。' %}">
+                                <span>CPCV p10/worst</span>
+                                <strong>
+                                    {{ result.stats.cpcv.p10_sharpe|floatformat:2|default:"-" }} /
+                                    {{ result.stats.cpcv.worst_sharpe|floatformat:2|default:"-" }}
+                                </strong>
+                            </div>
+                            <div class="reliability-metric" title="{% bilingual 'Sharpe confidence interval from bootstrap.' 'Sharpe 置信区间（bootstrap）。' %}">
+                                <span>Sharpe CI</span>
+                                <strong>
+                                    {% if result.stats.sharpe_ci_lower or result.stats.sharpe_ci_upper %}
+                                        {{ result.stats.sharpe_ci_lower|floatformat:2|default:"-" }} ~ {{ result.stats.sharpe_ci_upper|floatformat:2|default:"-" }}
+                                    {% elif result.stats.sharpe_ci %}
+                                        {{ result.stats.sharpe_ci }}
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </strong>
+                            </div>
+                            <div class="reliability-metric" title="{% bilingual 'White reality check p-value (lower suggests overfitting risk).' 'White 现实检验 p 值（偏低提示过拟合风险）。' %}">
+                                <span>p-value</span>
+                                <strong>
+                                    {% if result.stats.sharpe_pvalue_adjusted %}
+                                        {{ result.stats.sharpe_pvalue_adjusted|floatformat:3 }}
+                                    {% elif result.stats.sharpe_pvalue %}
+                                        {{ result.stats.sharpe_pvalue|floatformat:3 }}
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </strong>
+                            </div>
+                        </div>
+                        {% if result.stats.reliability.reasons %}
+                            <p class="text-muted small mb-1">{% bilingual "Key risks" "关键风险" %}</p>
+                            <ul class="panel-list">
+                                {% for reason in result.stats.reliability.reasons %}
+                                    <li>{{ reason }}</li>
+                                {% endfor %}
+                            </ul>
+                        {% endif %}
+                        {% if result.stats.reliability.actions %}
+                            <div class="reliability-actions">
+                                {% for action in result.stats.reliability.actions %}
+                                    <a class="hero-button ghost xsmall" href="{{ action.href }}">{{ action.label }}</a>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                        {% if not result.stats.reliability %}
+                            <p class="text-muted small mb-0">{% bilingual "Historical run missing reliability data." "历史记录尚无可信度评分。" %}</p>
+                        {% endif %}
+                    </div>
+
+                    <div class="report-card" id="overview-signal-card">
+                        <h3 class="panel-title">{% bilingual "Signal Timeline" "信号时间线" %}</h3>
+                        <p class="text-muted small mb-2">{% bilingual "Probability, thresholds, and position with key execution events." "展示概率、阈值与仓位，并标注关键执行事件。" %}</p>
+                        {% with has_overview=result.overview_series and result.overview_series.series %}
+                        {% with has_returns=result.return_series %}
+                        {% if has_overview or has_returns %}
+                            <div id="overview-signal-chart" class="overview-signal-chart"></div>
+                            {% if has_overview %}
+                                <div class="overview-legend">
+                                    <span class="legend-item"><span class="legend-dot" style="background:#2563eb;"></span>{% bilingual "Probability" "概率" %}</span>
+                                    <span class="legend-item"><span class="legend-dot" style="background:#0f766e;"></span>{% bilingual "Position" "仓位" %}</span>
+                                    <span class="legend-item"><span class="legend-dot" style="background:#f59e0b;"></span>{% bilingual "Execution events" "执行事件" %}</span>
+                                </div>
+                            {% else %}
+                                <p class="text-muted small mb-0">{% bilingual "Fallback to equity curve (no signal series)." "暂无信号序列，显示净值曲线。" %}</p>
+                            {% endif %}
+                            {% if result.overview_series %}
+                                {{ result.overview_series|json_script:"overview-series-data" }}
+                            {% endif %}
+                            {% if result.return_series %}
+                                {{ result.return_series|json_script:"overview-return-series-data" }}
+                            {% endif %}
+                        {% else %}
+                            <p class="text-muted mb-0">{% bilingual "No signal series available yet." "暂无可用信号序列。" %}</p>
+                        {% endif %}
+                        {% endwith %}
+                        {% endwith %}
+                    </div>
                     <div class="report-card">
                         <h3 class="panel-title">{% bilingual "Execution & Costs" "成交与成本诊断" %}</h3>
                         <div class="row g-3">
@@ -1197,7 +1447,7 @@
                             </div>
                         </div>
                     </div>
-                    <div class="report-card">
+                    <div class="report-card" id="data-quality-card">
                         <h3 class="panel-title">{% bilingual "Data Quality & Bias" "数据质量与偏差" %}</h3>
                         <div class="row g-3">
                             <div class="col-12 col-lg-6">
@@ -1226,10 +1476,16 @@
                                 {% if result.metadata.data_signature.source == "csv_cache" %}
                                     <div class="alert alert-warning small mb-0">
                                         {% bilingual "Using local CSV cache because online data was unavailable." "当前使用本地 CSV 缓存，线上行情暂不可用。" %}
+                                        {% if result.metadata.data_fetch_note %}
+                                            <div class="text-muted small mt-1">{{ result.metadata.data_fetch_note }}</div>
+                                        {% endif %}
                                     </div>
                                 {% elif not result.metadata.data_signature.source %}
                                     <div class="alert alert-warning small mb-0">
                                         {% bilingual "Online data source not detected. Please verify the data fetch." "未检测到线上数据来源，请检查行情获取是否正常。" %}
+                                        {% if result.metadata.data_fetch_note %}
+                                            <div class="text-muted small mt-1">{{ result.metadata.data_fetch_note }}</div>
+                                        {% endif %}
                                     </div>
                                 {% endif %}
                             </div>
