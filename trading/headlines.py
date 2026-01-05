@@ -10,6 +10,10 @@ from typing import Any, Dict, List
 
 from django.conf import settings
 
+from .network import get_requests_session, resolve_retry_config, retry_call
+
+from .file_utils import atomic_write_json
+
 DATA_CACHE_DIR = settings.DATA_CACHE_DIR
 DATA_CACHE_DIR.mkdir(exist_ok=True)
 
@@ -71,7 +75,7 @@ def _load_cache() -> Dict[str, Any]:
 
 def _save_cache(payload: Dict[str, Any]) -> None:
     try:
-        CACHE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(CACHE_PATH, payload, indent=2)
     except OSError:
         pass
 
@@ -235,21 +239,53 @@ def _fetch_remote_headlines() -> tuple[List[Dict[str, str]], bool]:
     safesearch = os.environ.get("DDG_SAFESEARCH", "off")
     proxy = os.environ.get("DDG_PROXY")
     proxies = {"http": proxy, "https": proxy} if proxy else None
+    retry_config = resolve_retry_config()
+    timeout_seconds = max(1, int(retry_config.timeout))
+
+    def _build_ddg_client(client_cls):
+        try:
+            return client_cls(proxies=proxies, timeout=timeout_seconds)  # type: ignore[arg-type]
+        except TypeError:
+            proxy_value = None
+            if isinstance(proxies, dict):
+                proxy_value = proxies.get("http") or proxies.get("https")
+            elif isinstance(proxies, str):
+                proxy_value = proxies
+            try:
+                return client_cls(proxy=proxy_value, timeout=timeout_seconds)  # type: ignore[arg-type]
+            except TypeError:
+                return client_cls()
 
     aggregated: List[Dict[str, str]] = []
     seen_urls: set[str] = set()
     try:
-        with DDGS(proxies=proxies) as ddgs:  # type: ignore
+        with _build_ddg_client(DDGS) as ddgs:  # type: ignore
             for query in queries:
                 try:
-                    results = list(
-                        ddgs.news(query, region=region, safesearch=safesearch, max_results=DDG_MAX_RESULTS)  # type: ignore
-                    )
+                    def _news_query():
+                        return list(
+                            ddgs.news(  # type: ignore
+                                query,
+                                region=region,
+                                safesearch=safesearch,
+                                max_results=DDG_MAX_RESULTS,
+                            )
+                        )
+
+                    results = retry_call(_news_query, config=retry_config)
                 except Exception:
                     try:
-                        results = list(
-                            ddgs.text(query, region=region, safesearch=safesearch, max_results=DDG_MAX_RESULTS)  # type: ignore
-                        )
+                        def _text_query():
+                            return list(
+                                ddgs.text(  # type: ignore
+                                    query,
+                                    region=region,
+                                    safesearch=safesearch,
+                                    max_results=DDG_MAX_RESULTS,
+                                )
+                            )
+
+                        results = retry_call(_text_query, config=retry_config)
                     except Exception:
                         results = []
                 for raw in results:
@@ -354,6 +390,8 @@ def _fetch_yfinance_headlines() -> List[Dict[str, str]]:
     tickers = [sym.strip() for sym in os.environ.get("HEADLINE_TICKERS", "SPY,QQQ,GLD,BTC-USD").split(",") if sym.strip()]
     aggregated: List[Dict[str, str]] = []
     seen_urls: set[str] = set()
+    retry_config = resolve_retry_config()
+    session = get_requests_session(retry_config.timeout)
 
     def _extract_image(thumbnail: Dict[str, Any] | None) -> str:
         if not thumbnail:
@@ -368,8 +406,11 @@ def _fetch_yfinance_headlines() -> List[Dict[str, str]]:
 
     for symbol in tickers:
         try:
-            ticker = yf.Ticker(symbol)
-            news_items = ticker.news or []
+            def _download_news():
+                ticker = yf.Ticker(symbol, session=session)
+                return ticker.news or []
+
+            news_items = retry_call(_download_news, config=retry_config)
         except Exception:
             continue
         for entry in news_items:

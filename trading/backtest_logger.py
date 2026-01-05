@@ -3,9 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List
-import json
 
 from django.conf import settings
+
+from .file_utils import update_json_file
 
 LOG_DIR = settings.DATA_CACHE_DIR / "reports"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -42,19 +43,18 @@ def _log_file_for(ticker: str) -> Path:
 
 def append_log(entry: BacktestLogEntry) -> None:
     path = _log_file_for(entry.ticker)
-    history: List[Dict[str, Any]] = []
-    if path.exists():
-        try:
-            history = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            history = []
     payload = entry.to_dict()
     payload = {k: v for k, v in payload.items() if v not in (None, [])}
     if entry.notes:
         payload["notes"] = entry.notes
-    history.append(payload)
-    history = sorted(history, key=lambda x: x["timestamp"], reverse=True)[:200]
-    path.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+    def _update(history: Any) -> List[Dict[str, Any]]:
+        if not isinstance(history, list):
+            history = []
+        history.append(payload)
+        history = sorted(history, key=lambda x: x.get("timestamp", ""), reverse=True)[:200]
+        return history
+
+    update_json_file(path, default=[], update_fn=_update, indent=2)
 
 
 def top_runs(ticker: str, limit: int = 5) -> List[Dict[str, Any]]:

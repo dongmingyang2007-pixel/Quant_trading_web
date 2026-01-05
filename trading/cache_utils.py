@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from typing import Any, Callable
@@ -22,6 +23,9 @@ except Exception:  # pragma: no cover
 LOGGER = logging.getLogger(__name__)
 _PARQUET_AVAILABLE: bool | None = None
 _PARQUET_WARNED = False
+CACHE_INMEMORY_MAX_ITEMS = int(os.environ.get("CACHE_INMEMORY_MAX_ITEMS", "10000") or 10000)
+CACHE_INMEMORY_PRUNE_INTERVAL = max(1, int(os.environ.get("CACHE_INMEMORY_PRUNE_INTERVAL", "100") or 100))
+REDIS_RETRY_SECONDS = max(5, int(os.environ.get("REDIS_RETRY_SECONDS", "30") or 30))
 
 
 def _has_parquet_engine() -> bool:
@@ -62,6 +66,21 @@ class InMemoryCache(BaseCache):
     def __init__(self):
         self._store: dict[str, tuple[float, bytes]] = {}
         self._lock = threading.Lock()
+        self._ops = 0
+
+    def _prune(self, now: float) -> None:
+        if not self._store:
+            return
+        expired = [key for key, (expires, _) in self._store.items() if expires < now]
+        for key in expired:
+            self._store.pop(key, None)
+        if CACHE_INMEMORY_MAX_ITEMS <= 0:
+            return
+        overflow = len(self._store) - CACHE_INMEMORY_MAX_ITEMS
+        if overflow <= 0:
+            return
+        for key, _ in sorted(self._store.items(), key=lambda item: item[1][0])[:overflow]:
+            self._store.pop(key, None)
 
     def get(self, key: str) -> bytes | None:
         now = time.time()
@@ -77,7 +96,13 @@ class InMemoryCache(BaseCache):
 
     def set(self, key: str, value: bytes, ttl: int) -> None:
         with self._lock:
-            self._store[key] = (time.time() + max(ttl, 1), value)
+            now = time.time()
+            self._store[key] = (now + max(ttl, 1), value)
+            self._ops += 1
+            if self._ops % CACHE_INMEMORY_PRUNE_INTERVAL == 0 or (
+                CACHE_INMEMORY_MAX_ITEMS > 0 and len(self._store) > CACHE_INMEMORY_MAX_ITEMS
+            ):
+                self._prune(now)
 
 
 class RedisCache(BaseCache):
@@ -101,11 +126,33 @@ class RedisCache(BaseCache):
 
 
 _CACHE: BaseCache | None = None
+_LAST_REDIS_CHECK = 0.0
+
+
+def _maybe_promote_to_redis() -> None:
+    global _CACHE
+    global _LAST_REDIS_CHECK
+    if not isinstance(_CACHE, InMemoryCache):
+        return
+    url = getattr(settings, "REDIS_URL", None)
+    if not url or redis is None:
+        return
+    now = time.time()
+    if now - _LAST_REDIS_CHECK < REDIS_RETRY_SECONDS:
+        return
+    _LAST_REDIS_CHECK = now
+    try:
+        client = RedisCache(url)
+        client.set("__cache_test__", b"1", 1)
+        _CACHE = client
+    except Exception:
+        return
 
 
 def _init_cache() -> BaseCache:
     global _CACHE
     if _CACHE is not None:
+        _maybe_promote_to_redis()
         return _CACHE
     url = getattr(settings, "REDIS_URL", None)
     if url and redis is not None:

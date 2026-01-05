@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Dict, List
@@ -12,6 +13,7 @@ import yfinance as yf
 from django.conf import settings
 
 from .cache_utils import build_cache_key, cache_memoize
+from .network import get_requests_session, resolve_retry_config, retry_call, retry_call_result
 from .security import sanitize_html_fragment
 MACRO_TICKERS = {
     "^VIX": {"label": "芝加哥VIX波动率", "short": "VIX"},
@@ -82,20 +84,46 @@ def _select_panel(frame: pd.DataFrame, field: str) -> pd.DataFrame:
     return frame
 
 
+def _yf_retry_config(timeout: float | None = None):
+    return resolve_retry_config(
+        timeout=timeout,
+        retries=os.environ.get("MARKET_FETCH_MAX_RETRIES"),
+        backoff=os.environ.get("MARKET_FETCH_RETRY_BACKOFF"),
+        default_timeout=getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", None),
+    )
+
+
+def _empty_frame(value: object) -> bool:
+    return not isinstance(value, pd.DataFrame) or value.empty
+
+
 def _download_macro_series(end_date: date, lookback_days: int = 730) -> Dict[str, Any]:
     """拉取核心宏观指标（VIX、10Y、DXY），并计算最新值及动量。"""
     start = end_date - timedelta(days=lookback_days)
     records: Dict[str, Any] = {}
     fetch_failed = False
+    config = _yf_retry_config()
+    session = get_requests_session(config.timeout)
     try:
-        raw = yf.download(
-            list(MACRO_TICKERS.keys()),
-            start=start,
-            end=end_date + timedelta(days=1),
-            progress=False,
-            auto_adjust=False,
-        )
-        data = _select_panel(raw, "Adj Close")
+        def _download() -> pd.DataFrame:
+            return yf.download(
+                list(MACRO_TICKERS.keys()),
+                start=start,
+                end=end_date + timedelta(days=1),
+                progress=False,
+                auto_adjust=False,
+                timeout=config.timeout,
+                session=session,
+            )
+
+        raw = retry_call_result(_download, config=config, should_retry=_empty_frame)
+        if _empty_frame(raw):
+            fetch_failed = True
+            data = pd.DataFrame()
+        else:
+            data = _select_panel(raw, "Adj Close")
+            if data.empty:
+                fetch_failed = True
     except Exception:
         data = pd.DataFrame()
         fetch_failed = True
@@ -146,42 +174,60 @@ def _fetch_fundamental_snapshot(ticker: str) -> Dict[str, Any]:
     """使用 yfinance 抽取公司的基本面与财务摘要。"""
     fundamentals: Dict[str, Any] = {}
     financials: Dict[str, Any] = {}
+    config = _yf_retry_config()
+    session = get_requests_session(config.timeout)
     try:
-        yft = yf.Ticker(ticker)
-        info = yft.info or {}
-        for field in [
-            "sector",
-            "industry",
-            "marketCap",
-            "enterpriseValue",
-            "profitMargins",
-            "grossMargins",
-            "operatingMargins",
-            "returnOnEquity",
-            "returnOnAssets",
-            "revenueGrowth",
-            "earningsQuarterlyGrowth",
-        ]:
-            value = info.get(field)
-            if value is None:
-                continue
-            if isinstance(value, (int, float)):
-                fundamentals[field] = float(value)
-            else:
-                fundamentals[field] = value
+        def _download() -> tuple[Dict[str, Any], Dict[str, Any]]:
+            fundamentals_local: Dict[str, Any] = {}
+            financials_local: Dict[str, Any] = {}
+            yft = yf.Ticker(ticker, session=session)
+            info = yft.info or {}
+            for field in [
+                "sector",
+                "industry",
+                "marketCap",
+                "enterpriseValue",
+                "profitMargins",
+                "grossMargins",
+                "operatingMargins",
+                "returnOnEquity",
+                "returnOnAssets",
+                "revenueGrowth",
+                "earningsQuarterlyGrowth",
+            ]:
+                value = info.get(field)
+                if value is None:
+                    continue
+                if isinstance(value, (int, float)):
+                    fundamentals_local[field] = float(value)
+                else:
+                    fundamentals_local[field] = value
 
-        fundamentals["summary"] = info.get("longBusinessSummary") or ""
+            fundamentals_local["summary"] = info.get("longBusinessSummary") or ""
 
-        def parse_financial_table(frame: pd.DataFrame | None, label: str) -> Dict[str, Any]:
-            if frame is None or frame.empty:
-                return {}
-            # yfinance financial tables columns are periods.
-            latest_col = frame.columns[0]
-            return {f"{label}:{idx}": float(val) for idx, val in frame[latest_col].dropna().items()}
+            def parse_financial_table(frame: pd.DataFrame | None, label: str) -> Dict[str, Any]:
+                if frame is None or frame.empty:
+                    return {}
+                # yfinance financial tables columns are periods.
+                latest_col = frame.columns[0]
+                return {f"{label}:{idx}": float(val) for idx, val in frame[latest_col].dropna().items()}
 
-        financials["income_statement"] = parse_financial_table(getattr(yft, "financials", None), "IS")
-        financials["balance_sheet"] = parse_financial_table(getattr(yft, "balance_sheet", None), "BS")
-        financials["cashflow"] = parse_financial_table(getattr(yft, "cashflow", None), "CF")
+            financials_local["income_statement"] = parse_financial_table(getattr(yft, "financials", None), "IS")
+            financials_local["balance_sheet"] = parse_financial_table(getattr(yft, "balance_sheet", None), "BS")
+            financials_local["cashflow"] = parse_financial_table(getattr(yft, "cashflow", None), "CF")
+            return fundamentals_local, financials_local
+
+        def _should_retry(result: object) -> bool:
+            if not isinstance(result, tuple) or len(result) != 2:
+                return True
+            fundamentals_local, financials_local = result
+            return not fundamentals_local and not financials_local
+
+        fundamentals, financials = retry_call_result(
+            _download,
+            config=config,
+            should_retry=_should_retry,
+        )
     except Exception:
         fundamentals = {}
         financials = {}
@@ -202,14 +248,21 @@ def _download_capital_flows_snapshot(end_date: date, lookback_days: int = 90) ->
     }
     start = end_date - timedelta(days=lookback_days)
     flows: Dict[str, Any] = {}
+    config = _yf_retry_config()
+    session = get_requests_session(config.timeout)
     try:
-        raw = yf.download(
-            list(proxies.keys()),
-            start=start,
-            end=end_date + timedelta(days=1),
-            progress=False,
-            auto_adjust=False,
-        )
+        def _download() -> pd.DataFrame:
+            return yf.download(
+                list(proxies.keys()),
+                start=start,
+                end=end_date + timedelta(days=1),
+                progress=False,
+                auto_adjust=False,
+                timeout=config.timeout,
+                session=session,
+            )
+
+        raw = retry_call_result(_download, config=config, should_retry=_empty_frame)
     except Exception:
         raw = pd.DataFrame()
     if isinstance(raw, pd.Series):
@@ -313,31 +366,36 @@ def _fetch_options_metrics(ticker: str) -> Dict[str, Any]:
         "available": False,
         "message": "暂无期权数据",
     }
+    config = _yf_retry_config()
+    session = get_requests_session(config.timeout)
     try:
-        tk = yf.Ticker(ticker)
-        expiries = tk.options
-        if not expiries:
-            return result
-        expiry = expiries[0]
-        chain = tk.option_chain(expiry)
-        calls = chain.calls
-        puts = chain.puts
-        if calls.empty or puts.empty:
-            return result
-        call_iv = float(calls["impliedVolatility"].mean())
-        put_iv = float(puts["impliedVolatility"].mean())
-        put_call = float(puts["volume"].sum() / calls["volume"].sum()) if calls["volume"].sum() else None
-        atm_call = calls.iloc[(calls["strike"] - tk.info.get("currentPrice", calls["strike"].median())).abs().idxmin()]
-        atm_put = puts.iloc[(puts["strike"] - tk.info.get("currentPrice", puts["strike"].median())).abs().idxmin()]
-        result = {
-            "available": True,
-            "expiry": expiry,
-            "call_iv": round(call_iv * 100, 2),
-            "put_iv": round(put_iv * 100, 2),
-            "put_call_ratio": None if put_call is None else round(put_call, 2),
-            "atm_call_bid": float(atm_call.get("bid", 0.0)),
-            "atm_put_bid": float(atm_put.get("bid", 0.0)),
-        }
+        def _download() -> Dict[str, Any]:
+            tk = yf.Ticker(ticker, session=session)
+            expiries = tk.options
+            if not expiries:
+                return result
+            expiry = expiries[0]
+            chain = tk.option_chain(expiry)
+            calls = chain.calls
+            puts = chain.puts
+            if calls.empty or puts.empty:
+                return result
+            call_iv = float(calls["impliedVolatility"].mean())
+            put_iv = float(puts["impliedVolatility"].mean())
+            put_call = float(puts["volume"].sum() / calls["volume"].sum()) if calls["volume"].sum() else None
+            atm_call = calls.iloc[(calls["strike"] - tk.info.get("currentPrice", calls["strike"].median())).abs().idxmin()]
+            atm_put = puts.iloc[(puts["strike"] - tk.info.get("currentPrice", puts["strike"].median())).abs().idxmin()]
+            return {
+                "available": True,
+                "expiry": expiry,
+                "call_iv": round(call_iv * 100, 2),
+                "put_iv": round(put_iv * 100, 2),
+                "put_call_ratio": None if put_call is None else round(put_call, 2),
+                "atm_call_bid": float(atm_call.get("bid", 0.0)),
+                "atm_put_bid": float(atm_put.get("bid", 0.0)),
+            }
+
+        result = retry_call(_download, config=config)
     except Exception:
         pass
     return result

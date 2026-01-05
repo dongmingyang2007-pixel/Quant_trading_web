@@ -15,6 +15,7 @@ import logging
 from .backtest_logger import BacktestLogEntry, append_log
 
 from .models import BacktestRecord as BacktestRecordModel
+from .file_utils import atomic_write_json, update_json_file
 
 LOGGER = logging.getLogger(__name__)
 FALLBACK_HISTORY_PATH = settings.DATA_CACHE_DIR / "history_fallback.json"
@@ -103,7 +104,7 @@ class BacktestRecord:
 def load_history(limit: int = 25, *, user_id: Optional[str] = None) -> list[dict[str, Any]]:
     if not user_id:
         return []
-    qs = BacktestRecordModel.objects.filter(user_id=user_id).order_by("-timestamp")
+    qs = BacktestRecordModel.objects.filter(user_id=user_id).order_by("-timestamp")[:limit]
     db_entries = [
         {
             "record_id": obj.record_id,
@@ -361,7 +362,7 @@ def compact_history_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _save_fallback_history(entries: list[dict[str, Any]]) -> None:
-    FALLBACK_HISTORY_PATH.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(FALLBACK_HISTORY_PATH, entries, indent=2)
 
 
 def append_fallback_history(record: BacktestRecord) -> bool:
@@ -369,15 +370,18 @@ def append_fallback_history(record: BacktestRecord) -> bool:
         entry = _coerce_json(record.to_dict(), default={})
         if not isinstance(entry, dict):
             return False
-        entries = _load_fallback_history()
-        entries = [
-            item
-            for item in entries
-            if isinstance(item, dict) and item.get("record_id") != record.record_id
-        ]
-        entries.insert(0, entry)
-        entries = entries[:FALLBACK_HISTORY_LIMIT]
-        _save_fallback_history(entries)
+        def _update(entries: Any) -> list[dict[str, Any]]:
+            if not isinstance(entries, list):
+                entries = []
+            entries = [
+                item
+                for item in entries
+                if isinstance(item, dict) and item.get("record_id") != record.record_id
+            ]
+            entries.insert(0, entry)
+            return entries[:FALLBACK_HISTORY_LIMIT]
+
+        update_json_file(FALLBACK_HISTORY_PATH, default=[], update_fn=_update, indent=2)
         return True
     except Exception:
         return False
@@ -494,22 +498,27 @@ def _get_fallback_record(record_id: str, *, user_id: Optional[str]) -> Optional[
 
 
 def _delete_fallback_record(record_id: str, *, user_id: Optional[str]) -> bool:
-    entries = _load_fallback_history()
-    if not entries:
+    if not FALLBACK_HISTORY_PATH.exists():
         return False
     target_user = _normalize_user_id(user_id)
-    kept: list[dict[str, Any]] = []
     removed = False
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        entry_user = _normalize_user_id(entry.get("user_id"))
-        if entry.get("record_id") == record_id and entry_user == target_user:
-            removed = True
-            continue
-        kept.append(entry)
-    if removed:
-        _save_fallback_history(kept)
+
+    def _update(entries: Any) -> list[dict[str, Any]]:
+        nonlocal removed
+        if not isinstance(entries, list):
+            return []
+        kept: list[dict[str, Any]] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            entry_user = _normalize_user_id(entry.get("user_id"))
+            if entry.get("record_id") == record_id and entry_user == target_user:
+                removed = True
+                continue
+            kept.append(entry)
+        return kept
+
+    update_json_file(FALLBACK_HISTORY_PATH, default=[], update_fn=_update, indent=2)
     return removed
 
 
@@ -522,30 +531,35 @@ def _update_fallback_meta(
     notes: Optional[str],
     starred: Optional[bool],
 ) -> Optional[dict[str, Any]]:
-    entries = _load_fallback_history()
-    if not entries:
+    if not FALLBACK_HISTORY_PATH.exists():
         return None
     target_user = _normalize_user_id(user_id)
     updated_entry: dict[str, Any] | None = None
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        entry_user = _normalize_user_id(entry.get("user_id"))
-        if entry.get("record_id") != record_id or entry_user != target_user:
-            continue
-        if title is not None:
-            entry["title"] = title
-        if tags is not None:
-            entry["tags"] = tags
-        if notes is not None:
-            entry["notes"] = notes
-        if starred is not None:
-            entry["starred"] = bool(starred)
-        updated_entry = entry
-        break
+    def _update(entries: Any) -> list[dict[str, Any]]:
+        nonlocal updated_entry
+        if not isinstance(entries, list):
+            return []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            entry_user = _normalize_user_id(entry.get("user_id"))
+            if entry.get("record_id") != record_id or entry_user != target_user:
+                continue
+            if title is not None:
+                entry["title"] = title
+            if tags is not None:
+                entry["tags"] = tags
+            if notes is not None:
+                entry["notes"] = notes
+            if starred is not None:
+                entry["starred"] = bool(starred)
+            updated_entry = entry
+            break
+        return entries
+
+    update_json_file(FALLBACK_HISTORY_PATH, default=[], update_fn=_update, indent=2)
     if updated_entry is None:
         return None
-    _save_fallback_history(entries)
     return {
         "record_id": updated_entry.get("record_id"),
         "title": updated_entry.get("title") or "",

@@ -9,8 +9,11 @@ from typing import Any
 
 import yfinance as yf
 
+from django.conf import settings
+
 from .config import StrategyInput
 from ..headlines import estimate_readers
+from ..network import get_requests_session, resolve_retry_config, retry_call_result
 
 
 def fetch_market_context(params: StrategyInput) -> dict[str, Any]:
@@ -20,6 +23,13 @@ def fetch_market_context(params: StrategyInput) -> dict[str, Any]:
         "tickers": [],
         "analysis": "",
     }
+
+    retry_config = resolve_retry_config(
+        retries=os.environ.get("MARKET_FETCH_MAX_RETRIES"),
+        backoff=os.environ.get("MARKET_FETCH_RETRY_BACKOFF"),
+        default_timeout=getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", None),
+    )
+    session = get_requests_session(retry_config.timeout)
 
     if os.environ.get("ENABLE_WEB_SEARCH", "1") == "0":
         context["message"] = (
@@ -31,8 +41,15 @@ def fetch_market_context(params: StrategyInput) -> dict[str, Any]:
     industry = ""
     info: dict[str, Any] = {}
     try:
-        ticker_info = yf.Ticker(params.ticker)
-        info = ticker_info.info or {}
+        def _download_info():
+            ticker_info = yf.Ticker(params.ticker, session=session)
+            return ticker_info.info or {}
+
+        info = retry_call_result(
+            _download_info,
+            config=retry_config,
+            should_retry=lambda value: not value,
+        )
         sector = info.get("sector", "") or ""
         industry = info.get("industry", "") or ""
     except Exception:
@@ -121,10 +138,28 @@ def fetch_market_context(params: StrategyInput) -> dict[str, Any]:
         context["message"] = "未找到可用的 DuckDuckGo 搜索客户端。"
         return context
 
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    timeout_seconds = max(1, int(retry_config.timeout))
+
+    def _build_ddg_client(client_cls):
+        try:
+            return client_cls(proxies=proxies, timeout=timeout_seconds)  # type: ignore[arg-type]
+        except TypeError:
+            proxy_value = None
+            if isinstance(proxies, dict):
+                proxy_value = proxies.get("http") or proxies.get("https")
+            elif isinstance(proxies, str):
+                proxy_value = proxies
+            try:
+                return client_cls(proxy=proxy_value, timeout=timeout_seconds)  # type: ignore[arg-type]
+            except TypeError:
+                return client_cls()
+
     def run_duck_query(ddgs_client: Any, query: str) -> list[dict[str, str]]:
         """Retry DuckDuckGo新闻/文本查询，自动处理限流。"""
-        wait_seconds = 1.0
-        for _ in range(3):
+        max_attempts = max(1, retry_config.retries + 1)
+        wait_seconds = max(0.4, retry_config.backoff or 0.4)
+        for attempt in range(max_attempts):
             try:
                 news_items = list(
                     ddgs_client.news(
@@ -138,14 +173,17 @@ def fetch_market_context(params: StrategyInput) -> dict[str, Any]:
                     return news_items
             except Exception as exc:
                 if rate_limit_exceptions and isinstance(exc, rate_limit_exceptions):
-                    time.sleep(min(6.0, wait_seconds + random.random()))
-                    wait_seconds *= 1.8
+                    delay = wait_seconds * (attempt + 1)
+                    if retry_config.jitter:
+                        delay += random.random() * retry_config.jitter
+                    time.sleep(min(6.0, delay))
+                    wait_seconds *= 1.6
                     continue
                 break
-            time.sleep(0.5 + random.random() * 0.5)
+            time.sleep(min(1.0, wait_seconds + random.random() * 0.4))
 
-        wait_seconds = 1.0
-        for _ in range(2):
+        wait_seconds = max(0.4, retry_config.backoff or 0.4)
+        for attempt in range(max_attempts):
             try:
                 text_items = list(
                     ddgs_client.text(
@@ -159,18 +197,20 @@ def fetch_market_context(params: StrategyInput) -> dict[str, Any]:
                     return text_items
             except Exception as exc:
                 if rate_limit_exceptions and isinstance(exc, rate_limit_exceptions):
-                    time.sleep(min(5.0, wait_seconds + random.random()))
-                    wait_seconds *= 1.7
+                    delay = wait_seconds * (attempt + 1)
+                    if retry_config.jitter:
+                        delay += random.random() * retry_config.jitter
+                    time.sleep(min(5.0, delay))
+                    wait_seconds *= 1.5
                     continue
                 break
-            time.sleep(0.4 + random.random() * 0.4)
+            time.sleep(min(0.9, wait_seconds + random.random() * 0.4))
         return []
 
     try:
-        proxies = {"http": proxy, "https": proxy} if proxy else None
         aggregated: list[dict[str, str]] = []
         seen_queries: set[str] = set()
-        with ddg_client_cls(proxies=proxies) as ddgs:  # type: ignore
+        with _build_ddg_client(ddg_client_cls) as ddgs:  # type: ignore
             for q in base_queries:
                 query_key = q.lower()
                 if query_key in seen_queries:

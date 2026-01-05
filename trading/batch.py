@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Iterable, Sequence
 import json
+import logging
 
 import pandas as pd
 
@@ -17,6 +18,8 @@ from .strategies import (
     calculate_sortino,
 )
 from .portfolio import combine, portfolio_stats
+
+LOGGER = logging.getLogger(__name__)
 
 
 def run_batch_backtests(
@@ -52,7 +55,30 @@ def run_batch_backtests(
     for ticker in tickers:
         for engine in engines:
             params = replace(base_params, ticker=ticker, strategy_engine=engine)
-            result = run_quant_pipeline(params)
+            try:
+                result = run_quant_pipeline(params)
+            except Exception as exc:
+                message = str(exc).replace("\n", " ").strip()
+                if len(message) > 200:
+                    message = f"{message[:197]}..."
+                LOGGER.exception("Batch backtest failed for %s/%s", ticker, engine)
+                rows.append(
+                    {
+                        "ticker": ticker,
+                        "engine": engine,
+                        "start_date": str(base_params.start_date),
+                        "end_date": str(base_params.end_date),
+                        "total_return": None,
+                        "cagr": None,
+                        "sharpe": None,
+                        "max_drawdown": None,
+                        "volatility": None,
+                        "confidence_score": None,
+                        "confidence_label": None,
+                        "error": message or "batch_backtest_failed",
+                    }
+                )
+                continue
             stats = result.get("stats", {})
             pnl_series = pd.Series(dtype=float)
             return_rows = result.get("return_series")

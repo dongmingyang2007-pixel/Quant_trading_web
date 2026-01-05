@@ -10,11 +10,10 @@ from urllib.parse import urlsplit
 import requests
 from requests import Response, RequestException, Session
 
+from .network import DEFAULT_BACKOFF_SECONDS, DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT_SECONDS
+
 LOGGER = logging.getLogger(__name__)
 
-DEFAULT_TIMEOUT_SECONDS = float(os.environ.get("HTTP_CLIENT_TIMEOUT_SECONDS", "8"))
-DEFAULT_MAX_RETRIES = int(os.environ.get("HTTP_CLIENT_MAX_RETRIES", "2"))
-DEFAULT_BACKOFF_SECONDS = float(os.environ.get("HTTP_CLIENT_BACKOFF_SECONDS", "0.6"))
 DEFAULT_USER_AGENT = os.environ.get("HTTP_CLIENT_USER_AGENT", "QuantTradingWeb/1.0 (+https://quant.local)")
 
 

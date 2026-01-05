@@ -10,10 +10,13 @@ import json
 import numpy as np
 import pandas as pd
 
+from django.conf import settings
+
 
 from ..data_sources import AuxiliaryData
 from ..rl_agents import build_rl_agent
 from ..http_client import http_client, HttpClientError
+from ..network import get_requests_session, resolve_retry_config, retry_call_result
 from .config import (
     QuantStrategyError,
     StrategyInput,
@@ -295,17 +298,32 @@ def fetch_price_data(ticker: str, start: date, end: date) -> Tuple[pd.DataFrame,
         ) from exc
 
     download_error: Exception | None = None
+    retry_config = resolve_retry_config(
+        retries=os.environ.get("MARKET_FETCH_MAX_RETRIES"),
+        backoff=os.environ.get("MARKET_FETCH_RETRY_BACKOFF"),
+        default_timeout=getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", None),
+    )
+    session = get_requests_session(retry_config.timeout)
+
+    def _empty_frame(value: object) -> bool:
+        return not isinstance(value, pd.DataFrame) or value.empty
+
     try:
-        data = yf.download(
-            ticker,
-            start=start,
-            end=end,
-            progress=False,
-            auto_adjust=False,
-            actions=False,
-            repair=True,
-            threads=False,
-        )
+        def _download() -> pd.DataFrame:
+            return yf.download(
+                ticker,
+                start=start,
+                end=end,
+                progress=False,
+                auto_adjust=False,
+                actions=False,
+                repair=True,
+                threads=False,
+                timeout=retry_config.timeout,
+                session=session,
+            )
+
+        data = retry_call_result(_download, config=retry_config, should_retry=_empty_frame)
     except Exception as exc:  # pragma: no cover - network failure
         download_error = exc
         data = pd.DataFrame()

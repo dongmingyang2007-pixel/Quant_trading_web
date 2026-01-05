@@ -14,6 +14,7 @@ formatting, etc.) are intentionally deleted because the app no longer needs them
 from __future__ import annotations
 
 import json
+import os
 import time
 from typing import Any, Sequence
 
@@ -23,6 +24,7 @@ from django.conf import settings
 from .http_client import http_client, HttpClientError
 from .observability import record_metric
 from .cache_utils import cache_get_object, cache_set_object, build_cache_key
+from .network import get_requests_session, resolve_retry_config, retry_call_result
 
 # yfinance is optional – we'll use it only as a fallback
 try:
@@ -186,33 +188,47 @@ def _fetch_quote_snapshot(symbols: Sequence[str]) -> dict[str, dict[str, Any]]:
         except (HttpClientError, ValueError, json.JSONDecodeError):
             # ② batch failed – use yfinance for each symbol
             if yf is not None:
+                retry_config = resolve_retry_config(
+                    retries=os.environ.get("MARKET_FETCH_MAX_RETRIES"),
+                    backoff=os.environ.get("MARKET_FETCH_RETRY_BACKOFF"),
+                    default_timeout=getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", None),
+                )
+                session = get_requests_session(retry_config.timeout)
                 for symbol in chunk:
                     try:
-                        tk = yf.Ticker(symbol)
-                        fast = getattr(tk, "fast_info", None) or {}
-                        info = getattr(tk, "info", None) or {}
-                        price = (
-                            fast.get("last_price")
-                            or fast.get("lastPrice")
-                            or fast.get("regularMarketPrice")
-                            or info.get("regularMarketPrice")
-                            or info.get("previousClose")
+                        def _download_symbol() -> dict[str, Any] | None:
+                            tk = yf.Ticker(symbol, session=session)
+                            fast = getattr(tk, "fast_info", None) or {}
+                            info = getattr(tk, "info", None) or {}
+                            price = (
+                                fast.get("last_price")
+                                or fast.get("lastPrice")
+                                or fast.get("regularMarketPrice")
+                                or info.get("regularMarketPrice")
+                                or info.get("previousClose")
+                            )
+                            if price is None:
+                                return None
+                            change_pct = (
+                                fast.get("regularMarketChangePercent")
+                                or info.get("regularMarketChangePercent")
+                            )
+                            return {
+                                "symbol": symbol,
+                                "shortName": fast.get("shortName") or info.get("shortName") or symbol,
+                                "regularMarketPrice": float(price),
+                                "regularMarketChangePercent": float(change_pct) if change_pct is not None else 0.0,
+                                "_ts": time.time(),
+                            }
+
+                        entry = retry_call_result(
+                            _download_symbol,
+                            config=retry_config,
+                            should_retry=lambda value: value is None,
                         )
-                        if price is None:
-                            continue
-                        change_pct = (
-                            fast.get("regularMarketChangePercent")
-                            or info.get("regularMarketChangePercent")
-                        )
-                        entry = {
-                            "symbol": symbol,
-                            "shortName": fast.get("shortName") or info.get("shortName") or symbol,
-                            "regularMarketPrice": float(price),
-                            "regularMarketChangePercent": float(change_pct) if change_pct is not None else 0.0,
-                            "_ts": time.time(),
-                        }
-                        results[symbol] = entry
-                        cache_set_object(_quote_cache_key(symbol), entry, SCREENER_CACHE_TTL)
+                        if entry:
+                            results[symbol] = entry
+                            cache_set_object(_quote_cache_key(symbol), entry, SCREENER_CACHE_TTL)
                     except Exception:
                         continue
             # if yfinance is None, we just leave these symbols missing

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from typing import Any, Optional
 import math
+import os
 import textwrap
 import re
 
 import numpy as np
 import pandas as pd
+from django.conf import settings
 from django.utils.translation import gettext_lazy as _
 
 from .config import StrategyInput
@@ -16,6 +18,7 @@ from .metrics import (
 )
 from .risk import calculate_max_drawdown
 from .. import screener
+from ..network import get_requests_session, resolve_retry_config, retry_call_result
 
 try:  # optional baselines
     from statsmodels.tsa.arima.model import ARIMA  # type: ignore
@@ -490,9 +493,22 @@ def _safe_get(info: dict[str, Any], *keys: str) -> Any:
 
 def build_factor_snapshot(params: StrategyInput) -> dict[str, Any]:
     fundamentals: dict[str, Any] = {}
+    retry_config = resolve_retry_config(
+        retries=os.environ.get("MARKET_FETCH_MAX_RETRIES"),
+        backoff=os.environ.get("MARKET_FETCH_RETRY_BACKOFF"),
+        default_timeout=getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", None),
+    )
+    session = get_requests_session(retry_config.timeout)
     try:
-        ticker = yf.Ticker(params.ticker)
-        fundamentals = ticker.info or {}
+        def _download_info():
+            ticker = yf.Ticker(params.ticker, session=session)
+            return ticker.info or {}
+
+        fundamentals = retry_call_result(
+            _download_info,
+            config=retry_config,
+            should_retry=lambda value: not value,
+        )
     except Exception:
         fundamentals = {}
 
@@ -987,7 +1003,21 @@ def build_knowledge_graph_bundle(
     sector = None
     industry = None
     try:
-        info = yf.Ticker(params.ticker).info or {}
+        retry_config = resolve_retry_config(
+            retries=os.environ.get("MARKET_FETCH_MAX_RETRIES"),
+            backoff=os.environ.get("MARKET_FETCH_RETRY_BACKOFF"),
+            default_timeout=getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", None),
+        )
+        session = get_requests_session(retry_config.timeout)
+
+        def _download_info():
+            return yf.Ticker(params.ticker, session=session).info or {}
+
+        info = retry_call_result(
+            _download_info,
+            config=retry_config,
+            should_retry=lambda value: not value,
+        )
         sector = info.get("sector")
         industry = info.get("industry")
     except Exception:

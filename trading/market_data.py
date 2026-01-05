@@ -15,6 +15,7 @@ import pandas as pd
 from django.conf import settings
 
 from .cache_utils import build_cache_key, cache_memoize
+from .network import get_requests_session, resolve_retry_config, retry_call_result
 from trading.observability import record_metric
 
 try:  # optional dependency
@@ -22,8 +23,6 @@ try:  # optional dependency
 except Exception:  # pragma: no cover
     yf = None  # type: ignore
 
-MAX_RETRIES = int(os.environ.get("MARKET_FETCH_MAX_RETRIES", "2") or 0)
-RETRY_BACKOFF_SECONDS = float(os.environ.get("MARKET_FETCH_RETRY_BACKOFF", "1.0") or 0)
 RATE_LIMIT_PER_WINDOW = int(os.environ.get("MARKET_FETCH_RATE_LIMIT", "120") or 0)
 RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("MARKET_FETCH_RATE_WINDOW", "60") or 0)
 
@@ -92,22 +91,18 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
             pass
         raise
 
-def _with_retries(func, *args, **kwargs):
-    last_exc = None
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            return func(*args, **kwargs)
-        except Exception as exc:  # pragma: no cover - network/IO
-            last_exc = exc
-            if attempt >= MAX_RETRIES:
-                break
-            try:
-                time.sleep(RETRY_BACKOFF_SECONDS)
-            except Exception:
-                pass
-    if last_exc:
-        raise last_exc
-    return None
+
+def _market_retry_config(timeout: int | None = None):
+    return resolve_retry_config(
+        timeout=timeout,
+        retries=os.environ.get("MARKET_FETCH_MAX_RETRIES"),
+        backoff=os.environ.get("MARKET_FETCH_RETRY_BACKOFF"),
+        default_timeout=getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", None),
+    )
+
+
+def _empty_frame(value: object) -> bool:
+    return not isinstance(value, pd.DataFrame) or value.empty
 
 
 def _rate_limited() -> bool:
@@ -145,6 +140,8 @@ def fetch(
 
     unique = [sym for sym in dict.fromkeys(symbols) if sym]
     cache_key = build_cache_key("market-data", sorted(unique), period or start, end, interval, fields)
+    retry_config = _market_retry_config(timeout)
+    session = get_requests_session(retry_config.timeout)
 
     def _cache_paths(key: str) -> tuple[Path, Path]:
         digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
@@ -203,9 +200,8 @@ def fetch(
         return fallback
 
     def _builder() -> pd.DataFrame:
-        try:
-            data = _with_retries(
-                yf.download,
+        def _download() -> pd.DataFrame:
+            return yf.download(
                 tickers=" ".join(unique),
                 period=period,
                 interval=interval,
@@ -215,13 +211,17 @@ def fetch(
                 group_by="ticker",
                 threads=False,
                 progress=False,
-                timeout=timeout or getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", None),
+                timeout=retry_config.timeout,
+                session=session,
             )
-            if not isinstance(data, pd.DataFrame):
-                return pd.DataFrame()
-            return data
+
+        try:
+            data = retry_call_result(_download, config=retry_config, should_retry=_empty_frame)
         except Exception:
             return pd.DataFrame()
+        if not isinstance(data, pd.DataFrame):
+            return pd.DataFrame()
+        return data
 
     if not cache:
         frame = _builder()
@@ -286,6 +286,8 @@ def fetch_recent_window(symbols: list[str] | tuple[str, ...] | str, *, interval:
             unique_symbols.append(sym)
     if not unique_symbols or yf is None:  # pragma: no cover - network dependency
         return {}
+    retry_config = _market_retry_config(None)
+    session = get_requests_session(retry_config.timeout)
     def _resolve_period(interval: str, limit: int) -> str:
         """Choose a compact period for yf.download to avoid over-fetching."""
         interval = (interval or "1d").lower()
@@ -296,15 +298,19 @@ def fetch_recent_window(symbols: list[str] | tuple[str, ...] | str, *, interval:
             return "10y"
         return f"{days}d"
 
-    try:
-        data = _with_retries(
-            yf.download,
+    def _download_recent() -> pd.DataFrame:
+        return yf.download(
             tickers=" ".join(unique_symbols),
             period=_resolve_period(interval, limit),
             interval=interval,
             progress=False,
             threads=False,
+            timeout=retry_config.timeout,
+            session=session,
         )
+
+    try:
+        data = retry_call_result(_download_recent, config=retry_config, should_retry=_empty_frame)
     except Exception:
         data = pd.DataFrame()
     result: dict[str, pd.DataFrame] = {}
@@ -346,16 +352,22 @@ def fetch_latest_quote(symbol: str, *, interval: str = "1m") -> dict[str, object
         return {}
     if yf is None or not _rate_limited():  # pragma: no cover - network dependency
         return {}
+    retry_config = _market_retry_config(None)
+    session = get_requests_session(retry_config.timeout)
     source = "yf"
-    try:
-        data = _with_retries(
-            yf.download,
+    def _download_latest() -> pd.DataFrame:
+        return yf.download(
             tickers=symbol,
             period="5d",
             interval=interval,
             progress=False,
             threads=False,
+            timeout=retry_config.timeout,
+            session=session,
         )
+
+    try:
+        data = retry_call_result(_download_latest, config=retry_config, should_retry=_empty_frame)
         if isinstance(data, pd.DataFrame) and not data.empty:
             extracted = _extract_price_from_frame(data)
             if extracted:
