@@ -11,9 +11,17 @@ from datetime import datetime
 from typing import Any
 from django.utils import timezone
 
-from ..forms import ProfileForm
+from ..forms import ApiCredentialForm, ProfileForm
 from ..history import load_history
-from ..profile import load_profile, save_profile
+from ..profile import (
+    API_CREDENTIAL_FIELDS,
+    clear_api_credentials,
+    load_api_credentials,
+    load_profile,
+    mask_credential,
+    save_api_credentials,
+    save_profile,
+)
 from ..storage_utils import (
     delete_media_file,
     save_uploaded_file,
@@ -44,6 +52,8 @@ def account(request):
     error_message = None
     profile_success = None
     profile_error = None
+    api_success = None
+    api_error = None
 
     history_runs = load_history(user_id=str(user.id))
     history_briefs: list[dict[str, Any]] = []
@@ -77,6 +87,8 @@ def account(request):
     elif not isinstance(gallery_paths, list):
         gallery_paths = []
 
+    api_form = None
+
     if request.method == "POST":
         action = request.POST.get("action")
         if action == "password-reset":
@@ -106,6 +118,7 @@ def account(request):
                         "发送失败，请稍后再试或联系管理员。",
                     )
             profile_form = ProfileForm(initial=profile_data)
+            api_form = ApiCredentialForm()
         elif action == "profile":
             profile_form = ProfileForm(request.POST, request.FILES)
             if profile_form.is_valid():
@@ -181,6 +194,7 @@ def account(request):
                     "Failed to save profile. Please check the form fields.",
                     "保存失败，请检查填写内容。",
                 )
+            api_form = ApiCredentialForm()
         elif action == "remove-feature":
             if feature_path:
                 delete_media_file(feature_path)
@@ -191,6 +205,7 @@ def account(request):
             else:
                 profile_error = _msg("No feature image to remove.", "当前没有展示照片。")
             profile_form = ProfileForm(initial=profile_data)
+            api_form = ApiCredentialForm()
         elif action == "remove-gallery":
             target = request.POST.get("image")
             if target and target in gallery_paths:
@@ -202,10 +217,42 @@ def account(request):
             else:
                 profile_error = _msg("Could not find the selected gallery image.", "未找到指定的展示照片。")
             profile_form = ProfileForm(initial=profile_data)
+            api_form = ApiCredentialForm()
+        elif action == "api-credentials":
+            api_form = ApiCredentialForm(request.POST)
+            if api_form.is_valid():
+                updates = {key: api_form.cleaned_data.get(key) for key in API_CREDENTIAL_FIELDS}
+                save_api_credentials(str(user.id), updates)
+                api_success = _msg("API credentials updated.", "API 凭证已更新。")
+            else:
+                api_error = _msg("Failed to save API credentials.", "保存 API 凭证失败。")
+            profile_form = ProfileForm(initial=profile_data)
+        elif action == "api-credentials-clear":
+            clear_api_credentials(str(user.id))
+            api_success = _msg("API credentials cleared.", "已清除保存的 API 凭证。")
+            profile_form = ProfileForm(initial=profile_data)
+            api_form = ApiCredentialForm()
         else:
             profile_form = ProfileForm(initial=profile_data)
+            api_form = ApiCredentialForm()
     else:
         profile_form = ProfileForm(initial=profile_data)
+        api_form = ApiCredentialForm()
+
+    api_credentials = load_api_credentials(str(user.id))
+    api_credential_status = []
+    for key, meta in API_CREDENTIAL_FIELDS.items():
+        value = api_credentials.get(key, "")
+        api_credential_status.append(
+            {
+                "key": key,
+                "label": meta.get("label", key),
+                "help": meta.get("help", ""),
+                "env": meta.get("env", ""),
+                "is_set": bool(value),
+                "masked": mask_credential(value),
+            }
+        )
 
     def _localize(dt: datetime) -> tuple[datetime, str]:
         aware = dt if timezone.is_aware(dt) else timezone.make_aware(dt, timezone.utc)
@@ -359,6 +406,10 @@ def account(request):
         "profile_form": profile_form,
         "profile_success": profile_success,
         "profile_error": profile_error,
+        "api_form": api_form,
+        "api_success": api_success,
+        "api_error": api_error,
+        "api_credential_status": api_credential_status,
         "profile_media": profile_media,
         "activity_entries": activity_entries,
         "account_stats": account_stats,

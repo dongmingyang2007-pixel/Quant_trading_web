@@ -352,6 +352,17 @@ MEDIA_ROOT = _ensure_dir(DATA_ROOT / "media")
 STORAGE_ROOT = DATA_ROOT
 DATA_CACHE_DIR = _ensure_dir(DATA_ROOT / "data_cache")
 LEARNING_CONTENT_DIR = _ensure_dir(DATA_ROOT / "learning_content")
+REALTIME_STATE_DIR = _ensure_dir(Path(os.environ.get("REALTIME_STATE_DIR", DATA_CACHE_DIR / "realtime" / "state")))
+REALTIME_DATA_DIR = _ensure_dir(Path(os.environ.get("REALTIME_DATA_DIR", DATA_CACHE_DIR / "realtime" / "data")))
+
+# Alpaca defaults (override via env when needed)
+ALPACA_DATA_FEED = os.environ.get("ALPACA_DATA_FEED", "sip")
+ALPACA_DATA_WS_URL = os.environ.get(
+    "ALPACA_DATA_WS_URL",
+    f"wss://stream.data.alpaca.markets/v2/{ALPACA_DATA_FEED}",
+)
+ALPACA_DATA_REST_URL = os.environ.get("ALPACA_DATA_REST_URL", "https://data.alpaca.markets")
+ALPACA_TRADING_REST_URL = os.environ.get("ALPACA_TRADING_REST_URL", "https://paper-api.alpaca.markets")
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 

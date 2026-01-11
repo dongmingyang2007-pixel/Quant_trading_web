@@ -9,6 +9,63 @@ from django.utils.translation import get_language
 from .strategy_defaults import ADVANCED_STRATEGY_DEFAULTS
 
 
+class ApiCredentialForm(forms.Form):
+    alpaca_api_key_id = forms.CharField(
+        required=False,
+        label="Alpaca API Key ID",
+        widget=forms.PasswordInput(render_value=True),
+        help_text="用于 Alpaca 行情/交易 API（Key ID）。",
+    )
+    alpaca_api_secret_key = forms.CharField(
+        required=False,
+        label="Alpaca API Secret",
+        widget=forms.PasswordInput(render_value=True),
+        help_text="用于 Alpaca 行情/交易 API（Secret Key）。",
+    )
+    bailian_api_key = forms.CharField(
+        required=False,
+        label="BaiLian (DashScope) API Key",
+        widget=forms.PasswordInput(render_value=True),
+        help_text="用于阿里云百炼（通义千问）API Key。",
+    )
+    aliyun_access_key_id = forms.CharField(
+        required=False,
+        label="Aliyun AccessKey ID",
+        widget=forms.PasswordInput(render_value=True),
+        help_text="用于阿里云服务的 AccessKey ID。",
+    )
+    aliyun_access_key_secret = forms.CharField(
+        required=False,
+        label="Aliyun AccessKey Secret",
+        widget=forms.PasswordInput(render_value=True),
+        help_text="用于阿里云服务的 AccessKey Secret。",
+    )
+    gemini_api_key = forms.CharField(
+        required=False,
+        label="Gemini API Key",
+        widget=forms.PasswordInput(render_value=True),
+        help_text="用于 Gemini 模型调用。",
+    )
+    ollama_api_key = forms.CharField(
+        required=False,
+        label="Ollama API Key",
+        widget=forms.PasswordInput(render_value=True),
+        help_text="用于 Ollama Web Search 或云端接口（可选）。",
+    )
+    strategy_update_auth_token = forms.CharField(
+        required=False,
+        label="Strategy Update Token",
+        widget=forms.PasswordInput(render_value=True),
+        help_text="用于远程策略覆写（可选）。",
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for name in self.fields:
+            self.fields[name].widget.attrs.setdefault("class", "form-control")
+            self.fields[name].widget.attrs.setdefault("autocomplete", "off")
+
+
 class QuantStrategyForm(forms.Form):
     ML_MODE_CHOICES_ZH = [
         ("light", "轻量：梯度提升 (默认)"),

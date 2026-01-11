@@ -1377,7 +1377,7 @@ def build_opportunity_radar(
     knowledge_bundle: dict[str, Any] | None,
 ) -> dict[str, Any]:
     try:
-        page = screener.fetch_page(size=30)
+        page = screener.fetch_page(size=30, user_id=params.user_id)
     except Exception as exc:
         return {
             "available": False,

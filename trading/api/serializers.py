@@ -7,6 +7,7 @@ from typing import Any
 from rest_framework import serializers
 
 from ..forms import QuantStrategyForm
+from ..realtime.schema import RealtimePayloadError, validate_realtime_payload
 
 
 class StrategyTaskSerializer(serializers.Serializer):
@@ -177,6 +178,22 @@ class StrategyPresetSerializer(serializers.Serializer):
         else:
             cleaned["include_ticker_dates"] = True
         return _serialize_json_payload(cleaned)
+
+
+class RealtimeProfileSerializer(serializers.Serializer):
+    profile_id = serializers.UUIDField(read_only=True)
+    name = serializers.CharField(max_length=80)
+    description = serializers.CharField(max_length=200, allow_blank=True, required=False)
+    payload = serializers.DictField()
+    is_active = serializers.BooleanField(required=False)
+    created_at = serializers.DateTimeField(read_only=True)
+    updated_at = serializers.DateTimeField(read_only=True)
+
+    def validate_payload(self, value: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return validate_realtime_payload(value)
+        except RealtimePayloadError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 class HistoryMetaSerializer(serializers.Serializer):

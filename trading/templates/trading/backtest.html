@@ -1449,11 +1449,10 @@
                     <div class="report-card" id="overview-signal-card">
                         <h3 class="panel-title">{% bilingual "Signal Timeline" "信号时间线" %}</h3>
                         <p class="text-muted small mb-2">{% bilingual "Probability, thresholds, and position with key execution events." "展示概率、阈值与仓位，并标注关键执行事件。" %}</p>
-                        {% with has_overview=result.overview_series and result.overview_series.series %}
-                        {% with has_returns=result.return_series %}
-                        {% if has_overview or has_returns %}
+                        {% with overview_series=result.overview_series return_series=result.return_series %}
+                        {% if overview_series and overview_series.series or return_series %}
                             <div id="overview-signal-chart" class="overview-signal-chart"></div>
-                            {% if has_overview %}
+                            {% if overview_series %}
                                 <div class="overview-legend">
                                     <span class="legend-item"><span class="legend-dot" style="background:#2563eb;"></span>{% bilingual "Probability" "概率" %}</span>
                                     <span class="legend-item"><span class="legend-dot" style="background:#0f766e;"></span>{% bilingual "Position" "仓位" %}</span>
@@ -1462,16 +1461,15 @@
                             {% else %}
                                 <p class="text-muted small mb-0">{% bilingual "Fallback to equity curve (no signal series)." "暂无信号序列，显示净值曲线。" %}</p>
                             {% endif %}
-                            {% if result.overview_series %}
-                                {{ result.overview_series|json_script:"overview-series-data" }}
+                            {% if overview_series %}
+                                {{ overview_series|json_script:"overview-series-data" }}
                             {% endif %}
-                            {% if result.return_series %}
-                                {{ result.return_series|json_script:"overview-return-series-data" }}
+                            {% if return_series %}
+                                {{ return_series|json_script:"overview-return-series-data" }}
                             {% endif %}
                         {% else %}
                             <p class="text-muted mb-0">{% bilingual "No signal series available yet." "暂无可用信号序列。" %}</p>
                         {% endif %}
-                        {% endwith %}
                         {% endwith %}
                     </div>
                     <div class="report-card" id="robustness-lab">
@@ -3293,11 +3291,22 @@ document.addEventListener('DOMContentLoaded', () => {
         aiStatus.className = `ai-status-chip${variant}`;
     }
 
+    function inferProvider(modelName) {
+        const lowered = (modelName || '').toLowerCase();
+        if (lowered.startsWith('bailian:') || lowered.startsWith('dashscope:') || lowered.startsWith('aliyun:')) {
+            return 'bailian';
+        }
+        if (lowered.includes('gemini')) {
+            return 'gemini';
+        }
+        return 'ollama';
+    }
+
     function setAiMeta(data = {}) {
         if (!aiMeta) return;
         const model = (Array.isArray(data.models) && data.models[0]) || null;
         const modelName = (model && model.name) || data.selected_model || reportContext.ai_model || '';
-        const provider = (model && model.provider) || reportContext.ai_provider || (modelName && modelName.toLowerCase().includes('gemini') ? 'gemini' : 'ollama');
+        const provider = (model && model.provider) || reportContext.ai_provider || inferProvider(modelName);
         const web = data.web_used ? (langIsZh ? '联网' : 'Online') : (langIsZh ? '离线' : 'Offline');
         const profile = data.profile || {};
         const costHint = [];

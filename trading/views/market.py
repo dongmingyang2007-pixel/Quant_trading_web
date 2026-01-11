@@ -23,6 +23,7 @@ from .. import market_data
 from ..observability import ensure_request_id, record_metric, track_latency
 from ..rate_limit import check_rate_limit, rate_limit_key
 from ..models import UserProfile
+from ..alpaca_data import resolve_alpaca_credentials
 
 try:
     import yfinance as yf  # type: ignore
@@ -138,15 +139,16 @@ def market_insights(request: HttpRequest) -> HttpResponse:
 @require_http_methods(["GET", "POST"])
 def market_insights_data(request: HttpRequest) -> JsonResponse:
     request_id = ensure_request_id(request)
-    if yf is None:
+    key_id, secret = resolve_alpaca_credentials(user=request.user)
+    if yf is None and not (key_id and secret):
         record_metric(
             "market.insights.error",
             request_id=request_id,
             user_id=request.user.id,
-            error="missing_yfinance",
+            error="missing_data_source",
         )
         return JsonResponse(
-            {"error": _("当前环境未安装 yfinance，无法加载市场数据。"), "request_id": request_id},
+            {"error": _("当前环境缺少可用的市场数据源，无法加载市场数据。"), "request_id": request_id},
             status=503,
         )
 
@@ -257,7 +259,12 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
             timeframe=resolved.timeframe.key,
             restrict=restrict_to_query,
         ):
-            future = _MARKET_EXECUTOR.submit(_fetch_history, symbols, resolved.timeframe)
+            future = _MARKET_EXECUTOR.submit(
+                _fetch_history,
+                symbols,
+                resolved.timeframe,
+                user_id=str(request.user.id),
+            )
             series_map = future.result(timeout=MARKET_REQUEST_TIMEOUT)
     except FuturesTimeout:
         if future:
@@ -334,7 +341,12 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
     return JsonResponse(response, json_dumps_params={"ensure_ascii": False})
 
 
-def _download_history(symbols: Iterable[str], timeframe: Timeframe) -> dict[str, pd.Series]:
+def _download_history(
+    symbols: Iterable[str],
+    timeframe: Timeframe,
+    *,
+    user_id: str | None = None,
+) -> dict[str, pd.Series]:
     unique = [sym for sym in dict.fromkeys(symbols) if sym]
     if not unique:
         return {}
@@ -348,6 +360,7 @@ def _download_history(symbols: Iterable[str], timeframe: Timeframe) -> dict[str,
         timeout=MARKET_REQUEST_TIMEOUT,
         ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
         cache_alias=getattr(settings, "MARKET_HISTORY_CACHE_ALIAS", None),
+        user_id=user_id,
     )
 
     try:
@@ -370,11 +383,16 @@ def _download_history(symbols: Iterable[str], timeframe: Timeframe) -> dict[str,
     return history
 
 
-def _fetch_history(symbols: Iterable[str], timeframe: Timeframe) -> dict[str, pd.Series]:
+def _fetch_history(
+    symbols: Iterable[str],
+    timeframe: Timeframe,
+    *,
+    user_id: str | None = None,
+) -> dict[str, pd.Series]:
     cache_key = build_cache_key("market-history", timeframe.key, sorted(symbols))
     return cache_memoize(
         cache_key,
-        lambda: _download_history(symbols, timeframe),
+        lambda: _download_history(symbols, timeframe, user_id=user_id),
         getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
     ) or {}
 

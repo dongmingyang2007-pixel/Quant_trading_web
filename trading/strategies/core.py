@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from typing import Any, Optional, Tuple
 import os
@@ -17,6 +17,7 @@ from ..data_sources import AuxiliaryData
 from ..rl_agents import build_rl_agent
 from ..http_client import http_client, HttpClientError
 from ..network import get_requests_session, resolve_retry_config, retry_call_result
+from ..alpaca_data import fetch_stock_bars_frame, resolve_alpaca_credentials
 from .config import (
     QuantStrategyError,
     StrategyInput,
@@ -275,7 +276,13 @@ def fetch_remote_strategy_overrides(params: StrategyInput) -> dict[str, Any]:
         return {}
 
 
-def fetch_price_data(ticker: str, start: date, end: date) -> Tuple[pd.DataFrame, list[str]]:
+def fetch_price_data(
+    ticker: str,
+    start: date,
+    end: date,
+    *,
+    user_id: str | None = None,
+) -> Tuple[pd.DataFrame, list[str]]:
     """Fetch historical price data using yfinance with local cache fallback."""
     warnings: list[str] = []
     data_source = "yfinance"
@@ -290,43 +297,69 @@ def fetch_price_data(ticker: str, start: date, end: date) -> Tuple[pd.DataFrame,
         if len(message) > 140:
             return f"{message[:137]}..."
         return message
-    try:
-        import yfinance as yf
-    except ImportError as exc:  # pragma: no cover - dependency load
-        raise QuantStrategyError(
-            "yfinance is required to download market data. Install it first."
-        ) from exc
-
     download_error: Exception | None = None
-    retry_config = resolve_retry_config(
-        retries=os.environ.get("MARKET_FETCH_MAX_RETRIES"),
-        backoff=os.environ.get("MARKET_FETCH_RETRY_BACKOFF"),
-        default_timeout=getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", None),
-    )
-    session = get_requests_session(retry_config.timeout)
-
-    def _empty_frame(value: object) -> bool:
-        return not isinstance(value, pd.DataFrame) or value.empty
-
-    try:
-        def _download() -> pd.DataFrame:
-            return yf.download(
-                ticker,
+    data = pd.DataFrame()
+    key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+    if key_id and secret:
+        try:
+            alpaca_end = end + timedelta(days=1)
+            frame = fetch_stock_bars_frame(
+                [ticker],
                 start=start,
-                end=end,
-                progress=False,
-                auto_adjust=False,
-                actions=False,
-                repair=True,
-                threads=False,
-                timeout=retry_config.timeout,
-                session=session,
+                end=alpaca_end,
+                timeframe="1Day",
+                user_id=user_id,
             )
+            if isinstance(frame, pd.DataFrame) and not frame.empty:
+                if isinstance(frame.columns, pd.MultiIndex):
+                    try:
+                        data = frame.xs(ticker.upper(), axis=1, level=1)
+                    except (KeyError, ValueError):
+                        data = pd.DataFrame()
+                else:
+                    data = frame
+                if isinstance(data, pd.DataFrame) and not data.empty:
+                    data_source = "alpaca"
+        except Exception as exc:
+            download_error = exc
 
-        data = retry_call_result(_download, config=retry_config, should_retry=_empty_frame)
-    except Exception as exc:  # pragma: no cover - network failure
-        download_error = exc
-        data = pd.DataFrame()
+    if data.empty:
+        try:
+            import yfinance as yf
+        except ImportError as exc:  # pragma: no cover - dependency load
+            raise QuantStrategyError(
+                "缺少可用行情源。请配置 Alpaca API Key，或安装 yfinance 后再试。"
+            ) from exc
+
+        retry_config = resolve_retry_config(
+            retries=os.environ.get("MARKET_FETCH_MAX_RETRIES"),
+            backoff=os.environ.get("MARKET_FETCH_RETRY_BACKOFF"),
+            default_timeout=getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", None),
+        )
+        session = get_requests_session(retry_config.timeout)
+
+        def _empty_frame(value: object) -> bool:
+            return not isinstance(value, pd.DataFrame) or value.empty
+
+        try:
+            def _download() -> pd.DataFrame:
+                return yf.download(
+                    ticker,
+                    start=start,
+                    end=end,
+                    progress=False,
+                    auto_adjust=False,
+                    actions=False,
+                    repair=True,
+                    threads=False,
+                    timeout=retry_config.timeout,
+                    session=session,
+                )
+
+            data = retry_call_result(_download, config=retry_config, should_retry=_empty_frame)
+        except Exception as exc:  # pragma: no cover - network failure
+            download_error = exc
+            data = pd.DataFrame()
 
     if data.empty:
         cache_file = DATA_CACHE_DIR / f"{ticker.upper()}.csv"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from datetime import datetime, timezone as dt_timezone
 from dataclasses import asdict
 from typing import Any
 from django.utils import timezone
@@ -32,7 +33,8 @@ from ..task_queue import (
 from ..history import update_history_meta
 from ..views.api import _build_screener_snapshot
 from ..views.dashboard import build_strategy_input
-from ..models import StrategyPreset
+from ..models import RealtimeProfile, StrategyPreset
+from ..realtime.storage import read_ndjson_tail, read_state
 from ..preprocessing import sanitize_price_history
 from paper.engine import create_session, serialize_session
 from paper.models import PaperTradingSession, PaperTrade
@@ -40,6 +42,7 @@ from .serializers import (
     StrategyTaskSerializer,
     TrainingTaskSerializer,
     PaperSessionCreateSerializer,
+    RealtimeProfileSerializer,
     StrategyPresetSerializer,
     HistoryMetaSerializer,
 )
@@ -155,6 +158,7 @@ class PreflightView(BaseTaskAPIView):
                 strategy_input.ticker,
                 strategy_input.start_date,
                 strategy_input.end_date,
+                user_id=strategy_input.user_id,
             )
         except QuantStrategyError as exc:
             return Response({"error": str(exc), "request_id": request_id}, status=status.HTTP_400_BAD_REQUEST)
@@ -568,3 +572,140 @@ class StrategyPresetDetailView(APIView):
             return Response({"error": "not_found", "request_id": request_id}, status=status.HTTP_404_NOT_FOUND)
         preset.delete()
         return Response({"deleted": True, "preset_id": preset_id, "request_id": request_id})
+
+
+class RealtimeProfileView(APIView):
+    def get(self, request):
+        request_id = ensure_request_id(request)
+        if not request.user.is_authenticated:
+            return Response({"error": "auth_required", "request_id": request_id}, status=status.HTTP_401_UNAUTHORIZED)
+        profiles = RealtimeProfile.objects.filter(user=request.user).order_by("-is_active", "-updated_at")
+        active_profile = next((profile for profile in profiles if profile.is_active), None)
+        payload = {
+            "profiles": [
+                {
+                    "profile_id": profile.profile_id,
+                    "name": profile.name,
+                    "description": profile.description,
+                    "payload": profile.payload,
+                    "is_active": profile.is_active,
+                    "created_at": profile.created_at,
+                    "updated_at": profile.updated_at,
+                }
+                for profile in profiles
+            ],
+            "active_profile_id": getattr(active_profile, "profile_id", None),
+            "request_id": request_id,
+        }
+        return Response(payload)
+
+    def post(self, request):
+        request_id = ensure_request_id(request)
+        if not request.user.is_authenticated:
+            return Response({"error": "auth_required", "request_id": request_id}, status=status.HTTP_401_UNAUTHORIZED)
+        serializer = RealtimeProfileSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        is_active = bool(data.get("is_active"))
+        if is_active:
+            RealtimeProfile.objects.filter(user=request.user).update(is_active=False)
+        profile = RealtimeProfile.objects.create(
+            user=request.user,
+            name=data["name"],
+            description=data.get("description", ""),
+            payload=data.get("payload") or {},
+            is_active=is_active,
+        )
+        response = {
+            "profile_id": profile.profile_id,
+            "name": profile.name,
+            "description": profile.description,
+            "payload": profile.payload,
+            "is_active": profile.is_active,
+            "created_at": profile.created_at,
+            "updated_at": profile.updated_at,
+            "request_id": request_id,
+        }
+        return Response(response, status=status.HTTP_201_CREATED)
+
+
+class RealtimeProfileDetailView(APIView):
+    def _get_object(self, request, profile_id: str) -> RealtimeProfile | None:
+        if not request.user.is_authenticated:
+            return None
+        return RealtimeProfile.objects.filter(profile_id=profile_id, user=request.user).first()
+
+    def patch(self, request, profile_id: str):
+        request_id = ensure_request_id(request)
+        profile = self._get_object(request, profile_id)
+        if not profile:
+            return Response({"error": "not_found", "request_id": request_id}, status=status.HTTP_404_NOT_FOUND)
+        serializer = RealtimeProfileSerializer(profile, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        update_fields = []
+        if "name" in data:
+            profile.name = data["name"]
+            update_fields.append("name")
+        if "description" in data:
+            profile.description = data.get("description", "")
+            update_fields.append("description")
+        if "payload" in data:
+            profile.payload = data.get("payload") or {}
+            update_fields.append("payload")
+        if "is_active" in data:
+            profile.is_active = bool(data.get("is_active"))
+            update_fields.append("is_active")
+            if profile.is_active:
+                RealtimeProfile.objects.filter(user=request.user).exclude(profile_id=profile.profile_id).update(
+                    is_active=False
+                )
+        if update_fields:
+            update_fields.append("updated_at")
+            profile.save(update_fields=update_fields)
+        response = {
+            "profile_id": profile.profile_id,
+            "name": profile.name,
+            "description": profile.description,
+            "payload": profile.payload,
+            "is_active": profile.is_active,
+            "created_at": profile.created_at,
+            "updated_at": profile.updated_at,
+            "request_id": request_id,
+        }
+        return Response(response)
+
+    def delete(self, request, profile_id: str):
+        request_id = ensure_request_id(request)
+        profile = self._get_object(request, profile_id)
+        if not profile:
+            return Response({"error": "not_found", "request_id": request_id}, status=status.HTTP_404_NOT_FOUND)
+        profile.delete()
+        return Response({"deleted": True, "profile_id": profile_id, "request_id": request_id})
+
+
+class RealtimeSignalsView(APIView):
+    def get(self, request):
+        request_id = ensure_request_id(request)
+        if not request.user.is_authenticated:
+            return Response({"error": "auth_required", "request_id": request_id}, status=status.HTTP_401_UNAUTHORIZED)
+        try:
+            limit = int(request.GET.get("limit", 20))
+        except (TypeError, ValueError):
+            limit = 20
+        limit = max(1, min(200, limit))
+        source = (request.GET.get("source") or "").strip().lower()
+        date = (request.GET.get("date") or "").strip()
+        signals: list[dict[str, Any]]
+        if source == "ndjson" or date:
+            if not date:
+                date = datetime.now(dt_timezone.utc).strftime("%Y%m%d")
+            signals = read_ndjson_tail(f"signals_{date}.ndjson", limit=limit)
+        else:
+            payload = read_state("signals_latest.json", default={})
+            raw = payload.get("signals") if isinstance(payload, dict) else []
+            if isinstance(raw, list):
+                signals = raw[-limit:]
+            else:
+                signals = []
+        return Response({"signals": signals, "request_id": request_id})

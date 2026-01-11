@@ -25,6 +25,7 @@ from .http_client import http_client, HttpClientError
 from .observability import record_metric
 from .cache_utils import cache_get_object, cache_set_object, build_cache_key
 from .network import get_requests_session, resolve_retry_config, retry_call_result
+from .alpaca_data import fetch_stock_snapshots, resolve_alpaca_credentials
 
 # yfinance is optional – we'll use it only as a fallback
 try:
@@ -123,7 +124,7 @@ def _quote_cache_key(symbol: str) -> str:
 # ---------------------------------------------------------------------------
 # main: fetch a quote snapshot
 # ---------------------------------------------------------------------------
-def _fetch_quote_snapshot(symbols: Sequence[str]) -> dict[str, dict[str, Any]]:
+def _fetch_quote_snapshot(symbols: Sequence[str], *, user_id: str | None = None) -> dict[str, dict[str, Any]]:
     """
     Try to get quotes for the given symbols.
 
@@ -151,15 +152,67 @@ def _fetch_quote_snapshot(symbols: Sequence[str]) -> dict[str, dict[str, Any]]:
     if not to_fetch:
         return results
 
+    chunk_size = 40
+    remaining = list(to_fetch)
+    key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+    if key_id and secret:
+        remaining = []
+        def _normalize_snapshot(symbol: str, snapshot: dict[str, Any]) -> dict[str, Any] | None:
+            latest_trade = snapshot.get("latestTrade") or snapshot.get("latest_trade") or {}
+            latest_quote = snapshot.get("latestQuote") or snapshot.get("latest_quote") or {}
+            daily_bar = snapshot.get("dailyBar") or snapshot.get("daily_bar") or {}
+            prev_bar = snapshot.get("prevDailyBar") or snapshot.get("prev_daily_bar") or {}
+            price = (
+                latest_trade.get("p")
+                or daily_bar.get("c")
+                or prev_bar.get("c")
+                or latest_quote.get("ap")
+                or latest_quote.get("bp")
+            )
+            if price is None:
+                return None
+            change_pct = None
+            if daily_bar.get("c") is not None and prev_bar.get("c"):
+                try:
+                    change_pct = (float(daily_bar["c"]) / float(prev_bar["c"]) - 1.0) * 100.0
+                except Exception:
+                    change_pct = None
+            return {
+                "symbol": symbol,
+                "shortName": symbol,
+                "regularMarketPrice": float(price),
+                "regularMarketChangePercent": float(change_pct) if change_pct is not None else None,
+                "currency": "USD",
+                "_ts": time.time(),
+            }
+
+        for idx in range(0, len(to_fetch), chunk_size):
+            chunk = [s for s in to_fetch[idx : idx + chunk_size] if s]
+            if not chunk:
+                continue
+            snapshots = fetch_stock_snapshots(chunk, user_id=user_id)
+            for symbol in chunk:
+                snapshot = snapshots.get(symbol) if isinstance(snapshots, dict) else None
+                if not isinstance(snapshot, dict):
+                    remaining.append(symbol)
+                    continue
+                entry = _normalize_snapshot(symbol, snapshot)
+                if not entry:
+                    remaining.append(symbol)
+                    continue
+                results[symbol] = entry
+                cache_set_object(_quote_cache_key(symbol), entry, SCREENER_CACHE_TTL)
+
+    if not remaining:
+        return results
+
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; QuantTradingSidebar/1.0)",
         "Accept": "application/json",
     }
 
-    chunk_size = 40
-
-    for idx in range(0, len(to_fetch), chunk_size):
-        chunk = [s for s in to_fetch[idx : idx + chunk_size] if s]
+    for idx in range(0, len(remaining), chunk_size):
+        chunk = [s for s in remaining[idx : idx + chunk_size] if s]
         if not chunk:
             continue
 
@@ -254,6 +307,7 @@ def fetch_page(
     industry: str | None = None,
     market: str | None = None,
     cache: Any | None = None,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Minimal replacement for the old screener.fetch_page(...).
@@ -263,7 +317,7 @@ def fetch_page(
     - fetch quotes
     - build rows with ticker / price / change_pct
     """
-    snapshot = _fetch_quote_snapshot(CORE_TICKERS_US)
+    snapshot = _fetch_quote_snapshot(CORE_TICKERS_US, user_id=user_id)
     rows: list[dict[str, Any]] = []
     for sym in CORE_TICKERS_US:
         quote = snapshot.get(sym)

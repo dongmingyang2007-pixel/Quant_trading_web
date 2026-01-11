@@ -11,6 +11,7 @@ from typing import Any, Dict, List
 from django.conf import settings
 
 from .network import get_requests_session, resolve_retry_config, retry_call
+from .alpaca_data import fetch_news
 
 from .file_utils import atomic_write_json
 
@@ -212,7 +213,56 @@ def _has_fresh_story(stories: List[Dict[str, Any]]) -> bool:
     return False
 
 
-def _fetch_remote_headlines() -> tuple[List[Dict[str, str]], bool]:
+def _fetch_alpaca_headlines(user_id: str | None = None) -> List[Dict[str, str]]:
+    symbols_raw = os.environ.get("ALPACA_NEWS_SYMBOLS", "SPY,QQQ,AAPL,MSFT,NVDA")
+    symbols = [sym.strip() for sym in symbols_raw.split(",") if sym.strip()]
+    try:
+        limit = int(os.environ.get("ALPACA_NEWS_LIMIT", str(AGGREGATE_TARGET)))
+    except ValueError:
+        limit = AGGREGATE_TARGET
+    items = fetch_news(symbols=symbols, limit=limit, user_id=user_id)
+    if not items:
+        return []
+    aggregated: List[Dict[str, str]] = []
+    seen_urls: set[str] = set()
+    for entry in items:
+        title = entry.get("headline") or entry.get("title") or entry.get("summary") or ""
+        if not title:
+            continue
+        url = entry.get("url") or entry.get("link") or ""
+        if url and url in seen_urls:
+            continue
+        if url:
+            seen_urls.add(url)
+        snippet = entry.get("summary") or entry.get("description") or ""
+        source = entry.get("source") or entry.get("publisher") or ""
+        image = ""
+        images = entry.get("images") or entry.get("image") or []
+        if isinstance(images, list) and images:
+            image = images[0].get("url") or images[0].get("image_url") or ""
+        elif isinstance(images, dict):
+            image = images.get("url") or images.get("image_url") or ""
+        published_raw = entry.get("created_at") or entry.get("updated_at") or entry.get("published_at") or ""
+        published_display, published_iso = _parse_datetime(str(published_raw)) if published_raw else ("", "")
+        normalized = {
+            "id": hashlib.sha256((url or title).encode("utf-8")).hexdigest()[:16],
+            "title": str(title).strip(),
+            "url": url,
+            "snippet": str(snippet).strip(),
+            "image": image,
+            "source": str(source).strip(),
+            "published": published_display,
+            "published_dt": published_iso,
+        }
+        normalized["score"] = _score_item(normalized)
+        aggregated.append(normalized)
+    return aggregated
+
+
+def _fetch_remote_headlines(user_id: str | None = None) -> tuple[List[Dict[str, str]], bool]:
+    alpaca_headlines = _fetch_alpaca_headlines(user_id=user_id)
+    if alpaca_headlines:
+        return (alpaca_headlines, False)
     # 先尝试用 yfinance 自带新闻源，命中则可直接使用
     yf_headlines = _fetch_yfinance_headlines()
     if yf_headlines:
@@ -355,7 +405,7 @@ def _fetch_remote_headlines() -> tuple[List[Dict[str, str]], bool]:
     return (top_items, False)
 
 
-def get_global_headlines(refresh: bool = False) -> List[Dict[str, str]]:
+def get_global_headlines(refresh: bool = False, *, user_id: str | None = None) -> List[Dict[str, str]]:
     cache = _load_cache()
     now = datetime.now(timezone.utc)
     if not refresh and cache:
@@ -369,7 +419,7 @@ def get_global_headlines(refresh: bool = False) -> List[Dict[str, str]]:
             if stories and _has_fresh_story(stories):
                 return stories
 
-    stories_raw, used_fallback = _fetch_remote_headlines()
+    stories_raw, used_fallback = _fetch_remote_headlines(user_id=user_id)
     stories = [_ensure_readers_field(item) for item in stories_raw]
 
     if not used_fallback:

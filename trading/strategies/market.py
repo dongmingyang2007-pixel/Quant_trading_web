@@ -14,6 +14,7 @@ from django.conf import settings
 from .config import StrategyInput
 from ..headlines import estimate_readers
 from ..network import get_requests_session, resolve_retry_config, retry_call_result
+from ..alpaca_data import fetch_news
 
 
 def fetch_market_context(params: StrategyInput) -> dict[str, Any]:
@@ -30,6 +31,72 @@ def fetch_market_context(params: StrategyInput) -> dict[str, Any]:
         default_timeout=getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", None),
     )
     session = get_requests_session(retry_config.timeout)
+
+    alpaca_symbols: list[str] = [params.ticker.upper()]
+    if params.benchmark_ticker:
+        alpaca_symbols.append(params.benchmark_ticker.upper())
+    alpaca_items = fetch_news(symbols=alpaca_symbols, limit=10, user_id=params.user_id)
+    if alpaca_items:
+        normalized: list[dict[str, Any]] = []
+        for entry in alpaca_items:
+            title = entry.get("headline") or entry.get("title") or entry.get("summary") or ""
+            if not title:
+                continue
+            url = entry.get("url") or entry.get("link") or ""
+            snippet = entry.get("summary") or entry.get("description") or ""
+            source = entry.get("source") or entry.get("publisher") or ""
+            image = ""
+            images = entry.get("images") or entry.get("image") or []
+            if isinstance(images, list) and images:
+                image = images[0].get("url") or images[0].get("image_url") or ""
+            elif isinstance(images, dict):
+                image = images.get("url") or images.get("image_url") or ""
+            published = entry.get("created_at") or entry.get("updated_at") or entry.get("published_at") or ""
+            normalized.append(
+                {
+                    "title": str(title).strip(),
+                    "url": url,
+                    "snippet": str(snippet).strip(),
+                    "image": image,
+                    "source": str(source).strip(),
+                    "published": str(published).strip() if published else "",
+                    "score": 1,
+                }
+            )
+        if normalized:
+            top_items = normalized[:8]
+            context["news"] = [
+                {
+                    "title": item["title"],
+                    "url": item["url"],
+                    "snippet": item["snippet"],
+                    "image": item.get("image") or "",
+                    "source": item.get("source") or "",
+                    "published": item.get("published") or "",
+                }
+                for item in top_items
+            ]
+            focus_cards: list[dict[str, str]] = []
+            for item in top_items[:6]:
+                story_hash = hashlib.sha256((item["url"] or item["title"]).encode("utf-8")).hexdigest()
+                focus_cards.append(
+                    {
+                        "id": story_hash[:12],
+                        "title": item["title"],
+                        "url": item["url"],
+                        "snippet": item["snippet"],
+                        "image": item.get("image") or "",
+                        "source": item.get("source") or "",
+                        "published": item.get("published") or "",
+                        "readers": estimate_readers(story_hash[:16], item.get("score", 0)),
+                    }
+                )
+            context["focus_news"] = focus_cards
+            snippets = [item.get("snippet", "") for item in context["news"] if item.get("snippet")]
+            if snippets:
+                context["analysis"] = "新闻摘要：" + " ".join(snippets[:2])
+            context["message"] = "已从 Alpaca 新闻接口获取最新资讯摘要。"
+            return context
 
     if os.environ.get("ENABLE_WEB_SEARCH", "1") == "0":
         context["message"] = (

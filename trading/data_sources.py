@@ -15,6 +15,7 @@ from django.conf import settings
 from .cache_utils import build_cache_key, cache_memoize
 from .network import get_requests_session, resolve_retry_config, retry_call, retry_call_result
 from .security import sanitize_html_fragment
+from . import market_data
 MACRO_TICKERS = {
     "^VIX": {"label": "芝加哥VIX波动率", "short": "VIX"},
     "^TNX": {"label": "美国10年期国债收益率", "short": "10Y"},
@@ -97,26 +98,26 @@ def _empty_frame(value: object) -> bool:
     return not isinstance(value, pd.DataFrame) or value.empty
 
 
-def _download_macro_series(end_date: date, lookback_days: int = 730) -> Dict[str, Any]:
+def _download_macro_series(
+    end_date: date,
+    lookback_days: int = 730,
+    *,
+    user_id: str | None = None,
+) -> Dict[str, Any]:
     """拉取核心宏观指标（VIX、10Y、DXY），并计算最新值及动量。"""
     start = end_date - timedelta(days=lookback_days)
     records: Dict[str, Any] = {}
     fetch_failed = False
-    config = _yf_retry_config()
-    session = get_requests_session(config.timeout)
     try:
-        def _download() -> pd.DataFrame:
-            return yf.download(
-                list(MACRO_TICKERS.keys()),
-                start=start,
-                end=end_date + timedelta(days=1),
-                progress=False,
-                auto_adjust=False,
-                timeout=config.timeout,
-                session=session,
-            )
-
-        raw = retry_call_result(_download, config=config, should_retry=_empty_frame)
+        raw = market_data.fetch(
+            list(MACRO_TICKERS.keys()),
+            start=start,
+            end=end_date + timedelta(days=1),
+            interval="1d",
+            cache=True,
+            ttl=getattr(settings, "MACRO_DATA_CACHE_TTL", 600),
+            user_id=user_id,
+        )
         if _empty_frame(raw):
             fetch_failed = True
             data = pd.DataFrame()
@@ -161,11 +162,16 @@ def _download_macro_series(end_date: date, lookback_days: int = 730) -> Dict[str
     return records
 
 
-def _fetch_macro_series(end_date: date, lookback_days: int = 730) -> Dict[str, Any]:
+def _fetch_macro_series(
+    end_date: date,
+    lookback_days: int = 730,
+    *,
+    user_id: str | None = None,
+) -> Dict[str, Any]:
     cache_key = build_cache_key("macro-series", end_date.isoformat(), lookback_days)
     return cache_memoize(
         cache_key,
-        lambda: _download_macro_series(end_date, lookback_days),
+        lambda: _download_macro_series(end_date, lookback_days, user_id=user_id),
         getattr(settings, "MACRO_DATA_CACHE_TTL", 600),
     ) or {}
 
@@ -234,7 +240,12 @@ def _fetch_fundamental_snapshot(ticker: str) -> Dict[str, Any]:
     return fundamentals, financials
 
 
-def _download_capital_flows_snapshot(end_date: date, lookback_days: int = 90) -> Dict[str, Any]:
+def _download_capital_flows_snapshot(
+    end_date: date,
+    lookback_days: int = 90,
+    *,
+    user_id: str | None = None,
+) -> Dict[str, Any]:
     """
     通过代表性 ETF / 指数估算资金流向与风险偏好。
     """
@@ -248,21 +259,16 @@ def _download_capital_flows_snapshot(end_date: date, lookback_days: int = 90) ->
     }
     start = end_date - timedelta(days=lookback_days)
     flows: Dict[str, Any] = {}
-    config = _yf_retry_config()
-    session = get_requests_session(config.timeout)
     try:
-        def _download() -> pd.DataFrame:
-            return yf.download(
-                list(proxies.keys()),
-                start=start,
-                end=end_date + timedelta(days=1),
-                progress=False,
-                auto_adjust=False,
-                timeout=config.timeout,
-                session=session,
-            )
-
-        raw = retry_call_result(_download, config=config, should_retry=_empty_frame)
+        raw = market_data.fetch(
+            list(proxies.keys()),
+            start=start,
+            end=end_date + timedelta(days=1),
+            interval="1d",
+            cache=True,
+            ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
+            user_id=user_id,
+        )
     except Exception:
         raw = pd.DataFrame()
     if isinstance(raw, pd.Series):
@@ -314,11 +320,16 @@ def _download_capital_flows_snapshot(end_date: date, lookback_days: int = 90) ->
     return flows
 
 
-def _fetch_capital_flows_snapshot(end_date: date, lookback_days: int = 90) -> Dict[str, Any]:
+def _fetch_capital_flows_snapshot(
+    end_date: date,
+    lookback_days: int = 90,
+    *,
+    user_id: str | None = None,
+) -> Dict[str, Any]:
     cache_key = build_cache_key("capital-flows", end_date.isoformat(), lookback_days)
     return cache_memoize(
         cache_key,
-        lambda: _download_capital_flows_snapshot(end_date, lookback_days),
+        lambda: _download_capital_flows_snapshot(end_date, lookback_days, user_id=user_id),
         getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
     ) or {}
 
@@ -465,10 +476,15 @@ def _derive_event_signals(ticker: str, news_items: List[Dict[str, Any]] | None) 
     return events[:10]
 
 
-def collect_auxiliary_data(params, market_context: Dict[str, Any]) -> AuxiliaryData:
+def collect_auxiliary_data(
+    params,
+    market_context: Dict[str, Any],
+    *,
+    user_id: str | None = None,
+) -> AuxiliaryData:
     """统一收集宏观、基本面、财务与事件信息，供下游模块使用。"""
     end_date = params.end_date
-    macro = _fetch_macro_series(end_date)
+    macro = _fetch_macro_series(end_date, user_id=user_id)
     fundamentals, financials = _fetch_fundamental_snapshot(params.ticker)
     events = _derive_event_signals(params.ticker, market_context.get("news") if market_context else None)
     sentiment = _compute_news_sentiment(market_context.get("news") if market_context else None)
@@ -479,7 +495,7 @@ def collect_auxiliary_data(params, market_context: Dict[str, Any]) -> AuxiliaryD
         fundamentals=fundamentals,
         financials=financials,
         events=events,
-        capital_flows=_fetch_capital_flows_snapshot(end_date),
+        capital_flows=_fetch_capital_flows_snapshot(end_date, user_id=user_id),
         news_sentiment=sentiment,
         options_metrics=options,
         global_macro=global_macro,

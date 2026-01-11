@@ -86,6 +86,27 @@ class StrategyPreset(models.Model):
         return f"{self.name} ({self.user_id})"
 
 
+class RealtimeProfile(models.Model):
+    profile_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="realtime_profiles")
+    name = models.CharField(max_length=80)
+    description = models.CharField(max_length=200, blank=True, default="")
+    payload = models.JSONField(default=dict)
+    is_active = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        indexes = [
+            models.Index(fields=["user", "-updated_at"]),
+            models.Index(fields=["user", "is_active"]),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover
+        return f"{self.name} ({self.user_id})"
+
+
 def generate_post_id() -> str:
     return f"post-{uuid.uuid4().hex[:10]}"
 
@@ -104,6 +125,7 @@ class UserProfile(models.Model):
     feature_image_path = models.CharField(max_length=255, blank=True, default="")
     gallery_paths = models.JSONField(default=list, blank=True)
     market_watchlist = models.JSONField(default=list, blank=True)
+    api_credentials = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

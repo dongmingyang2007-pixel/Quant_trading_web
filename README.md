@@ -54,6 +54,7 @@ pip install -r requirements-rl.txt   # 强化学习相关
 
 可选配置：
 - `DJANGO_STORAGE_DIR`：自定义数据目录；默认使用 `storage_bundle/`，不存在时自动创建。
+- `DJANGO_ALLOW_INSECURE_KEY=1`：仅限本地临时绕过密钥校验。
 - `REDIS_URL`：启用 Redis cache（含限流跨进程一致）。
 - `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND`：异步队列配置。
 - `CELERY_ALWAYS_EAGER`：置为 `1` 可强制同步执行。
@@ -75,6 +76,66 @@ Celery beat 的调度文件默认写入 `storage_bundle/`。
 
 如需强制同步（调试用，不建议长回测）：`CELERY_ALWAYS_EAGER=1`。
 
+## 实时引擎（Realtime）
+用于生成 Universe/Focus 列表、实时 bars 与信号，并通过监控页查看状态。
+
+1) 在「账户中心 → 设置 → API 凭证」中填写 Alpaca Key（或通过环境变量注入）。  
+2) 打开「实时引擎」页面创建/激活配置档案。  
+3) 启动引擎：
+```bash
+python manage.py realtime_run --user-id <你的用户ID>
+```
+可选刷新资产主表（提升 Universe 覆盖）：
+```bash
+python manage.py realtime_refresh_assets --user-id <你的用户ID>
+```
+
+示例配置（Realtime Profile JSON）：
+```json
+{
+  "universe": {
+    "max_symbols": 1200,
+    "top_n": 1000,
+    "min_price": 2,
+    "min_dollar_volume": 5000000,
+    "min_volume": 200000
+  },
+  "focus": {
+    "size": 200,
+    "max_churn_per_refresh": 20,
+    "min_residence_seconds": 300
+  },
+  "engine": {
+    "stream_enabled": true,
+    "feed": "sip",
+    "bar_interval_seconds": 1,
+    "bar_aggregate_seconds": 5,
+    "stale_seconds": 2.5
+  },
+  "signals": {
+    "lookback_bars": 3,
+    "entry_threshold": 0.002,
+    "max_spread_bps": 25,
+    "min_volume": 10000
+  }
+}
+```
+
+常见问题：
+- 监控页提示离线：检查 realtime_run 是否在独立终端运行、`stream_state.json` 是否更新。
+- 无行情/信号：确认 Alpaca Key 生效；`feed` 与订阅类型是否与账户权限匹配。
+- SIP 空数据：确认订阅绑定在当前 Key；测试 `feed=iex` 以排查权限问题。
+
+## 实时引擎相关环境变量
+- `ALPACA_API_KEY_ID` / `ALPACA_API_SECRET_KEY`：Alpaca 行情/交易凭证。
+- `ALPACA_DATA_FEED`：`sip` 或 `iex`，默认 `sip`。
+- `ALPACA_DATA_WS_URL`：Alpaca WS 地址（默认 `wss://stream.data.alpaca.markets/v2/sip`）。
+- `ALPACA_DATA_REST_URL`：Alpaca 数据 REST 根地址（默认 `https://data.alpaca.markets`）。
+- `ALPACA_TRADING_REST_URL`：Alpaca 交易 REST 根地址（默认 `https://paper-api.alpaca.markets`）。
+- `REALTIME_STATE_DIR` / `REALTIME_DATA_DIR`：实时引擎状态/数据目录（默认在 `storage_bundle/data_cache/realtime/`）。
+- `REALTIME_NDJSON_MAX_BYTES`：NDJSON 文件轮转阈值（默认 10MB）。
+- `METRICS_MAX_BYTES`：遥测文件轮转阈值。
+
 ## 屏幕图表分析（可选）
 浏览器页面提供“屏幕波型分析”，使用本地屏幕捕获与图形解析。
 - OCR 依赖 Tesseract（macOS: `brew install tesseract`）。
@@ -95,6 +156,11 @@ python manage.py clean_market_cache --apply
 ruff check .
 pytest -q
 ```
+可选类型检查：
+```bash
+mypy .
+```
+可选：若要运行 WebSocket 集成测试，可设置 `ALPACA_TEST_WS_URL` 指向 FAKEPACA/本地 WS 服务。
 如需安装 pre-commit：
 ```bash
 pre-commit install

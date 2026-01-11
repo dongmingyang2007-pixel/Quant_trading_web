@@ -34,6 +34,11 @@
                     <li class="nav-item">
                         <a class="nav-link{% if request.resolver_match.url_name == 'paper_trading' %} active{% endif %}" href="{% url 'trading:paper_trading' %}">{% bilingual "Paper Trading" "模拟实盘" %}</a>
                     </li>
+                    {% if user.is_authenticated %}
+                        <li class="nav-item">
+                            <a class="nav-link{% if request.resolver_match.url_name == 'realtime_monitor' or request.resolver_match.url_name == 'realtime_settings' %} active{% endif %}" href="{% url 'trading:realtime_monitor' %}">{% bilingual "Realtime" "实时引擎" %}</a>
+                        </li>
+                    {% endif %}
                     <li class="nav-item">
                         <a class="nav-link{% if request.resolver_match.url_name == 'learning_center' %} active{% endif %}" href="{% url 'trading:learning_center' %}">{% bilingual "Learning Hub" "学习中心" %}</a>
                     </li>
@@ -99,6 +104,16 @@
             "type": "route",
             "href": "{% url 'trading:market_insights' %}"
         },
+        {% if user.is_authenticated %}
+        {
+            "id": "realtime",
+            "label": "{% if lang_prefix == 'zh' %}{{ "实时引擎"|escapejs }}{% else %}{{ "Realtime Engine"|escapejs }}{% endif %}",
+            "description": "{% if lang_prefix == 'zh' %}{{ "查看实时监控与 Focus 列表"|escapejs }}{% else %}{{ "Open realtime monitor & focus list"|escapejs }}{% endif %}",
+            "shortcut": "R",
+            "type": "route",
+            "href": "{% url 'trading:realtime_monitor' %}"
+        },
+        {% endif %}
         {
             "id": "screen-analyzer",
             "label": "{% if lang_prefix == 'zh' %}{{ "屏幕波型"|escapejs }}{% else %}{{ "Screen Analyzer"|escapejs }}{% endif %}",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import logging
@@ -17,6 +17,7 @@ from django.conf import settings
 from .cache_utils import build_cache_key, cache_memoize
 from .network import get_requests_session, resolve_retry_config, retry_call_result
 from trading.observability import record_metric
+from .alpaca_data import fetch_stock_bars_frame, fetch_stock_snapshots, resolve_alpaca_credentials
 
 try:  # optional dependency
     import yfinance as yf  # type: ignore
@@ -36,6 +37,16 @@ DATA_CACHE_DIR: Path = getattr(settings, "DATA_CACHE_DIR", Path(settings.DATA_RO
 DISK_CACHE_DIR = DATA_CACHE_DIR / "market_snapshots"
 DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 DISK_CACHE_TTL_SECONDS = int(getattr(settings, "MARKET_DISK_CACHE_TTL", 6 * 3600))
+
+_ALPACA_INTERVAL_MAP = {
+    "1m": "1Min",
+    "5m": "5Min",
+    "15m": "15Min",
+    "30m": "30Min",
+    "60m": "1Hour",
+    "1h": "1Hour",
+    "1d": "1Day",
+}
 
 
 def _has_parquet_engine() -> bool:
@@ -123,6 +134,60 @@ def _rate_limited() -> bool:
         return True
 
 
+def _resolve_alpaca_timeframe(interval: str | None) -> str:
+    if not interval:
+        return "1Day"
+    return _ALPACA_INTERVAL_MAP.get(interval.lower().strip(), "1Day")
+
+
+def _period_to_timedelta(period: str | None) -> timedelta | None:
+    if not period:
+        return None
+    text = str(period).strip().lower()
+    if not text:
+        return None
+    if text.endswith("mo"):
+        try:
+            value = int(text[:-2])
+        except ValueError:
+            return None
+        return timedelta(days=max(1, value) * 30)
+    if text.endswith("y"):
+        try:
+            value = int(text[:-1])
+        except ValueError:
+            return None
+        return timedelta(days=max(1, value) * 365)
+    if text.endswith("d"):
+        try:
+            value = int(text[:-1])
+        except ValueError:
+            return None
+        return timedelta(days=max(1, value))
+    return None
+
+
+def _resolve_alpaca_range(
+    *,
+    period: str | None,
+    start: date | datetime | None,
+    end: date | datetime | None,
+    timeframe: str,
+) -> tuple[date | datetime | None, date | datetime | None]:
+    start_val = start
+    end_val = end
+    if not start_val and period:
+        delta = _period_to_timedelta(period)
+        if delta is not None:
+            end_dt = datetime.now(timezone.utc)
+            start_dt = end_dt - delta
+            start_val = start_dt
+            end_val = end_dt
+    if isinstance(end_val, date) and not isinstance(end_val, datetime):
+        end_val = end_val + timedelta(days=1)
+    return start_val, end_val
+
+
 def fetch(
     symbols: Iterable[str],
     *,
@@ -135,6 +200,7 @@ def fetch(
     ttl: int | None = None,
     timeout: int | None = None,
     cache_alias: str | None = None,
+    user_id: str | None = None,
 ) -> pd.DataFrame:
     """Fetch market data with simple TTL caching and graceful fallback."""
 
@@ -195,11 +261,33 @@ def fetch(
 
     if not unique:
         return _load_disk_cache()
-    if yf is None or not _rate_limited():
-        fallback = _load_disk_cache()
-        return fallback
-
     def _builder() -> pd.DataFrame:
+        timeframe = _resolve_alpaca_timeframe(interval)
+        alpaca_timeout = _market_retry_config(timeout).timeout
+        alpaca_start, alpaca_end = _resolve_alpaca_range(
+            period=period,
+            start=start,
+            end=end,
+            timeframe=timeframe,
+        )
+        key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+        if key_id and secret:
+            try:
+                frame = fetch_stock_bars_frame(
+                    unique,
+                    start=alpaca_start,
+                    end=alpaca_end,
+                    timeframe=timeframe,
+                    user_id=user_id,
+                    timeout=alpaca_timeout,
+                )
+                if isinstance(frame, pd.DataFrame) and not frame.empty:
+                    return frame
+            except Exception:
+                pass
+        if yf is None or not _rate_limited():
+            return pd.DataFrame()
+
         def _download() -> pd.DataFrame:
             return yf.download(
                 tickers=" ".join(unique),
@@ -267,7 +355,13 @@ def _extract_price_from_frame(frame: pd.DataFrame) -> dict[str, object]:
         return {}
 
 
-def fetch_recent_window(symbols: list[str] | tuple[str, ...] | str, *, interval: str = "1d", limit: int = 120) -> dict[str, pd.DataFrame]:
+def fetch_recent_window(
+    symbols: list[str] | tuple[str, ...] | str,
+    *,
+    interval: str = "1d",
+    limit: int = 120,
+    user_id: str | None = None,
+) -> dict[str, pd.DataFrame]:
     """Batch-fetch a recent window of price data for one or more symbols.
 
     Returns a dict of symbol -> DataFrame limited to `limit` rows (most recent first).
@@ -284,6 +378,37 @@ def fetch_recent_window(symbols: list[str] | tuple[str, ...] | str, *, interval:
         if sym and sym not in seen:
             seen.add(sym)
             unique_symbols.append(sym)
+    key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+    if key_id and secret:
+        timeframe = _resolve_alpaca_timeframe(interval)
+        try:
+            data = fetch_stock_bars_frame(
+                unique_symbols,
+                timeframe=timeframe,
+                limit=limit,
+                user_id=user_id,
+            )
+        except Exception:
+            data = pd.DataFrame()
+        if isinstance(data, pd.DataFrame) and not data.empty:
+            result: dict[str, pd.DataFrame] = {}
+            if isinstance(data.columns, pd.MultiIndex):
+                for sym in unique_symbols:
+                    try:
+                        sub = data.xs(sym, level=1, axis=1).dropna().tail(limit)
+                        if not sub.empty:
+                            result[sym] = sub
+                    except Exception:
+                        continue
+            else:
+                try:
+                    frame = data.dropna().tail(limit)
+                    if not frame.empty:
+                        result[unique_symbols[0]] = frame
+                except Exception:
+                    pass
+            if result:
+                return result
     if not unique_symbols or yf is None:  # pragma: no cover - network dependency
         return {}
     retry_config = _market_retry_config(None)
@@ -346,10 +471,36 @@ def fetch_recent_window(symbols: list[str] | tuple[str, ...] | str, *, interval:
     return result
 
 
-def fetch_latest_quote(symbol: str, *, interval: str = "1m") -> dict[str, object]:
+def fetch_latest_quote(
+    symbol: str,
+    *,
+    interval: str = "1m",
+    user_id: str | None = None,
+) -> dict[str, object]:
     """Fetch the latest quote for a symbol. Returns {'price': float, 'as_of': datetime}."""
     if not symbol:
         return {}
+    key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+    if key_id and secret:
+        snapshots = fetch_stock_snapshots([symbol], user_id=user_id)
+        snap = snapshots.get(symbol.upper()) if isinstance(snapshots, dict) else None
+        if isinstance(snap, dict):
+            latest_trade = snap.get("latestTrade") or snap.get("latest_trade") or {}
+            latest_quote = snap.get("latestQuote") or snap.get("latest_quote") or {}
+            daily_bar = snap.get("dailyBar") or snap.get("daily_bar") or {}
+            prev_bar = snap.get("prevDailyBar") or snap.get("prev_daily_bar") or {}
+            price = (
+                latest_trade.get("p")
+                or daily_bar.get("c")
+                or prev_bar.get("c")
+                or latest_quote.get("ap")
+                or latest_quote.get("bp")
+            )
+            ts = latest_trade.get("t") or latest_quote.get("t") or daily_bar.get("t")
+            if price is not None:
+                as_of = pd.to_datetime(ts, utc=True, errors="coerce") if ts else None
+                as_of_val = as_of.to_pydatetime() if as_of is not None and not pd.isna(as_of) else None
+                return {"price": float(price), "as_of": as_of_val, "source": "alpaca"}
     if yf is None or not _rate_limited():  # pragma: no cover - network dependency
         return {}
     retry_config = _market_retry_config(None)

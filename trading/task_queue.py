@@ -20,10 +20,12 @@ except Exception:  # pragma: no cover - celery always installed in prod
 
 from .observability import record_metric
 from .tasks import (
+    execute_ai_job,
     execute_backtest,
     execute_robustness_job,
     execute_rl_job,
     execute_training_job,
+    run_ai_task,
     run_backtest_task,
     run_robustness_task,
     run_rl_task,
@@ -257,6 +259,55 @@ def _submit_local_robustness(payload: Dict[str, Any]) -> LocalAsyncResult:
     return LocalAsyncResult(task_id)
 
 
+def _run_local_ai(task_id: str, payload: Dict[str, Any]) -> None:
+    close_old_connections()
+    started_at = timezone.now()
+    try:
+        if _cancel_requested(task_id):
+            _update_task_execution(task_id, state="REVOKED", meta=_local_meta(0, "cancelled"), finished_at=timezone.now())
+            return
+        _update_task_execution(task_id, state="PROGRESS", meta=_local_meta(10, "bootstrap"), started_at=started_at)
+        _update_task_execution(task_id, state="PROGRESS", meta=_local_meta(50, "running_ai"))
+        result = execute_ai_job(payload)
+        if _cancel_requested(task_id):
+            _update_task_execution(task_id, state="REVOKED", meta=_local_meta(90, "cancelled"), finished_at=timezone.now())
+            return
+        _update_task_execution(
+            task_id,
+            state="SUCCESS",
+            meta=_local_meta(100, "finalizing"),
+            result=result,
+            finished_at=timezone.now(),
+        )
+    except Exception as exc:  # pragma: no cover - safety guard
+        _update_task_execution(
+            task_id,
+            state="FAILURE",
+            meta=_local_meta(0, "failed"),
+            error=str(exc),
+            finished_at=timezone.now(),
+        )
+    finally:
+        close_old_connections()
+
+
+def _submit_local_ai(payload: Dict[str, Any]) -> LocalAsyncResult:
+    from .models import TaskExecution
+
+    task_id = f"local-{uuid.uuid4().hex}"
+    user_id = _normalize_user_id(payload.get("user_id"))
+    TaskExecution.objects.create(
+        task_id=task_id,
+        user_id=user_id,
+        kind="ai",
+        state="PENDING",
+        meta=_local_meta(0, "queued"),
+    )
+    LOCAL_EXECUTOR.submit(_run_local_ai, task_id, payload)
+    record_metric("task_queue.dispatch", mode="local", task="run_ai_task", state="submitted")
+    return LocalAsyncResult(task_id)
+
+
 def submit_backtest_task(payload: Dict[str, Any]) -> Any:
     serialized = _serialize_payload(payload)
     if _should_use_async():
@@ -293,6 +344,25 @@ def submit_robustness_task(payload: Dict[str, Any]) -> Any:
                 error=str(exc),
             )
     return _submit_local_robustness(serialized)
+
+
+def submit_ai_task(payload: Dict[str, Any]) -> Any:
+    serialized = _serialize_payload(payload)
+    if _should_use_async():
+        try:
+            job = run_ai_task.delay(serialized)
+            record_metric("task_queue.dispatch", mode="async", task="run_ai_task", state="submitted")
+            return job
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Async dispatch failed, falling back to local runner: %s", exc)
+            record_metric(
+                "task_queue.dispatch_fallback",
+                mode="local",
+                task="run_ai_task",
+                reason="async_failed",
+                error=str(exc),
+            )
+    return _submit_local_ai(serialized)
 
 
 def submit_training_task(payload: Dict[str, Any]) -> Any:

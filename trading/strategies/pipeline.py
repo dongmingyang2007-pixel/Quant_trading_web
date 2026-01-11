@@ -130,7 +130,12 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
                 warnings.append(f"已根据训练缓存自动应用最优引擎：{engine}。可在表单取消自动应用或手动覆盖参数。")
             except Exception:
                 pass
-    prices, fetch_warnings = fetch_price_data(params.ticker, params.start_date, params.end_date)
+    prices, fetch_warnings = fetch_price_data(
+        params.ticker,
+        params.start_date,
+        params.end_date,
+        user_id=params.user_id,
+    )
     warnings.extend(fetch_warnings)
     prices, quality_report = sanitize_price_history(prices)
     warnings.extend(quality_report.notes)
@@ -139,7 +144,12 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
         buffer_days = max(params.long_window * 3, 365)
         extended_start = params.start_date - timedelta(days=buffer_days)
         warnings.append(f"原始区间内数据不足，已自动向前扩展至 {extended_start.isoformat()} 以满足指标计算所需的历史长度。")
-        prices, extended_warnings = fetch_price_data(params.ticker, extended_start, params.end_date)
+        prices, extended_warnings = fetch_price_data(
+            params.ticker,
+            extended_start,
+            params.end_date,
+            user_id=params.user_id,
+        )
         warnings.extend(extended_warnings)
         prices, extended_report = sanitize_price_history(prices)
         warnings.extend(extended_report.notes)
@@ -147,7 +157,7 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
     if prices.empty:
         raise QuantStrategyError("可用数据不足以计算指标，请尝试延长回测窗口或缩短均线周期。")
     market_context = fetch_market_context(params)
-    auxiliary = collect_auxiliary_data(params, market_context or {})
+    auxiliary = collect_auxiliary_data(params, market_context or {}, user_id=params.user_id)
     context_features = extract_context_features(auxiliary)
     remote_overrides = fetch_remote_strategy_overrides(params)
     if remote_overrides.get("note"):
@@ -209,7 +219,12 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
     benchmark_label = ""
     if params.benchmark_ticker:
         benchmark_label = params.benchmark_ticker.upper()
-        benchmark_prices, bench_warnings = fetch_price_data(params.benchmark_ticker, params.start_date, params.end_date)
+        benchmark_prices, bench_warnings = fetch_price_data(
+            params.benchmark_ticker,
+            params.start_date,
+            params.end_date,
+            user_id=params.user_id,
+        )
         warnings.extend(bench_warnings)
         benchmark_prices, bench_quality = sanitize_price_history(benchmark_prices)
         warnings.extend(bench_quality.notes)

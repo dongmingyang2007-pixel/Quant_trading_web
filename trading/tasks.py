@@ -8,6 +8,7 @@ from typing import Any, Dict, List, get_args, get_origin, get_type_hints
 
 from celery import shared_task
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.utils import timezone
 
 from .strategies import StrategyInput, run_quant_pipeline
@@ -19,6 +20,7 @@ from .history import (
     sanitize_snapshot,
 )
 from .train_ml import run_engine_benchmark
+from .llm import LLMIntegrationError, generate_ai_commentary
 from paper.engine import run_pending_sessions
 
 
@@ -413,3 +415,140 @@ def run_robustness_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
 def run_paper_trading_heartbeat(limit: int = 20) -> list[dict[str, Any]]:
     """定时刷新正在运行的模拟实盘会话。"""
     return run_pending_sessions(limit=limit)
+
+
+def _normalize_ai_history(raw: Any) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    max_chars = int(getattr(settings, "AI_CHAT_MAX_MESSAGE_CHARS", 4000))
+    normalized: list[dict[str, str]] = []
+    for entry in raw[-int(getattr(settings, "AI_CHAT_MAX_HISTORY", 20)) :]:
+        if not isinstance(entry, dict):
+            continue
+        role = str(entry.get("role") or "user")[:20]
+        content = str(entry.get("content") or "")[:max_chars]
+        normalized.append({"role": role or "user", "content": content})
+    return normalized
+
+
+def execute_ai_job(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {"error": "invalid_payload"}
+    context = payload.get("context")
+    if not isinstance(context, dict):
+        return {"error": "missing_context"}
+    message = payload.get("message") or ""
+    if not isinstance(message, str):
+        message = str(message)
+    max_chars = int(getattr(settings, "AI_CHAT_MAX_MESSAGE_CHARS", 4000))
+    if len(message) > max_chars:
+        message = message[:max_chars]
+
+    web_query = payload.get("web_query")
+    if not isinstance(web_query, str):
+        web_query = None
+    try:
+        web_max_results = int(payload.get("web_max_results")) if payload.get("web_max_results") is not None else None
+    except (TypeError, ValueError):
+        web_max_results = None
+    if web_max_results is not None:
+        web_max_results = max(1, min(web_max_results, 12))
+
+    response_schema = payload.get("response_schema")
+    response_format = payload.get("response_format")
+    if not isinstance(response_schema, dict):
+        response_schema = None
+    if not isinstance(response_format, dict):
+        response_format = None
+
+    rag_query = payload.get("rag_query")
+    if not isinstance(rag_query, str):
+        rag_query = None
+    rag_context = payload.get("rag_context")
+    if not isinstance(rag_context, str):
+        rag_context = None
+    if rag_context and len(rag_context) > 2000:
+        rag_context = rag_context[:2000]
+    try:
+        rag_top_k = int(payload.get("rag_top_k")) if payload.get("rag_top_k") is not None else None
+    except (TypeError, ValueError):
+        rag_top_k = None
+    if rag_top_k is not None:
+        rag_top_k = max(1, min(rag_top_k, 20))
+
+    tools = payload.get("tools")
+    if isinstance(tools, (list, tuple, set)):
+        tools = [str(item).strip() for item in tools if str(item).strip()][:12]
+    elif isinstance(tools, str):
+        tools = tools.strip()
+    elif isinstance(tools, bool):
+        tools = tools
+    else:
+        tools = None
+
+    tool_choice = payload.get("tool_choice")
+    if not isinstance(tool_choice, (str, dict)):
+        tool_choice = None
+
+    image_list: list[str] = []
+    images = payload.get("images")
+    if isinstance(images, (list, tuple)):
+        for item in images:
+            if item:
+                image_list.append(str(item))
+    images = image_list[:4]
+
+    extra_params = payload.get("extra_params")
+    if not isinstance(extra_params, dict):
+        extra_params = None
+
+    user_obj = None
+    user_id = payload.get("user_id")
+    if user_id:
+        try:
+            user_obj = get_user_model().objects.filter(pk=user_id).first()
+        except Exception:
+            user_obj = None
+
+    try:
+        result = generate_ai_commentary(
+            context,
+            show_thoughts=bool(payload.get("show_thoughts", True)),
+            user_message=message,
+            history=_normalize_ai_history(payload.get("history")),
+            enable_web=bool(payload.get("enable_web", False)),
+            web_query=web_query,
+            web_max_results=web_max_results,
+            profile=True,
+            model_name=payload.get("model"),
+            tools=tools,
+            tool_choice=tool_choice,
+            response_schema=response_schema,
+            response_format=response_format,
+            rag_query=rag_query,
+            rag_top_k=rag_top_k,
+            rag_context=rag_context,
+            images=images,
+            extra_params=extra_params,
+            user=user_obj,
+        )
+    except LLMIntegrationError as exc:
+        return {"error": str(exc)}
+    return result
+
+
+@shared_task(
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=10,
+    retry_kwargs={"max_retries": 2},
+    default_retry_delay=10,
+    ignore_result=False,
+    queue="ai",
+)
+def run_ai_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    self.update_state(state="PROGRESS", meta=_progress_meta(10, "ai_bootstrap"))
+    self.update_state(state="PROGRESS", meta=_progress_meta(50, "ai_running"))
+    result = execute_ai_job(payload)
+    self.update_state(state="PROGRESS", meta=_progress_meta(90, "ai_finalizing"))
+    return result

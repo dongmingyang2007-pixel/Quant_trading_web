@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlsplit
 import time
 
 from .http_client import http_client, HttpClientError
+from .profile import resolve_api_credential
 
 
 class LLMIntegrationError(Exception):
@@ -49,20 +50,58 @@ def _default_enable_web(provider: str, user_pref: bool | None) -> bool:
         return _env_bool("GEMINI_ENABLE_WEB_DEFAULT", True)
     return _env_bool("OLLAMA_ENABLE_WEB", False)
 
-def _resolve_provider(model_hint: str | None = None) -> str:
+def _normalize_provider(value: str | None) -> str | None:
+    if not value:
+        return None
+    lower = str(value).strip().lower()
+    if lower in {"dashscope", "bailian", "aliyun"}:
+        return "bailian"
+    return lower
+
+
+def _split_model_hint(model_hint: str | None) -> tuple[str | None, str]:
+    if not model_hint:
+        return None, ""
+    text = str(model_hint).strip()
+    if ":" in text:
+        prefix, rest = text.split(":", 1)
+        provider = _normalize_provider(prefix)
+        if provider in {"ollama", "gemini", "bailian"}:
+            return provider, rest.strip()
+    return None, text
+
+def _format_provider_model(provider: str, model: str) -> str:
+    if provider == "bailian" and model:
+        return f"bailian:{model}"
+    return model
+
+
+def _resolve_provider(model_hint: str | None = None, override: str | None = None) -> str:
     """
     Pick the LLM provider based on environment or model name.
 
     Priority:
-      1) AI_PROVIDER env (e.g. "ollama" / "gemini")
-      2) model hint starting with "gemini" -> gemini
-      3) default to ollama
+      1) explicit override (e.g. "ollama" / "gemini")
+      2) explicit model prefix (e.g. "bailian:xxx")
+      3) AI_PROVIDER env (e.g. "ollama" / "gemini")
+      4) model hint starting with "gemini" -> gemini
+      5) default to ollama
     """
-    env_provider = (os.environ.get("AI_PROVIDER") or "").strip().lower()
+    override_norm = _normalize_provider(override)
+    if override_norm:
+        return override_norm
+    provider_hint, _ = _split_model_hint(model_hint)
+    if provider_hint:
+        return provider_hint
+    env_provider = _normalize_provider(os.environ.get("AI_PROVIDER"))
     if env_provider:
         return env_provider
-    if model_hint and str(model_hint).lower().startswith("gemini"):
-        return "gemini"
+    if model_hint:
+        lowered = str(model_hint).strip().lower()
+        if lowered.startswith("gemini"):
+            return "gemini"
+        if lowered.startswith(("bailian", "dashscope", "aliyun")):
+            return "bailian"
     return "ollama"
 
 def _build_ollama_options(is_secondary: bool) -> dict[str, Any]:
@@ -292,11 +331,11 @@ def _ollama_web_search(
     *,
     max_results: int = 5,
     timeout: int = 20,
+    api_key: str | None = None,
 ) -> tuple[list[dict[str, str]], str | None, str | None]:
     """Call a Web Search endpoint and return items (title/url/snippet).
     Requires OLLAMA_API_KEY for endpoints that use Bearer authentication.
     """
-    api_key = os.environ.get("OLLAMA_API_KEY")
     if not query.strip():
         return [], "未提供有效的检索关键词", None
 
@@ -356,8 +395,44 @@ def _ollama_web_search(
     message = "；".join(errors[-3:]) if errors else "未获取到实时资讯"
     return [], message, None
 
-def _build_market_context_from_web(query: str, *, max_results: int = 5) -> dict[str, Any]:
-    news, error_msg, source = _ollama_web_search(query, max_results=max_results)
+def _build_market_context_from_web(
+    query: str,
+    *,
+    max_results: int = 5,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    news, error_msg, source = _ollama_web_search(query, max_results=max_results, api_key=api_key)
+    if not news:
+        try:
+            from .web_search import search_web
+        except Exception:
+            search_web = None
+        if search_web:
+            raw_results = search_web(query, max_results=max_results, mode="news")
+            allowlist = _load_web_allowlist()
+            retrieved_label = _now_utc_label()
+            ddg_items: list[dict[str, Any]] = []
+            for item in raw_results:
+                url = item.get("url") or ""
+                if not url.startswith(("http://", "https://")):
+                    continue
+                host = _normalize_host(urlsplit(url).netloc)
+                if not _is_allowed_host(host, allowlist):
+                    continue
+                ddg_items.append(
+                    {
+                        "title": _clean_web_text(item.get("title") or "网页", max_len=160),
+                        "url": url,
+                        "snippet": _clean_web_text(item.get("snippet") or "", max_len=220),
+                        "host": host,
+                        "retrieved_at": retrieved_label,
+                        "source": item.get("source") or "duckduckgo",
+                    }
+                )
+            if ddg_items:
+                news = ddg_items
+                error_msg = None
+                source = "duckduckgo"
     retrieved_label = _now_utc_label()
     enriched: list[dict[str, Any]] = []
     for item in news:
@@ -413,7 +488,12 @@ def _merge_market_context(base: dict[str, Any], part: dict[str, Any], max_result
     return base
 
 
-def _cached_web_search(q: str | list[str], *, max_results: int = 0) -> dict[str, Any]:
+def _cached_web_search(
+    q: str | list[str],
+    *,
+    max_results: int = 0,
+    api_key: str | None = None,
+) -> dict[str, Any]:
     ttl = _env_int("OLLAMA_WEB_TTL_SECONDS", 1800)
     queries = q if isinstance(q, (list, tuple)) else [q]
     normalized_queries = [query.strip() for query in queries if query and str(query).strip()]
@@ -440,7 +520,7 @@ def _cached_web_search(q: str | list[str], *, max_results: int = 0) -> dict[str,
     messages: list[str] = []
     per_query_cap = max_results if max_results > 0 else 10
     for query in normalized_queries:
-        part = _build_market_context_from_web(query, max_results=per_query_cap)
+        part = _build_market_context_from_web(query, max_results=per_query_cap, api_key=api_key)
         if part.get("message") and not part.get("news"):
             messages.append(part.get("message", ""))
         aggregated = _merge_market_context(aggregated, part, max_results if max_results > 0 else 0)
@@ -636,8 +716,9 @@ def _call_gemini_chat(
     messages: list[dict[str, str]],
     *,
     timeout_seconds: int,
+    api_key: str | None = None,
 ) -> dict[str, Any]:
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = api_key or os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise LLMIntegrationError("缺少 GEMINI_API_KEY 环境变量，无法调用 Gemini。")
     base_url = os.environ.get("GEMINI_API_BASE", "https://generativelanguage.googleapis.com").rstrip("/")
@@ -695,16 +776,68 @@ def _call_gemini_chat(
     return {"status": "ok", "answer": answer, "raw": data, "thoughts": []}
 
 
+def _call_bailian_chat(
+    model: str,
+    messages: list[dict[str, str]],
+    *,
+    timeout_seconds: int,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    """
+    Aliyun Bailian (DashScope) chat API.
+    """
+    api_key = api_key or os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("BAILIAN_API_KEY")
+    if not api_key:
+        raise LLMIntegrationError("缺少 DASHSCOPE_API_KEY 环境变量，无法调用阿里云百炼。")
+    base_url = os.environ.get("DASHSCOPE_API_BASE", "https://dashscope.aliyuncs.com").rstrip("/")
+    url = f"{base_url}/api/v1/services/aigc/text-generation/generation"
+
+    temperature = _env_float("BAILIAN_TEMPERATURE", _env_float("DASHSCOPE_TEMPERATURE", 0.35))
+    max_tokens = _env_int("BAILIAN_MAX_TOKENS", _env_int("DASHSCOPE_MAX_TOKENS", 900))
+    payload: dict[str, Any] = {
+        "model": model,
+        "input": {"messages": messages},
+        "parameters": {"result_format": "message", "temperature": temperature},
+    }
+    if max_tokens > 0:
+        payload["parameters"]["max_tokens"] = max_tokens
+
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    try:
+        response = http_client.post(url, json=payload, headers=headers, timeout=timeout_seconds, retries=0)
+        data = response.json()
+    except HttpClientError as exc:
+        raise LLMIntegrationError(f"百炼请求失败：{exc}")
+    except ValueError:
+        raise LLMIntegrationError("百炼返回了无法解析的响应")
+
+    if isinstance(data, dict) and data.get("code"):
+        raise LLMIntegrationError(f"百炼错误：{data.get('message') or data.get('code')}")
+
+    output = data.get("output") or {}
+    choices = output.get("choices") or []
+    answer = ""
+    if choices:
+        message = choices[0].get("message") or {}
+        answer = (message.get("content") or "").strip()
+    if not answer:
+        answer = (output.get("text") or output.get("output_text") or "").strip()
+    if not answer:
+        raise LLMIntegrationError("百炼未返回有效内容，请稍后重试。")
+    return {"status": "ok", "answer": answer, "raw": data, "thoughts": []}
+
+
 def _call_gemini_generate(
     model: str,
     prompt: str,
     *,
     timeout_seconds: int,
+    api_key: str | None = None,
 ) -> dict[str, Any]:
     """
     Simpler单轮生成接口，用于非对话模式（报告生成）。
     """
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = api_key or os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise LLMIntegrationError("缺少 GEMINI_API_KEY 环境变量，无法调用 Gemini。")
     base_url = os.environ.get("GEMINI_API_BASE", "https://generativelanguage.googleapis.com").rstrip("/")
@@ -741,6 +874,17 @@ def _call_gemini_generate(
         raise LLMIntegrationError("Gemini 未返回有效内容，请稍后重试。")
     return {"status": "ok", "answer": answer, "raw": data, "thoughts": []}
 
+
+def _call_bailian_generate(
+    model: str,
+    prompt: str,
+    *,
+    timeout_seconds: int,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    messages = [{"role": "user", "content": prompt}]
+    return _call_bailian_chat(model, messages, timeout_seconds=timeout_seconds, api_key=api_key)
+
 def _build_cost_profile(start_ts: float, end_ts: float, *, streaming: bool = False) -> dict[str, Any]:
     return {
         "total_sec": round(max(0.0, end_ts - start_ts), 3),
@@ -752,7 +896,7 @@ def _usage_from_raw(raw: Any) -> dict[str, int]:
     if not isinstance(raw, dict):
         return {}
     usage = raw.get("usage") or raw.get("usageMetadata") or {}
-    prompt = usage.get("promptTokenCount") or usage.get("prompt_tokens")
+    prompt = usage.get("promptTokenCount") or usage.get("prompt_tokens") or usage.get("input_tokens")
     output = usage.get("candidatesTokenCount") or usage.get("completion_tokens") or usage.get("output_tokens")
     total = usage.get("totalTokenCount") or usage.get("total_tokens")
     tokens: dict[str, int] = {}
@@ -769,11 +913,12 @@ def _call_gemini_stream(
     messages: list[dict[str, str]],
     *,
     timeout_seconds: int,
+    api_key: str | None = None,
 ) -> tuple[str, list[str]]:
     """
     Stream responses from Gemini (:streamGenerateContent). Returns (answer, thoughts).
     """
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = api_key or os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise LLMIntegrationError("缺少 GEMINI_API_KEY 环境变量，无法调用 Gemini。")
     base_url = os.environ.get("GEMINI_API_BASE", "https://generativelanguage.googleapis.com").rstrip("/")
@@ -950,6 +1095,278 @@ def _parse_chat_message(message: dict[str, Any]) -> tuple[str, list[str]]:
 
     return "\n\n".join(outputs).strip(), reasoning
 
+
+def _truncate_text(value: str, max_chars: int) -> str:
+    text = (value or "").strip()
+    if max_chars > 0 and len(text) > max_chars:
+        return text[:max_chars].rstrip() + "..."
+    return text
+
+
+def _build_rag_context(
+    *,
+    user_id: str | None,
+    query: str | None,
+    top_k: int | None,
+    extra_context: str | None,
+    max_chars: int = 2600,
+) -> tuple[str, list[dict[str, Any]]]:
+    rag_results: list[dict[str, Any]] = []
+    query_text = (query or "").strip()
+    if query_text:
+        try:
+            from .ai_rag import query as rag_query
+
+            rag_results = rag_query(query_text, user_id=user_id, top_k=top_k)
+        except Exception:
+            rag_results = []
+
+    lines: list[str] = []
+    if extra_context:
+        lines.append(f"用户补充资料：{_truncate_text(str(extra_context), 800)}")
+
+    if rag_results:
+        lines.append("知识库检索结果：")
+        for idx, item in enumerate(rag_results, start=1):
+            text = _truncate_text(str(item.get("text") or ""), 460)
+            meta = item.get("metadata") or {}
+            source = meta.get("source") or meta.get("filename") or meta.get("title") or ""
+            prefix = f"[{idx}]"
+            if source:
+                prefix += f" {source}"
+            line = f"{prefix}: {text}" if text else prefix
+            if line:
+                lines.append(line)
+            if max_chars > 0 and sum(len(part) for part in lines) > max_chars:
+                break
+
+    if not lines:
+        return "", rag_results
+    prompt = "以下是可用的知识库内容（仅供参考，请在回答中核对信息来源）：\n" + "\n".join(lines)
+    return prompt, rag_results
+
+
+def _normalize_tool_call(raw: Any, index: int) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    call_id = raw.get("id") or raw.get("tool_call_id") or f"toolcall-{index}"
+    function = raw.get("function") if isinstance(raw.get("function"), dict) else {}
+    name = raw.get("name") or function.get("name") or raw.get("tool")
+    arguments = raw.get("arguments") or function.get("arguments") or raw.get("args") or function.get("args")
+    if not name:
+        return None
+    return {"id": str(call_id), "name": str(name), "arguments": arguments}
+
+
+def _extract_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(message, dict):
+        return []
+    raw_calls = message.get("tool_calls") or message.get("toolCalls")
+    calls: list[dict[str, Any]] = []
+    if isinstance(raw_calls, dict):
+        raw_calls = [raw_calls]
+    if isinstance(raw_calls, list):
+        for idx, raw in enumerate(raw_calls):
+            normalized = _normalize_tool_call(raw, idx + 1)
+            if normalized:
+                calls.append(normalized)
+        if calls:
+            return calls
+    direct = message.get("function_call") or message.get("tool_call")
+    if isinstance(direct, dict):
+        normalized = _normalize_tool_call(direct, 1)
+        if normalized:
+            return [normalized]
+    content = message.get("content")
+    if isinstance(content, list):
+        for idx, item in enumerate(content, start=1):
+            if not isinstance(item, dict):
+                continue
+            if (item.get("type") or "").lower() in {"tool_call", "tool"}:
+                normalized = _normalize_tool_call(item, idx)
+                if normalized:
+                    calls.append(normalized)
+    return calls
+
+
+def _tool_output_to_text(value: Any, max_chars: int = 4000) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False)
+    except Exception:
+        text = str(value)
+    return _truncate_text(text, max_chars)
+
+
+def _extract_json_payload(text: str) -> tuple[Any | None, str | None]:
+    if not text:
+        return None, "empty"
+    try:
+        return json.loads(text), None
+    except Exception:
+        pass
+
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, flags=re.IGNORECASE)
+    if fenced:
+        candidate = fenced.group(1).strip()
+        if candidate:
+            try:
+                return json.loads(candidate), None
+            except Exception:
+                return None, "invalid_json_fenced"
+
+    start_brace = text.find("{")
+    start_bracket = text.find("[")
+    starts = [idx for idx in (start_brace, start_bracket) if idx >= 0]
+    if not starts:
+        return None, "missing_json"
+    start = min(starts)
+    end_brace = text.rfind("}")
+    end_bracket = text.rfind("]")
+    end = max(end_brace, end_bracket)
+    if end <= start:
+        return None, "invalid_json_bounds"
+    candidate = text[start : end + 1]
+    try:
+        return json.loads(candidate), None
+    except Exception:
+        return None, "invalid_json"
+
+
+def _validate_json_schema(payload: Any, schema: dict[str, Any]) -> str | None:
+    try:
+        import jsonschema  # type: ignore
+    except Exception:
+        return None
+    try:
+        jsonschema.validate(payload, schema)
+    except Exception as exc:
+        return str(exc)
+    return None
+
+
+def _merge_web_results(primary: list[dict[str, Any]], extra: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not extra:
+        return primary
+    combined = list(primary)
+    seen = {item.get("url") for item in combined if item.get("url")}
+    for item in extra:
+        url = item.get("url")
+        if url and url in seen:
+            continue
+        if url:
+            seen.add(url)
+        combined.append(item)
+    return combined
+
+
+def _call_bailian_chat_advanced(
+    model: str,
+    messages: list[dict[str, Any]],
+    *,
+    timeout_seconds: int,
+    user_id: str | None,
+    tools: list[dict[str, Any]] | None,
+    tool_choice: str | dict[str, Any] | None,
+    response_format: dict[str, Any] | None,
+    extra_params: dict[str, Any] | None,
+    images: list[str] | None,
+) -> dict[str, Any]:
+    try:
+        from .bailian_ai import chat as bailian_chat, multimodal_chat
+    except Exception as exc:
+        raise LLMIntegrationError(f"百炼模块不可用：{exc}")
+
+    tool_results: list[dict[str, Any]] = []
+    tool_web_results: list[dict[str, Any]] = []
+    raw_payload: dict[str, Any] = {}
+    message_payload: dict[str, Any] = {}
+
+    if images:
+        vl_model = os.environ.get("BAILIAN_VL_MODEL") or os.environ.get("DASHSCOPE_VL_MODEL") or model
+        try:
+            resp = multimodal_chat(
+                vl_model,
+                messages,
+                images=images,
+                timeout_seconds=timeout_seconds,
+                user_id=user_id,
+            )
+        except RuntimeError as exc:
+            raise LLMIntegrationError(str(exc))
+        raw_payload = resp.get("raw") if isinstance(resp, dict) else {}
+        message_payload = resp.get("message") if isinstance(resp, dict) else {}
+        answer = (resp.get("answer") or "").strip() if isinstance(resp, dict) else ""
+        return {
+            "status": "ok",
+            "answer": answer,
+            "raw": raw_payload or {},
+            "message": message_payload or {},
+            "tool_results": tool_results,
+            "tool_web_results": tool_web_results,
+        }
+
+    tool_defs = tools or []
+    max_iters = max(1, _env_int("AI_TOOL_MAX_ITERATIONS", 3))
+    current_messages = list(messages)
+    last_answer = ""
+    for _ in range(max_iters):
+        try:
+            resp = bailian_chat(
+                model,
+                current_messages,
+                timeout_seconds=timeout_seconds,
+                tools=tool_defs if tool_defs else None,
+                tool_choice=tool_choice if tool_defs else None,
+                response_format=response_format,
+                extra_params=extra_params,
+                user_id=user_id,
+            )
+        except RuntimeError as exc:
+            raise LLMIntegrationError(str(exc))
+        raw_payload = resp.get("raw") if isinstance(resp, dict) else {}
+        message_payload = resp.get("message") if isinstance(resp, dict) else {}
+        last_answer = (resp.get("answer") or "").strip() if isinstance(resp, dict) else ""
+        tool_calls = _extract_tool_calls(message_payload)
+        if not tool_calls:
+            break
+
+        assistant_msg: dict[str, Any] = {
+            "role": "assistant",
+            "content": message_payload.get("content") or "",
+            "tool_calls": tool_calls,
+        }
+        current_messages.append(assistant_msg)
+        for call in tool_calls:
+            name = call.get("name") or ""
+            call_id = call.get("id") or f"toolcall-{len(tool_results) + 1}"
+            try:
+                from .ai_tools import execute_tool_call
+
+                output = execute_tool_call(str(name), call.get("arguments"), user_id=user_id)
+            except Exception as exc:
+                output = {"error": str(exc)}
+            tool_results.append({"id": call_id, "name": name, "output": output})
+            if str(name).lower() == "web_search" and isinstance(output, dict):
+                results = output.get("results")
+                if isinstance(results, list):
+                    tool_web_results.extend(results)
+            current_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": _tool_output_to_text(output),
+                }
+            )
+
+    return {
+        "status": "ok",
+        "answer": last_answer,
+        "raw": raw_payload or {},
+        "message": message_payload or {},
+        "tool_results": tool_results,
+        "tool_web_results": tool_web_results,
+    }
+
 def generate_ai_commentary(
     result: dict[str, Any],
     show_thoughts: bool = False,
@@ -961,6 +1378,16 @@ def generate_ai_commentary(
     profile: bool | None = None,
     model_name: str | None = None,
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
+    user: Any | None = None,
+    tools: list[str] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
+    response_schema: dict[str, Any] | None = None,
+    response_format: dict[str, Any] | None = None,
+    rag_query: str | None = None,
+    rag_top_k: int | None = None,
+    rag_context: str | None = None,
+    images: list[str] | None = None,
+    extra_params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Run two-model Ollama analysis (Primary: DeepSeek, Secondary: Qwen3) and aggregate outputs.
@@ -979,11 +1406,28 @@ def generate_ai_commentary(
 
     emit("stage", message="开始整理回测上下文")
 
-    selected_model = (model_name or result.get("ai_model") or "").strip()
-    provider = _resolve_provider(selected_model)
+    selected_model_input = (model_name or result.get("ai_model") or "").strip()
+    provider_hint, model_hint = _split_model_hint(selected_model_input)
+    selected_model = model_hint if provider_hint else selected_model_input
+    gemini_api_key = resolve_api_credential(user, "gemini_api_key")
+    ollama_api_key = resolve_api_credential(user, "ollama_api_key")
+    bailian_api_key = resolve_api_credential(user, "bailian_api_key")
+    provider = _resolve_provider(selected_model or selected_model_input, override=provider_hint)
     if provider == "gemini":
         primary_model = selected_model or os.environ.get("GEMINI_MODEL", "gemini-3.0-pro")
         endpoint = os.environ.get("GEMINI_API_BASE", "https://generativelanguage.googleapis.com")
+        secondary_model = ""
+        secondary_endpoint = ""
+        primary_options = {}
+        secondary_options = {}
+    elif provider == "bailian":
+        primary_model = (
+            selected_model
+            or os.environ.get("BAILIAN_MODEL")
+            or os.environ.get("DASHSCOPE_MODEL")
+            or "qwen-max"
+        )
+        endpoint = os.environ.get("DASHSCOPE_API_BASE", "https://dashscope.aliyuncs.com")
         secondary_model = ""
         secondary_endpoint = ""
         primary_options = {}
@@ -997,15 +1441,83 @@ def generate_ai_commentary(
         primary_options = _build_ollama_options(is_secondary=False)
         secondary_options = _build_ollama_options(is_secondary=True)
 
+    display_model = selected_model_input
+    if not display_model:
+        display_model = _format_provider_model(provider, primary_model)
+    elif provider == "bailian":
+        lowered = display_model.lower()
+        if not lowered.startswith(("bailian:", "dashscope:", "aliyun:")):
+            display_model = _format_provider_model(provider, selected_model or primary_model)
+
     if isinstance(result, dict):
-        result["ai_model"] = primary_model
+        result["ai_model"] = display_model
         choices = result.get("ai_model_choices")
-        if isinstance(choices, list) and primary_model not in choices:
-            choices.append(primary_model)
+        if isinstance(choices, list) and display_model not in choices:
+            choices.append(display_model)
 
     thinking_log: List[Dict[str, Any]] = []
     history = history or []
     profile_final = profile if profile is not None else _env_bool("AI_ENABLE_PROFILE", False)
+
+    resolved_user_id: str | None = None
+    if user is not None and getattr(user, "is_authenticated", False):
+        resolved_user_id = str(getattr(user, "id", "") or getattr(user, "pk", "") or "") or None
+    if not resolved_user_id and isinstance(result, dict):
+        params = result.get("params") if isinstance(result.get("params"), dict) else {}
+        raw_user = params.get("user_id") or result.get("user_id")
+        if raw_user:
+            resolved_user_id = str(raw_user)
+
+    tool_defs: list[dict[str, Any]] = []
+    tool_choice_final = tool_choice
+    if tools is not None:
+        tool_names: list[str] | None = None
+        if isinstance(tools, (list, tuple, set)):
+            tool_names = [str(item).strip() for item in tools if str(item).strip()]
+            if not tool_names:
+                tool_defs = []
+        elif isinstance(tools, str):
+            tool_names = [chunk.strip() for chunk in tools.split(",") if chunk.strip()]
+        elif isinstance(tools, bool):
+            if tools:
+                try:
+                    from .ai_tools import get_tool_definitions
+
+                    tool_defs = get_tool_definitions()
+                except Exception:
+                    tool_defs = []
+            else:
+                tool_defs = []
+        else:
+            tool_names = None
+        if tool_names:
+            try:
+                from .ai_tools import get_tool_definitions
+
+                tool_defs = get_tool_definitions(tool_names)
+            except Exception:
+                tool_defs = []
+    if tool_defs and tool_choice_final is None:
+        tool_choice_final = "auto"
+
+    if not isinstance(response_format, dict):
+        response_format = None
+    if not isinstance(response_schema, dict):
+        response_schema = None
+    if response_schema and response_format is None:
+        response_format = {"type": "json_object"}
+
+    if not isinstance(extra_params, dict):
+        extra_params = None
+
+    image_inputs: list[str] = []
+    if isinstance(images, (list, tuple)):
+        for item in images:
+            if item:
+                image_inputs.append(str(item))
+    if image_inputs:
+        max_images = _env_int("AI_MAX_IMAGES", 4)
+        image_inputs = image_inputs[: max(1, max_images)]
 
     # baseline start time
     t0 = time.time()
@@ -1032,7 +1544,7 @@ def generate_ai_commentary(
             candidate = candidate.strip()
             if candidate and candidate not in query_bundle:
                 query_bundle.append(candidate)
-        market_ctx = _cached_web_search(query_bundle, max_results=max_results)
+        market_ctx = _cached_web_search(query_bundle, max_results=max_results, api_key=ollama_api_key)
         hits = len(market_ctx.get('news') or [])
         if hits:
             source = market_ctx.get("source") or ""
@@ -1072,9 +1584,31 @@ def generate_ai_commentary(
         t_web_end = time.time()
 
     # Decide mode: report vs Q&A
-    is_question = bool((user_message or "").strip())
+    rag_results: list[dict[str, Any]] = []
+    is_question = bool((user_message or "").strip() or image_inputs)
     if is_question:
         messages = _prepare_chat_messages(result, history, user_message)
+        rag_prompt, rag_results = _build_rag_context(
+            user_id=resolved_user_id,
+            query=rag_query or user_message,
+            top_k=rag_top_k,
+            extra_context=rag_context,
+        )
+        if rag_prompt:
+            messages.insert(1, {"role": "system", "content": rag_prompt})
+        if response_schema:
+            schema_text = json.dumps(response_schema, ensure_ascii=False)
+            messages.insert(
+                1,
+                {
+                    "role": "system",
+                    "content": f"请严格输出符合以下 JSON Schema 的结果，不要添加额外解释：{schema_text}",
+                },
+            )
+        if image_inputs and not (user_message or "").strip() and messages:
+            last = messages[-1]
+            if last.get("role") == "user":
+                last["content"] = "请分析上传的图片内容，并结合上下文给出结论。"
         t_chat0 = time.time()
         stream_segment_chars = _env_int("AI_STREAM_SEGMENT_CHARS", 200)
         chat_timeout_base = _env_int("OLLAMA_CHAT_TIMEOUT_SECONDS", _env_int("OLLAMA_TIMEOUT_SECONDS", 60))
@@ -1082,16 +1616,63 @@ def generate_ai_commentary(
         soft_timeout = _env_int("AI_STREAM_SOFT_TIMEOUT_SECONDS", max(5, min(stream_timeout, 15)))
         hard_timeout = _env_int("AI_STREAM_HARD_TIMEOUT_SECONDS", stream_timeout)
 
+        use_bailian_advanced = (
+            provider == "bailian"
+            and (
+                bool(tool_defs)
+                or bool(response_format)
+                or bool(response_schema)
+                or bool(image_inputs)
+                or bool(extra_params)
+            )
+        )
+        advanced_meta: dict[str, Any] = {}
+
         def _run_chat_call(curr_provider: str, model: str, options: dict[str, Any] | None, streaming: bool = False) -> tuple[str, list[str], str, dict[str, Any]]:
             if curr_provider == "gemini":
                 chat_timeout = _env_int("GEMINI_TIMEOUT_SECONDS", stream_timeout)
                 if streaming and progress_callback:
                     try:
-                        answer, thoughts = _call_gemini_stream(model, messages, timeout_seconds=chat_timeout)
+                        answer, thoughts = _call_gemini_stream(
+                            model,
+                            messages,
+                            timeout_seconds=chat_timeout,
+                            api_key=gemini_api_key,
+                        )
                         return answer, thoughts, "ok", {}
                     except LLMIntegrationError as exc:
                         emit("progress", stage="fallback", message=f"Gemini 流式失败，改用非流式：{exc}")
-                resp = _call_gemini_chat(model, messages, timeout_seconds=chat_timeout)
+                resp = _call_gemini_chat(
+                    model,
+                    messages,
+                    timeout_seconds=chat_timeout,
+                    api_key=gemini_api_key,
+                )
+                answer = (resp.get("answer") or "").strip()
+                return answer, resp.get("thoughts") or [], resp.get("status", "ok"), resp.get("raw", {})
+            if curr_provider == "bailian":
+                chat_timeout = _env_int("BAILIAN_TIMEOUT_SECONDS", _env_int("DASHSCOPE_TIMEOUT_SECONDS", stream_timeout))
+                if use_bailian_advanced:
+                    resp = _call_bailian_chat_advanced(
+                        model,
+                        messages,
+                        timeout_seconds=chat_timeout,
+                        user_id=resolved_user_id,
+                        tools=tool_defs,
+                        tool_choice=tool_choice_final,
+                        response_format=response_format,
+                        extra_params=extra_params,
+                        images=image_inputs,
+                    )
+                    answer = (resp.get("answer") or "").strip()
+                    advanced_meta.update(
+                        {
+                            "tool_results": resp.get("tool_results") or [],
+                            "tool_web_results": resp.get("tool_web_results") or [],
+                        }
+                    )
+                    return answer, [], resp.get("status", "ok"), resp.get("raw", {})
+                resp = _call_bailian_chat(model, messages, timeout_seconds=chat_timeout, api_key=bailian_api_key)
                 answer = (resp.get("answer") or "").strip()
                 return answer, resp.get("thoughts") or [], resp.get("status", "ok"), resp.get("raw", {})
             chat_endpoint_local = _resolve_chat_endpoint(endpoint)
@@ -1132,7 +1713,7 @@ def generate_ai_commentary(
             t_chat1 = time.time()
         except LLMIntegrationError as exc:
             fallback_used = False
-            if provider == "gemini":
+            if provider in {"gemini", "bailian"}:
                 emit("stage", message="主模型失败，回退至本地模型", fallback=os.environ.get("OLLAMA_MODEL", "deepseek-r1:8b"))
                 fallback_model = os.environ.get("OLLAMA_MODEL", "deepseek-r1:8b")
                 try:
@@ -1141,6 +1722,8 @@ def generate_ai_commentary(
                     fallback_used = True
                     provider = "ollama"
                     primary_model = fallback_model
+                    display_model = fallback_model
+                    advanced_meta.clear()
                 except LLMIntegrationError:
                     raise exc
             else:
@@ -1150,15 +1733,29 @@ def generate_ai_commentary(
             raise LLMIntegrationError("AI 服务未返回有效内容，请稍后重试。")
 
         chat_entry = {
-            "model": primary_model,
+            "model": display_model or primary_model,
             "provider": provider,
             "status": chat_status,
             "thoughts": reasoning_segments,
             "answer": answer_text,
             "raw": raw_payload,
         }
+        tool_web_results = advanced_meta.get("tool_web_results") or []
+        if tool_web_results:
+            web_results = _merge_web_results(web_results, tool_web_results)
 
-        answer_text = _prepend_web_digest(answer_text, web_results)
+        wants_structured = bool(response_schema or response_format)
+        structured_payload = None
+        structured_error = None
+        if wants_structured:
+            structured_payload, structured_error = _extract_json_payload(answer_text)
+            if structured_payload is not None and response_schema:
+                schema_error = _validate_json_schema(structured_payload, response_schema)
+                if schema_error:
+                    structured_error = schema_error
+
+        if not wants_structured:
+            answer_text = _prepend_web_digest(answer_text, web_results)
         # 优先使用真实流式，否则退回分段推送
         if progress_callback:
             if chat_status == "ok" and answer_text:
@@ -1168,15 +1765,23 @@ def generate_ai_commentary(
         ret: dict[str, Any] = {
             "answer": answer_text,
             "models": [
-                {"name": primary_model, "status": chat_status, "provider": provider},
+                {"name": display_model or primary_model, "status": chat_status, "provider": provider},
             ],
         }
-        ret["selected_model"] = primary_model
-        ret["web_used"] = bool(enable_web_final)
+        ret["selected_model"] = display_model or primary_model
+        ret["web_used"] = bool(enable_web_final or tool_web_results)
         if web_note:
             ret["web_note"] = web_note
         if web_results:
             ret["web_results"] = web_results
+        if rag_results:
+            ret["rag_results"] = rag_results
+        if advanced_meta.get("tool_results"):
+            ret["tool_results"] = advanced_meta.get("tool_results")
+        if wants_structured:
+            ret["structured"] = structured_payload
+            if structured_error:
+                ret["structured_error"] = structured_error
         if show_thoughts:
             ret["thinking"] = thinking_log + [chat_entry]
         else:
@@ -1202,11 +1807,16 @@ def generate_ai_commentary(
     if provider == "gemini":
         primary_timeout = _env_int("GEMINI_TIMEOUT_SECONDS", _env_int("OLLAMA_TIMEOUT_SECONDS", 60))
         t_p0 = time.time()
-        primary = _call_gemini_generate(primary_model, prompt_primary, timeout_seconds=primary_timeout)
+        primary = _call_gemini_generate(
+            primary_model,
+            prompt_primary,
+            timeout_seconds=primary_timeout,
+            api_key=gemini_api_key,
+        )
         t_p1 = time.time()
         tokens = _usage_from_raw(primary.get("raw", {}))
         thinking_log.append({
-            "model": primary_model,
+            "model": display_model or primary_model,
             "provider": provider,
             "status": primary.get("status", "ok"),
             "thoughts": primary.get("thoughts", []),
@@ -1220,10 +1830,60 @@ def generate_ai_commentary(
             "answer": compact,
             "thinking": thinking_log if show_thoughts else [],
             "models": [
-                {"name": primary_model, "status": primary.get("status", "ok"), "provider": provider},
+                {"name": display_model or primary_model, "status": primary.get("status", "ok"), "provider": provider},
             ],
         }
-        ret["selected_model"] = primary_model
+        ret["selected_model"] = display_model or primary_model
+        ret["web_used"] = bool(enable_web_final)
+        if web_note:
+            ret["web_note"] = web_note
+        if web_results:
+            ret["web_results"] = web_results
+        if profile_final:
+            ret["profile"] = {
+                "web_search_sec": round((t_web_end - t0), 3) if 't_web_end' in locals() else 0.0,
+                "primary_sec": round((t_p1 - t_p0), 3),
+                "secondary_sec": 0.0,
+                "total_sec": round((t_p1 - t0), 3),
+            }
+            if tokens:
+                ret["profile"]["tokens"] = tokens
+            timings_ms = _profile_to_timings_ms(ret["profile"])
+            if timings_ms:
+                ret["timings_ms"] = timings_ms
+        emit("done", message="AI 解读完成", model=primary_model, provider=provider)
+        return ret
+
+    if provider == "bailian":
+        primary_timeout = _env_int("BAILIAN_TIMEOUT_SECONDS", _env_int("DASHSCOPE_TIMEOUT_SECONDS", _env_int("OLLAMA_TIMEOUT_SECONDS", 60)))
+        t_p0 = time.time()
+        primary = _call_bailian_generate(
+            primary_model,
+            prompt_primary,
+            timeout_seconds=primary_timeout,
+            api_key=bailian_api_key,
+        )
+        t_p1 = time.time()
+        tokens = _usage_from_raw(primary.get("raw", {}))
+        thinking_log.append({
+            "model": display_model or primary_model,
+            "provider": provider,
+            "status": primary.get("status", "ok"),
+            "thoughts": primary.get("thoughts", []),
+            "answer": primary.get("answer", ""),
+            "raw": primary.get("raw", ""),
+        })
+        final_answer = primary.get("answer", "")
+        final_answer = _prepend_web_digest(final_answer, web_results)
+        compact = _format_compact_answer(final_answer, context=result)
+        ret = {
+            "answer": compact,
+            "thinking": thinking_log if show_thoughts else [],
+            "models": [
+                {"name": display_model or primary_model, "status": primary.get("status", "ok"), "provider": provider},
+            ],
+        }
+        ret["selected_model"] = display_model or primary_model
         ret["web_used"] = bool(enable_web_final)
         if web_note:
             ret["web_note"] = web_note

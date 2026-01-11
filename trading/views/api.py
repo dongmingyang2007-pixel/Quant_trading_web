@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import queue
@@ -26,6 +27,7 @@ from ..observability import ensure_request_id, record_metric, track_latency
 from ..task_queue import (
     SyncResult,
     get_task_status,
+    submit_ai_task,
     submit_backtest_task,
     submit_rl_task,
     submit_training_task,
@@ -48,6 +50,8 @@ AI_INFLIGHT_GUARD = threading.BoundedSemaphore(value=AI_MAX_IN_FLIGHT)
 AI_RATE_WINDOW = max(5, getattr(settings, "AI_CHAT_RATE_WINDOW_SECONDS", 60))
 AI_RATE_MAX_CALLS = max(1, getattr(settings, "AI_CHAT_RATE_MAX_CALLS", 30))
 AI_RATE_CACHE_ALIAS = getattr(settings, "AI_CHAT_RATE_CACHE_ALIAS", "default")
+AI_RAG_MAX_FILES = int(os.environ.get("AI_RAG_MAX_FILES", "4") or 4)
+AI_RAG_MAX_BYTES = int(os.environ.get("AI_RAG_MAX_BYTES", str(2_000_000)) or 2_000_000)
 
 
 def _rate_key(request):
@@ -84,6 +88,37 @@ def _resolve_offset(raw: str | None) -> tuple[int, bool]:
     value = max(0, requested)
     value = min(value, SCREENER_MAX_OFFSET)
     return value, value != requested
+
+
+def _read_rag_upload(upload) -> tuple[str, str | None, str]:
+    name = getattr(upload, "name", "") or "upload"
+    size = getattr(upload, "size", None)
+    if isinstance(size, int) and size > AI_RAG_MAX_BYTES:
+        return "", "file_too_large", name
+    try:
+        data = upload.read(AI_RAG_MAX_BYTES + 1)
+    except Exception:
+        return "", "read_failed", name
+    if len(data) > AI_RAG_MAX_BYTES:
+        return "", "file_too_large", name
+    ext = os.path.splitext(name)[1].lower()
+    if ext == ".pdf":
+        try:
+            import pdfplumber  # type: ignore
+        except Exception:
+            return "", "pdf_unavailable", name
+        try:
+            with pdfplumber.open(io.BytesIO(data)) as pdf:
+                pages = [(page.extract_text() or "") for page in pdf.pages]
+            text = "\n".join([p for p in pages if p.strip()])
+        except Exception:
+            return "", "pdf_parse_failed", name
+        return text, None, name
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        text = data.decode("utf-8", errors="ignore")
+    return text, None, name
 
 
 def _clamp_timeout(raw: Any) -> tuple[float, bool]:
@@ -136,6 +171,7 @@ def _build_screener_snapshot(*, user, params, request_id: str) -> tuple[dict[str
                 sector=sector_label,
                 industry=industry,
                 market=market,
+                user_id=str(user.id) if getattr(user, "is_authenticated", False) else None,
             )
     except Exception as exc:
         record_metric(
@@ -265,6 +301,28 @@ def ai_chat(request):
         show_thoughts = payload.get("show_thoughts", True)
         enable_web = bool(payload.get("enable_web", False))
         model_name = payload.get("model")
+        web_query = payload.get("web_query")
+        web_max_results = payload.get("web_max_results")
+        tools = payload.get("tools")
+        tool_choice = payload.get("tool_choice")
+        response_schema = payload.get("response_schema")
+        response_format = payload.get("response_format")
+        rag_query = payload.get("rag_query")
+        rag_top_k = payload.get("rag_top_k")
+        rag_context = payload.get("rag_context")
+        images = payload.get("images") or []
+        extra_params = payload.get("extra_params")
+        web_query = payload.get("web_query")
+        web_max_results = payload.get("web_max_results")
+        tools = payload.get("tools")
+        tool_choice = payload.get("tool_choice")
+        response_schema = payload.get("response_schema")
+        response_format = payload.get("response_format")
+        rag_query = payload.get("rag_query")
+        rag_top_k = payload.get("rag_top_k")
+        rag_context = payload.get("rag_context")
+        images = payload.get("images") or []
+        extra_params = payload.get("extra_params")
 
         if not isinstance(context, dict):
             return JsonResponse({"error": _("缺少上下文数据")}, status=400)
@@ -281,6 +339,102 @@ def ai_chat(request):
             trimmed_history.append({"role": role or "user", "content": content})
         history = trimmed_history
 
+        if not isinstance(web_query, str):
+            web_query = None
+        try:
+            web_max_results = int(web_max_results) if web_max_results is not None else None
+        except (TypeError, ValueError):
+            web_max_results = None
+        if web_max_results is not None:
+            web_max_results = max(1, min(web_max_results, 12))
+
+        if not isinstance(response_schema, dict):
+            response_schema = None
+        if not isinstance(response_format, dict):
+            response_format = None
+        if not isinstance(rag_query, str):
+            rag_query = None
+        try:
+            rag_top_k = int(rag_top_k) if rag_top_k is not None else None
+        except (TypeError, ValueError):
+            rag_top_k = None
+        if rag_top_k is not None:
+            rag_top_k = max(1, min(rag_top_k, 20))
+        if not isinstance(rag_context, str):
+            rag_context = None
+        if rag_context and len(rag_context) > 2000:
+            rag_context = rag_context[:2000]
+
+        if isinstance(tools, (list, tuple, set)):
+            tools = [str(item).strip() for item in tools if str(item).strip()][:12]
+        elif isinstance(tools, str):
+            tools = tools.strip()
+        elif isinstance(tools, bool):
+            tools = tools
+        else:
+            tools = None
+
+        if not isinstance(tool_choice, (str, dict)):
+            tool_choice = None
+
+        image_list: list[str] = []
+        if isinstance(images, (list, tuple)):
+            for item in images:
+                if item:
+                    image_list.append(str(item))
+        images = image_list[:4]
+
+        if not isinstance(extra_params, dict):
+            extra_params = None
+
+        if not isinstance(web_query, str):
+            web_query = None
+        try:
+            web_max_results = int(web_max_results) if web_max_results is not None else None
+        except (TypeError, ValueError):
+            web_max_results = None
+        if web_max_results is not None:
+            web_max_results = max(1, min(web_max_results, 12))
+
+        if not isinstance(response_schema, dict):
+            response_schema = None
+        if not isinstance(response_format, dict):
+            response_format = None
+        if not isinstance(rag_query, str):
+            rag_query = None
+        try:
+            rag_top_k = int(rag_top_k) if rag_top_k is not None else None
+        except (TypeError, ValueError):
+            rag_top_k = None
+        if rag_top_k is not None:
+            rag_top_k = max(1, min(rag_top_k, 20))
+        if not isinstance(rag_context, str):
+            rag_context = None
+        if rag_context and len(rag_context) > 2000:
+            rag_context = rag_context[:2000]
+
+        if isinstance(tools, (list, tuple, set)):
+            tools = [str(item).strip() for item in tools if str(item).strip()][:12]
+        elif isinstance(tools, str):
+            tools = tools.strip()
+        elif isinstance(tools, bool):
+            tools = tools
+        else:
+            tools = None
+
+        if not isinstance(tool_choice, (str, dict)):
+            tool_choice = None
+
+        image_list: list[str] = []
+        if isinstance(images, (list, tuple)):
+            for item in images:
+                if item:
+                    image_list.append(str(item))
+        images = image_list[:4]
+
+        if not isinstance(extra_params, dict):
+            extra_params = None
+
         if message is None:
             message = ""
         if not isinstance(message, str):
@@ -288,7 +442,7 @@ def ai_chat(request):
         if len(message) > settings.AI_CHAT_MAX_MESSAGE_CHARS:
             message = message[: settings.AI_CHAT_MAX_MESSAGE_CHARS]
 
-        if not message and not history:
+        if not message and not history and not images:
             return JsonResponse({"error": _("请先输入问题或提供历史上下文。"), "request_id": request_id}, status=400)
 
         def _invoke_ai():
@@ -305,8 +459,20 @@ def ai_chat(request):
                     user_message=message,
                     history=history,
                     enable_web=enable_web,
+                    web_query=web_query,
+                    web_max_results=web_max_results,
                     profile=True,
                     model_name=model_name,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    response_schema=response_schema,
+                    response_format=response_format,
+                    rag_query=rag_query,
+                    rag_top_k=rag_top_k,
+                    rag_context=rag_context,
+                    images=images,
+                    extra_params=extra_params,
+                    user=request.user,
                 )
 
         future = AI_EXECUTOR.submit(_invoke_ai)
@@ -420,7 +586,7 @@ def ai_chat_stream(request):
         if len(message) > settings.AI_CHAT_MAX_MESSAGE_CHARS:
             message = message[: settings.AI_CHAT_MAX_MESSAGE_CHARS]
 
-        if not message and not history:
+        if not message and not history and not images:
             _release_guard()
             return JsonResponse({"error": _("请先输入问题或提供历史上下文。"), "request_id": request_id}, status=400)
 
@@ -441,9 +607,21 @@ def ai_chat_stream(request):
                     user_message=message,
                     history=history,
                     enable_web=enable_web,
+                    web_query=web_query,
+                    web_max_results=web_max_results,
                     profile=True,
                     model_name=model_name,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    response_schema=response_schema,
+                    response_format=response_format,
+                    rag_query=rag_query,
+                    rag_top_k=rag_top_k,
+                    rag_context=rag_context,
+                    images=images,
+                    extra_params=extra_params,
                     progress_callback=_progress,
+                    user=request.user,
                 )
                 # 推送成本提示（如有）
                 if result.get("profile"):
@@ -489,6 +667,189 @@ def ai_chat_stream(request):
     except Exception:
         _release_guard()
         raise
+
+
+@login_required
+@require_POST
+def rag_ingest(request):
+    request_id = ensure_request_id(request)
+    texts: list[str] = []
+    errors: list[str] = []
+    metadata: dict[str, Any] = {}
+    chunk_size = None
+    overlap = None
+
+    if request.FILES:
+        uploads = list(request.FILES.values())[: max(1, AI_RAG_MAX_FILES)]
+        for upload in uploads:
+            text, err, name = _read_rag_upload(upload)
+            if err:
+                errors.append(f"{name}:{err}")
+                continue
+            if text and text.strip():
+                texts.append(text)
+    else:
+        try:
+            payload = json.loads((request.body or b"{}").decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return JsonResponse({"error": _("无效的请求体"), "request_id": request_id}, status=400)
+        if not isinstance(payload, dict):
+            return JsonResponse({"error": _("无效的请求体"), "request_id": request_id}, status=400)
+        raw_texts = payload.get("texts") or []
+        if isinstance(payload.get("text"), str):
+            raw_texts = [payload.get("text")] + (raw_texts if isinstance(raw_texts, list) else [])
+        if isinstance(raw_texts, str):
+            raw_texts = [raw_texts]
+        if isinstance(raw_texts, list):
+            for item in raw_texts[:20]:
+                if item:
+                    texts.append(str(item))
+        if isinstance(payload.get("metadata"), dict):
+            metadata = payload.get("metadata")
+        chunk_size = payload.get("chunk_size")
+        overlap = payload.get("overlap")
+
+    if not texts:
+        return JsonResponse(
+            {"error": _("未提供可导入的文本。"), "request_id": request_id, "errors": errors},
+            status=400,
+        )
+
+    try:
+        chunk_size = int(chunk_size) if chunk_size is not None else None
+    except (TypeError, ValueError):
+        chunk_size = None
+    if chunk_size is not None:
+        chunk_size = max(120, min(chunk_size, 1200))
+    try:
+        overlap = int(overlap) if overlap is not None else None
+    except (TypeError, ValueError):
+        overlap = None
+    if overlap is not None:
+        overlap = max(0, min(overlap, 400))
+
+    try:
+        from ..ai_rag import ingest_texts
+
+        result = ingest_texts(
+            texts,
+            user_id=str(request.user.id),
+            metadata=metadata,
+            chunk_size=chunk_size,
+            overlap=overlap,
+        )
+    except Exception as exc:
+        return JsonResponse({"error": str(exc), "request_id": request_id}, status=500)
+
+    payload = {"request_id": request_id, "errors": errors}
+    if isinstance(result, dict):
+        payload.update(result)
+    return JsonResponse(payload, json_dumps_params={"ensure_ascii": False})
+
+
+@login_required
+@require_POST
+def rag_query_api(request):
+    request_id = ensure_request_id(request)
+    try:
+        payload = json.loads((request.body or b"{}").decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({"error": _("无效的请求体"), "request_id": request_id}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({"error": _("无效的请求体"), "request_id": request_id}, status=400)
+    query = payload.get("query") or payload.get("text") or ""
+    if not isinstance(query, str) or not query.strip():
+        return JsonResponse({"error": _("缺少检索问题。"), "request_id": request_id}, status=400)
+    try:
+        top_k = int(payload.get("top_k") or 5)
+    except (TypeError, ValueError):
+        top_k = 5
+    top_k = max(1, min(top_k, 20))
+    try:
+        from ..ai_rag import query as rag_query
+
+        results = rag_query(query.strip(), user_id=str(request.user.id), top_k=top_k)
+    except Exception as exc:
+        return JsonResponse({"error": str(exc), "request_id": request_id}, status=500)
+    return JsonResponse({"results": results, "request_id": request_id}, json_dumps_params={"ensure_ascii": False})
+
+
+@login_required
+@require_POST
+def enqueue_ai_task(request):
+    request_id = ensure_request_id(request)
+    raw_body = request.body or b""
+    if raw_body and len(raw_body) > settings.AI_CHAT_MAX_PAYLOAD_BYTES:
+        return JsonResponse({"error": _("请求内容过大，请缩短问题或清空历史。"), "request_id": request_id}, status=400)
+    try:
+        payload = json.loads(raw_body.decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({"error": _("无效的请求体"), "request_id": request_id}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({"error": _("无效的请求体"), "request_id": request_id}, status=400)
+
+    context = payload.get("context")
+    if not isinstance(context, dict):
+        return JsonResponse({"error": _("缺少上下文数据"), "request_id": request_id}, status=400)
+
+    message = payload.get("message") or ""
+    if not isinstance(message, str):
+        message = str(message)
+    if len(message) > settings.AI_CHAT_MAX_MESSAGE_CHARS:
+        message = message[: settings.AI_CHAT_MAX_MESSAGE_CHARS]
+
+    history = payload.get("history") or []
+    if not isinstance(history, list):
+        history = []
+    history = history[-settings.AI_CHAT_MAX_HISTORY:]
+    trimmed_history: list[dict[str, str]] = []
+    for entry in history:
+        if not isinstance(entry, dict):
+            continue
+        role = str(entry.get("role") or "user")[:20]
+        content = str(entry.get("content") or "")[: settings.AI_CHAT_MAX_MESSAGE_CHARS]
+        trimmed_history.append({"role": role or "user", "content": content})
+
+    raw_images = payload.get("images")
+    if not message and not trimmed_history and not raw_images:
+        return JsonResponse({"error": _("请先输入问题或提供历史上下文。"), "request_id": request_id}, status=400)
+
+    task_payload = {
+        "context": context,
+        "message": message,
+        "history": trimmed_history,
+        "show_thoughts": bool(payload.get("show_thoughts", True)),
+        "enable_web": bool(payload.get("enable_web", False)),
+        "web_query": payload.get("web_query"),
+        "web_max_results": payload.get("web_max_results"),
+        "model": payload.get("model"),
+        "tools": payload.get("tools"),
+        "tool_choice": payload.get("tool_choice"),
+        "response_schema": payload.get("response_schema"),
+        "response_format": payload.get("response_format"),
+        "rag_query": payload.get("rag_query"),
+        "rag_top_k": payload.get("rag_top_k"),
+        "rag_context": payload.get("rag_context"),
+        "images": raw_images,
+        "extra_params": payload.get("extra_params"),
+        "user_id": request.user.id,
+    }
+    job = submit_ai_task(task_payload)
+    response = {
+        "task_id": getattr(job, "id", ""),
+        "state": getattr(job, "state", "PENDING"),
+        "request_id": request_id,
+    }
+    if isinstance(job, SyncResult):
+        response["result"] = job.result
+    return JsonResponse(response, json_dumps_params={"ensure_ascii": False})
+
+
+@login_required
+def ai_task_status(request, task_id: str):
+    status = get_task_status(task_id)
+    status["request_id"] = ensure_request_id(request)
+    return JsonResponse(status, json_dumps_params={"ensure_ascii": False})
 
 
 @login_required

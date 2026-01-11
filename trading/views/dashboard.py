@@ -58,6 +58,28 @@ def _ollama_model_choices() -> list[str]:
         "llama3.2:3b",
         "qwen2:7b",
     ]
+    bailian_env_choices = os.environ.get("BAILIAN_MODEL_CHOICES") or os.environ.get("DASHSCOPE_MODEL_CHOICES") or ""
+    bailian_default = os.environ.get("BAILIAN_MODEL") or os.environ.get("DASHSCOPE_MODEL") or "qwen-max"
+    bailian_candidates_raw = [bailian_default, "qwen-max", "qwen-plus", "qwen-turbo"]
+    bailian_candidates: list[str] = []
+    bailian_env_list = bailian_env_choices.split(",") if bailian_env_choices else []
+    for item in bailian_env_list:
+        normalized = item.strip()
+        if normalized:
+            if ":" not in normalized:
+                normalized = f"bailian:{normalized}"
+            if normalized not in bailian_candidates:
+                bailian_candidates.append(normalized)
+    for candidate in bailian_candidates_raw:
+        if not candidate:
+            continue
+        normalized = str(candidate).strip()
+        if not normalized:
+            continue
+        if ":" not in normalized:
+            normalized = f"bailian:{normalized}"
+        if normalized not in bailian_candidates:
+            bailian_candidates.append(normalized)
     gemini_candidates = [
         os.environ.get("GEMINI_MODEL"),
         "gemini-2.5-pro",
@@ -68,10 +90,18 @@ def _ollama_model_choices() -> list[str]:
     ai_provider = (os.environ.get("AI_PROVIDER") or "").strip().lower()
     if ai_provider == "gemini":
         gemini_candidates = [os.environ.get("GEMINI_MODEL", "gemini-3.0-pro")] + gemini_candidates
+    if ai_provider == "bailian":
+        preferred = bailian_default.strip() if isinstance(bailian_default, str) else str(bailian_default)
+        if ":" not in preferred:
+            preferred = f"bailian:{preferred}"
+        bailian_candidates = [preferred] + [item for item in bailian_candidates if item != preferred]
     for candidate in fallbacks:
         if candidate and candidate.strip() and candidate not in choices:
             choices.append(candidate.strip())
     for candidate in gemini_candidates:
+        if candidate and candidate.strip() and candidate not in choices:
+            choices.append(candidate.strip())
+    for candidate in bailian_candidates:
         if candidate and candidate.strip() and candidate not in choices:
             choices.append(candidate.strip())
     return choices
@@ -91,19 +121,30 @@ def _ensure_ai_model_metadata(payload: dict[str, Any]) -> None:
     for candidate in base_choices:
         if candidate and candidate not in merged:
             merged.append(candidate)
-    provider = (os.environ.get("AI_PROVIDER") or "").strip().lower()
-    default_model = (
-        os.environ.get("GEMINI_MODEL", "gemini-3.0-pro")
-        if provider == "gemini"
-        else os.environ.get("OLLAMA_MODEL", "deepseek-r1:8b")
-    )
     selected = str(payload.get("ai_model") or "").strip()
+    lowered = selected.lower()
+    if lowered.startswith(("bailian:", "dashscope:", "aliyun:")):
+        provider = "bailian"
+    elif lowered.startswith("gemini"):
+        provider = "gemini"
+    else:
+        provider = (os.environ.get("AI_PROVIDER") or "").strip().lower()
+    if provider == "bailian":
+        bailian_default = os.environ.get("BAILIAN_MODEL") or os.environ.get("DASHSCOPE_MODEL") or "qwen-max"
+        default_model = bailian_default.strip() if isinstance(bailian_default, str) else str(bailian_default)
+        if ":" not in default_model:
+            default_model = f"bailian:{default_model}"
+    elif provider == "gemini":
+        default_model = os.environ.get("GEMINI_MODEL", "gemini-3.0-pro")
+    else:
+        default_model = os.environ.get("OLLAMA_MODEL", "deepseek-r1:8b")
     if not selected:
-        selected = merged[0] if merged else default_model
+        selected = default_model or (merged[0] if merged else "")
     elif selected not in merged:
         merged.insert(0, selected)
     payload["ai_model_choices"] = merged
     payload["ai_model"] = selected or default_model
+    payload["ai_provider"] = provider or "ollama"
 
 
 def _prepare_result_payload(payload: dict[str, Any]) -> None:
@@ -458,7 +499,10 @@ def backtest(request):
         )
 
     refresh_news = request.method == "POST" or request.GET.get("refresh_news") == "1"
-    focus_feed = get_global_headlines(refresh=refresh_news)
+    focus_feed = get_global_headlines(
+        refresh=refresh_news,
+        user_id=str(request.user.id) if request.user.is_authenticated else None,
+    )
     for story in focus_feed:
         if "readers" not in story:
             story["readers"] = story.pop("heat", 0)
