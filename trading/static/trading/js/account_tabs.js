@@ -28,6 +28,9 @@
             btn.classList.toggle("is-active", isActive);
             btn.setAttribute("aria-selected", String(isActive));
         });
+        page.dataset.activeTab = name;
+        page.classList.toggle("is-compact-header", name !== "overview");
+        page.classList.toggle("is-settings-tab", name === "settings");
         if (updateHash) {
             const targetId = panel.id || `account-tab-${name}`;
             if (window.history && window.history.replaceState) {
@@ -60,6 +63,8 @@
         btn.addEventListener("click", () => activate(btn.dataset.tabTarget));
     });
 
+    let activateSettings = null;
+
     document.querySelectorAll("[data-tab-link]").forEach((link) => {
         link.addEventListener("click", (event) => {
             const target = link.dataset.tabLink;
@@ -69,10 +74,79 @@
             event.preventDefault();
             activate(target);
             const panel = findPanel(target);
+            const openSettings = link.dataset.openSettings;
+            const scrollTarget = link.dataset.scrollTarget;
+            if (target === "settings") {
+                if (activateSettings && openSettings) {
+                    activateSettings(openSettings);
+                }
+                const settingsCard = document.querySelector("[data-role='settings-card']");
+                const body = settingsCard && settingsCard.querySelector("[data-role='settings-body']");
+                const toggleButton = settingsCard && settingsCard.querySelector("[data-role='toggle-settings']");
+                if (body && body.classList.contains("d-none")) {
+                    body.classList.remove("d-none");
+                    if (toggleButton) {
+                        toggleButton.textContent = toggleButton.dataset.labelOpen || toggleButton.textContent;
+                    }
+                }
+                if (scrollTarget) {
+                    const focusTarget = document.querySelector(`[data-role='${scrollTarget}']`);
+                    if (focusTarget) {
+                        focusTarget.scrollIntoView({ behavior: "smooth", block: "start" });
+                        return;
+                    }
+                }
+            }
             if (panel) {
                 panel.scrollIntoView({ behavior: "smooth", block: "start" });
             }
         });
+    });
+
+    const settingsNav = document.querySelector("[data-role='settings-nav']");
+    if (settingsNav) {
+        const settingsPanels = Array.from(document.querySelectorAll("[data-settings-panel]"));
+        const settingsButtons = Array.from(settingsNav.querySelectorAll("[data-settings-target]"));
+        if (settingsPanels.length && settingsButtons.length) {
+            const findSettingsPanel = (name) =>
+                settingsPanels.find((panel) => panel.dataset.settingsPanel === name);
+
+            activateSettings = (name) => {
+                if (!name) {
+                    return;
+                }
+                const panel = findSettingsPanel(name);
+                if (!panel) {
+                    return;
+                }
+                settingsPanels.forEach((item) => item.classList.toggle("is-active", item === panel));
+                settingsButtons.forEach((btn) => {
+                    const isActive = btn.dataset.settingsTarget === name;
+                    btn.classList.toggle("is-active", isActive);
+                    btn.setAttribute("aria-selected", String(isActive));
+                });
+            };
+
+            const initialSettings =
+                settingsNav.dataset.defaultSection || settingsButtons[0]?.dataset.settingsTarget;
+            activateSettings(initialSettings);
+
+            settingsButtons.forEach((btn) => {
+                btn.addEventListener("click", () => activateSettings(btn.dataset.settingsTarget));
+            });
+        }
+    }
+
+    document.querySelectorAll(".account-media").forEach((card) => {
+        const manage = card.querySelector("[data-role='media-manage']");
+        if (!manage) {
+            return;
+        }
+        const syncManage = () => {
+            card.classList.toggle("is-managing", manage.open);
+        };
+        syncManage();
+        manage.addEventListener("toggle", syncManage);
     });
 
     const filterContainer = document.querySelector("[data-role='timeline-filters']");
@@ -97,5 +171,22 @@
                 });
             });
         }
+    }
+
+    const timelineModal = document.getElementById("timeline-media-modal");
+    if (timelineModal) {
+        const modalImage = timelineModal.querySelector("[data-role='timeline-modal-image']");
+        const mediaTriggers = Array.from(document.querySelectorAll("[data-role='timeline-media-trigger']"));
+        const updateModal = (source) => {
+            if (!modalImage) {
+                return;
+            }
+            modalImage.src = source || "";
+        };
+        mediaTriggers.forEach((trigger) => {
+            trigger.addEventListener("click", () => {
+                updateModal(trigger.dataset.image);
+            });
+        });
     }
 })();

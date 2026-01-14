@@ -6,6 +6,38 @@
 {% endif %}
 {% with accordion_id=accordion_id|default:"history-accordion" empty_id=empty_id|default:"history-empty" delete_url_base=delete_url_base|default:'' delete_url_template=delete_url_template|default:'' load_url=load_url|default:'' compare_url=compare_url|default:'' %}
 {% if history_runs %}
+    <div class="history-toolbar" data-role="history-controls">
+        <div class="history-toolbar-group">
+            <label class="visually-hidden" for="{{ accordion_id }}-search">{% bilingual "Search" "搜索" %}</label>
+            <input type="search"
+                   id="{{ accordion_id }}-search"
+                   class="form-control form-control-sm"
+                   data-role="history-search"
+                   placeholder="{% bilingual 'Search title/ticker/tags' '搜索标题/代码/标签' %}"
+                   aria-label="{% bilingual 'Search title, ticker, or tags' '搜索标题、代码或标签' %}">
+        </div>
+        <div class="history-toolbar-group">
+            <label class="visually-hidden" for="{{ accordion_id }}-tag-filter">{% bilingual "Tag filter" "标签筛选" %}</label>
+            <select id="{{ accordion_id }}-tag-filter" class="form-select form-select-sm" data-role="history-tag-filter" aria-label="{% bilingual 'Tag filter' '标签筛选' %}">
+                <option value="">{% bilingual "All tags" "全部标签" %}</option>
+                {% for tag in history_tags %}
+                    <option value="{{ tag }}">{{ tag }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="history-toolbar-group">
+            <label class="visually-hidden" for="{{ accordion_id }}-sort">{% bilingual "Sort" "排序" %}</label>
+            <select id="{{ accordion_id }}-sort" class="form-select form-select-sm" data-role="history-sort" aria-label="{% bilingual 'Sort' '排序' %}">
+                <option value="newest">{% bilingual "Newest first" "最新优先" %}</option>
+                <option value="oldest">{% bilingual "Oldest first" "最早优先" %}</option>
+                <option value="starred">{% bilingual "Starred first" "收藏优先" %}</option>
+            </select>
+        </div>
+        <label class="form-check history-toolbar-toggle" for="{{ accordion_id }}-starred-only">
+            <input class="form-check-input" type="checkbox" id="{{ accordion_id }}-starred-only" data-role="history-star-filter">
+            <span class="form-check-label small">{% bilingual "Starred only" "仅显示收藏" %}</span>
+        </label>
+    </div>
     {% if compare_url %}
     <div class="history-compare-bar"
          data-role="history-compare"
@@ -15,41 +47,13 @@
             <span class="history-compare-count" data-role="compare-count">0</span>
             <span class="history-compare-note" data-role="compare-note">{% bilingual "Select 2-5 runs to start comparison." "请选择 2-5 条历史记录以开始对比" %}</span>
         </div>
-        <button type="button" class="hero-button solid small" data-role="compare-launch" disabled>{% bilingual "Compare runs" "对比分析" %}</button>
+        <button type="button"
+                class="hero-button solid small"
+                data-role="compare-launch"
+                title="{% bilingual 'Select 2-5 runs to start comparison.' '请选择 2-5 条历史记录以开始对比' %}"
+                disabled>{% bilingual "Compare runs" "对比分析" %}</button>
     </div>
     {% endif %}
-    <div class="history-filter-bar" data-role="history-controls">
-        <div class="history-filter-field">
-            <label class="form-label small mb-1">{% bilingual "Search" "搜索" %}</label>
-            <input type="search"
-                   class="form-control form-control-sm"
-                   data-role="history-search"
-                   placeholder="{% bilingual 'Search title/ticker/tags' '搜索标题/代码/标签' %}">
-        </div>
-        <div class="history-filter-field">
-            <label class="form-label small mb-1">{% bilingual "Tag filter" "标签筛选" %}</label>
-            <select class="form-select form-select-sm" data-role="history-tag-filter">
-                <option value="">{% bilingual "All tags" "全部标签" %}</option>
-                {% for tag in history_tags %}
-                    <option value="{{ tag }}">{{ tag }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        <div class="history-filter-field">
-            <label class="form-label small mb-1">{% bilingual "Sort" "排序" %}</label>
-            <select class="form-select form-select-sm" data-role="history-sort">
-                <option value="newest">{% bilingual "Newest first" "最新优先" %}</option>
-                <option value="oldest">{% bilingual "Oldest first" "最早优先" %}</option>
-                <option value="starred">{% bilingual "Starred first" "收藏优先" %}</option>
-            </select>
-        </div>
-        <div class="form-check history-filter-toggle">
-            <input class="form-check-input" type="checkbox" id="{{ accordion_id }}-starred-only" data-role="history-star-filter">
-            <label class="form-check-label" for="{{ accordion_id }}-starred-only">
-                {% bilingual "Starred only" "仅显示收藏" %}
-            </label>
-        </div>
-    </div>
     <div class="history-accordion"
          id="{{ accordion_id }}"
          data-empty-id="{{ empty_id }}"
