@@ -384,7 +384,8 @@ CONTENT_SECURITY_POLICY = os.environ.get(
     "DJANGO_CONTENT_SECURITY_POLICY",
     "default-src 'self'; "
     "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com; "
-    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com data:; "
     "img-src 'self' data: https:; "
     "connect-src 'self' https://query1.finance.yahoo.com https://ollama.com https://ollama.com/api https://ollama.com/api/web_search;",
 )

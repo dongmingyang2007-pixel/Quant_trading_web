@@ -87,6 +87,7 @@ def account(request):
     elif not isinstance(gallery_paths, list):
         gallery_paths = []
 
+    api_credentials = load_api_credentials(str(user.id))
     api_form = None
 
     if request.method == "POST":
@@ -118,7 +119,7 @@ def account(request):
                         "发送失败，请稍后再试或联系管理员。",
                     )
             profile_form = ProfileForm(initial=profile_data)
-            api_form = ApiCredentialForm()
+            api_form = ApiCredentialForm(initial=api_credentials)
         elif action == "profile":
             profile_form = ProfileForm(request.POST, request.FILES)
             if profile_form.is_valid():
@@ -130,6 +131,12 @@ def account(request):
                 image_error = None
 
                 avatar_file = cleaned.get("avatar")
+                cropped_avatar_data = profile_form.cleaned_data.get("avatar_cropped_data")
+                if cropped_avatar_data:
+                    avatar_file = decode_data_url_image(
+                        cropped_avatar_data,
+                        filename_prefix=f"avatar-{user.id}",
+                    )
                 if avatar_file and not image_error:
                     try:
                         new_avatar_path = save_uploaded_file(
@@ -194,7 +201,7 @@ def account(request):
                     "Failed to save profile. Please check the form fields.",
                     "保存失败，请检查填写内容。",
                 )
-            api_form = ApiCredentialForm()
+            api_form = ApiCredentialForm(initial=api_credentials)
         elif action == "remove-feature":
             if feature_path:
                 delete_media_file(feature_path)
@@ -205,7 +212,7 @@ def account(request):
             else:
                 profile_error = _msg("No feature image to remove.", "当前没有展示照片。")
             profile_form = ProfileForm(initial=profile_data)
-            api_form = ApiCredentialForm()
+            api_form = ApiCredentialForm(initial=api_credentials)
         elif action == "remove-gallery":
             target = request.POST.get("image")
             if target and target in gallery_paths:
@@ -217,12 +224,13 @@ def account(request):
             else:
                 profile_error = _msg("Could not find the selected gallery image.", "未找到指定的展示照片。")
             profile_form = ProfileForm(initial=profile_data)
-            api_form = ApiCredentialForm()
+            api_form = ApiCredentialForm(initial=api_credentials)
         elif action == "api-credentials":
             api_form = ApiCredentialForm(request.POST)
             if api_form.is_valid():
                 updates = {key: api_form.cleaned_data.get(key) for key in API_CREDENTIAL_FIELDS}
                 save_api_credentials(str(user.id), updates)
+                api_credentials = load_api_credentials(str(user.id))
                 api_success = _msg("API credentials updated.", "API 凭证已更新。")
             else:
                 api_error = _msg("Failed to save API credentials.", "保存 API 凭证失败。")
@@ -231,15 +239,14 @@ def account(request):
             clear_api_credentials(str(user.id))
             api_success = _msg("API credentials cleared.", "已清除保存的 API 凭证。")
             profile_form = ProfileForm(initial=profile_data)
-            api_form = ApiCredentialForm()
+            api_credentials = {}
+            api_form = ApiCredentialForm(initial=api_credentials)
         else:
             profile_form = ProfileForm(initial=profile_data)
-            api_form = ApiCredentialForm()
+            api_form = ApiCredentialForm(initial=api_credentials)
     else:
         profile_form = ProfileForm(initial=profile_data)
-        api_form = ApiCredentialForm()
-
-    api_credentials = load_api_credentials(str(user.id))
+        api_form = ApiCredentialForm(initial=api_credentials)
     api_credential_status = []
     for key, meta in API_CREDENTIAL_FIELDS.items():
         value = api_credentials.get(key, "")

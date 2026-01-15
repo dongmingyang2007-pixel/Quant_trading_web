@@ -700,6 +700,7 @@ class ProfileForm(forms.Form):
         label="上传头像",
         help_text="支持 JPG/PNG，建议尺寸 400x400 以上。",
     )
+    avatar_cropped_data = forms.CharField(required=False, widget=forms.HiddenInput)
     feature_image = forms.ImageField(
         required=False,
         label="展示照片",
@@ -713,8 +714,22 @@ class ProfileForm(forms.Form):
             self.fields[name].widget.attrs.setdefault("class", "form-control")
         cover_widget = self.fields["cover_color"].widget
         cover_widget.attrs.setdefault("class", "form-control form-control-color")
-        # Avatar uses regular form-control styling
-        self.fields["avatar"].widget.attrs.setdefault("class", "form-control")
+        self.fields["avatar"].widget.attrs.update(
+            {
+                "class": "visually-hidden avatar-file-input",
+                "data-role": "avatar-input",
+                "accept": "image/*",
+                "form": "account-profile-form",
+                "aria-hidden": "true",
+                "tabindex": "-1",
+            }
+        )
+        self.fields["avatar_cropped_data"].widget.attrs.update(
+            {
+                "data-role": "avatar-cropped",
+                "form": "account-profile-form",
+            }
+        )
         # Featured image is hidden and controlled by JS uploader
         self.fields["feature_image"].widget.attrs.update(
             {
