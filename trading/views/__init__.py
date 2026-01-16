@@ -24,7 +24,16 @@ from .api import (
 )
 from .history import delete_history
 from .reports import export_report
-from .account import account
+from .account import (
+    account,
+    update_profile,
+    update_api_credentials,
+    clear_api_credentials,
+    reset_password,
+    delete_avatar,
+    remove_feature,
+    remove_gallery,
+)
 from .auth import activate, resend_activation, signup
 from .market import market_insights, market_insights_data
 from .community import community, community_like, community_comment, community_delete
@@ -64,6 +73,13 @@ __all__ = [
     "activate",
     "resend_activation",
     "account",
+    "update_profile",
+    "update_api_credentials",
+    "clear_api_credentials",
+    "reset_password",
+    "delete_avatar",
+    "remove_feature",
+    "remove_gallery",
     "market_insights",
     "market_insights_data",
     "community",

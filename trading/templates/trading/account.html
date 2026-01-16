@@ -57,6 +57,21 @@
                     </div>
                 </div>
             </header>
+            {% if messages %}
+                <div class="account-flash mt-3">
+                    {% for message in messages %}
+                        {% if "error" in message.tags %}
+                            <div class="alert alert-danger mb-2">{{ message }}</div>
+                        {% elif "success" in message.tags %}
+                            <div class="alert alert-success mb-2">{{ message }}</div>
+                        {% elif "warning" in message.tags %}
+                            <div class="alert alert-warning mb-2">{{ message }}</div>
+                        {% else %}
+                            <div class="alert alert-info mb-2">{{ message }}</div>
+                        {% endif %}
+                    {% endfor %}
+                </div>
+            {% endif %}
             <nav class="account-tab-nav" data-role="account-tab-nav" data-default-tab="overview" role="tablist">
                 <button type="button" class="account-tab-btn is-active" id="account-tab-btn-overview" data-tab-target="overview" aria-controls="account-tab-overview" aria-selected="true" role="tab">
                     <span class="tab-title">{% bilingual "Overview" "总览" %}</span>
@@ -450,9 +465,8 @@
                                         <div class="alert alert-danger mt-2">{{ profile_error }}</div>
                                     {% endif %}
                                     <div class="account-settings-form{% if not profile_success and not profile_error and not profile_form.errors %} d-none{% endif %}" data-role="settings-body">
-                                        <form method="post" class="account-profile-form" id="account-profile-form" novalidate enctype="multipart/form-data">
+                                        <form method="post" class="account-profile-form" id="account-profile-form" action="{% url 'trading:account_update_profile' %}" novalidate enctype="multipart/form-data">
                                                 {% csrf_token %}
-                                                <input type="hidden" name="action" value="profile">
                                                 <div class="card mb-3">
                                                     <div class="card-header">
                                                         {% bilingual "Basic info" "基础信息" %}
@@ -592,9 +606,8 @@
                                                     {% bilingual "Password reset" "重置密码" %}
                                                 </div>
                                                 <div class="card-body">
-                                                    <form method="post" class="account-secure-form" action="{% url 'trading:account' %}">
+                                                    <form method="post" class="account-secure-form" action="{% url 'trading:account_reset_password' %}">
                                                         {% csrf_token %}
-                                                        <input type="hidden" name="action" value="password-reset">
                                                         <button type="submit" class="btn btn-primary w-100">{% bilingual "Send password reset email" "发送重设密码邮件" %}</button>
                                                     </form>
                                                 </div>
@@ -640,9 +653,8 @@
                                             </div>
                                         </div>
                                         <div class="settings-split-side">
-                                            <form method="post" class="account-api-form" action="{% url 'trading:account' %}" autocomplete="off">
+                                            <form method="post" class="account-api-form" action="{% url 'trading:account_update_api_credentials' %}" autocomplete="off">
                                                 {% csrf_token %}
-                                                <input type="hidden" name="action" value="api-credentials">
                                                 <div class="row g-3">
                                                     <div class="col-12">
                                                         <label class="form-label" for="{{ api_form.alpaca_api_key_id.id_for_label }}">Alpaca API Key ID</label>
@@ -865,9 +877,8 @@
                                                     <button type="submit" class="btn btn-primary w-100">{% bilingual "Save credentials" "保存凭证" %}</button>
                                                 </div>
                                             </form>
-                                            <form method="post" action="{% url 'trading:account' %}" class="mt-2">
+                                            <form method="post" action="{% url 'trading:account_clear_api_credentials' %}" class="mt-2">
                                                 {% csrf_token %}
-                                                <input type="hidden" name="action" value="api-credentials-clear">
                                                 <button type="submit" class="btn btn-outline-secondary btn-sm w-100">
                                                     {% bilingual "Clear saved credentials" "清除已保存凭证" %}
                                                 </button>
