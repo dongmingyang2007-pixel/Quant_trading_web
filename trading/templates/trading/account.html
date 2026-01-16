@@ -941,11 +941,31 @@
                 </div>
                 <div class="avatar-cropper d-none" data-role="avatar-cropper">
                     <div class="cropper-stage avatar-cropper-stage" data-role="avatar-crop-stage">
-                        <img src="" alt="{% bilingual 'Avatar crop preview' '头像裁剪预览' %}" data-role="avatar-crop-image">
+                        <div class="cropper-mask cropper-mask--circle" data-role="avatar-crop-frame">
+                            <img src="" alt="{% bilingual 'Avatar crop preview' '头像裁剪预览' %}" data-role="avatar-crop-image">
+                        </div>
                     </div>
                     <div class="avatar-cropper-controls mt-3">
-                        <label class="form-label me-2">{% bilingual "Zoom" "缩放" %}</label>
-                        <input type="range" min="1" max="3" step="0.01" value="1" data-role="avatar-crop-zoom">
+                        <span class="cropper-zoom-icon" aria-hidden="true">
+                            <svg class="bi bi-dash-lg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M2 8a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11A.5.5 0 0 1 2 8"/>
+                            </svg>
+                        </span>
+                        <label class="form-label visually-hidden" for="avatar-crop-zoom">{% bilingual "Zoom" "缩放" %}</label>
+                        <input
+                            type="range"
+                            min="1"
+                            max="3"
+                            step="0.01"
+                            value="1"
+                            id="avatar-crop-zoom"
+                            class="form-range"
+                            data-role="avatar-crop-zoom">
+                        <span class="cropper-zoom-icon" aria-hidden="true">
+                            <svg class="bi bi-plus-lg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                            </svg>
+                        </span>
                     </div>
                 </div>
                 <div class="avatar-upload-status text-muted small mt-2" data-role="avatar-status"></div>
@@ -989,11 +1009,31 @@
         </div>
         <div class="cropper-body">
             <div class="cropper-stage" data-role="crop-stage">
-                <img src="" alt="{% bilingual 'Image to crop' '待裁剪图片' %}" data-role="crop-image">
+                <div class="cropper-mask cropper-mask--rect" data-role="crop-frame">
+                    <img src="" alt="{% bilingual 'Image to crop' '待裁剪图片' %}" data-role="crop-image">
+                </div>
             </div>
             <div class="cropper-controls mt-3">
-                <label class="form-label me-2">{% bilingual "Zoom" "缩放" %}</label>
-                <input type="range" min="1" max="3" step="0.01" value="1" data-role="crop-zoom">
+                <span class="cropper-zoom-icon" aria-hidden="true">
+                    <svg class="bi bi-dash-lg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M2 8a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11A.5.5 0 0 1 2 8"/>
+                    </svg>
+                </span>
+                <label class="form-label visually-hidden" for="feature-crop-zoom">{% bilingual "Zoom" "缩放" %}</label>
+                <input
+                    type="range"
+                    min="1"
+                    max="3"
+                    step="0.01"
+                    value="1"
+                    id="feature-crop-zoom"
+                    class="form-range"
+                    data-role="crop-zoom">
+                <span class="cropper-zoom-icon" aria-hidden="true">
+                    <svg class="bi bi-plus-lg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                    </svg>
+                </span>
             </div>
         </div>
         <div class="cropper-footer">

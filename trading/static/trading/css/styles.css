@@ -8156,13 +8156,89 @@ pre,
     max-width: 420px;
     margin: 0 auto;
     min-height: 0;
+    position: relative;
+    overflow: hidden;
+    background: #0f172a;
+    border-radius: 18px;
+    border: 1px solid rgba(148, 163, 184, 0.4);
+    cursor: grab;
+    --crop-frame-size: 70%;
 }
 
 .avatar-cropper-controls {
     display: flex;
     align-items: center;
     gap: var(--ac-space-2);
-    flex-wrap: wrap;
+    justify-content: center;
+    flex-wrap: nowrap;
+}
+
+.avatar-cropper-controls input[type="range"] {
+    flex: 1;
+    max-width: 320px;
+}
+
+.cropper-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--ac-space-2);
+}
+
+.cropper-controls input[type="range"] {
+    flex: 1;
+    max-width: 380px;
+}
+
+.cropper-zoom-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(100, 116, 139, 0.9);
+}
+
+[data-role="avatar-crop-stage"]:active,
+[data-role="crop-stage"]:active,
+[data-role="avatar-crop-stage"].is-dragging,
+[data-role="crop-stage"].is-dragging {
+    cursor: grabbing;
+}
+
+[data-role="avatar-crop-stage"]::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: var(--crop-frame-size, 70%);
+    aspect-ratio: 1 / 1;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.9);
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+    pointer-events: none;
+}
+
+.cropper-mask {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    overflow: hidden;
+    max-width: 100%;
+    max-height: 100%;
+}
+
+.cropper-mask--circle {
+    width: var(--crop-frame-size, 70%);
+    aspect-ratio: 1 / 1;
+    border-radius: 50%;
+}
+
+.cropper-mask--rect {
+    width: var(--crop-frame-width, 82%);
+    aspect-ratio: 16 / 9;
+    border-radius: 12px;
 }
 
 /* Profile cropper modal */
@@ -8229,13 +8305,29 @@ pre,
     overflow: hidden;
     border: 1px solid rgba(148, 163, 184, 0.4);
     cursor: grab;
+    --crop-frame-width: 82%;
 }
 
 .cropper-stage:active {
     cursor: grabbing;
 }
 
-[data-role="crop-image"] {
+[data-role="crop-stage"]::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: var(--crop-frame-width, 82%);
+    aspect-ratio: 16 / 9;
+    transform: translate(-50%, -50%);
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.85);
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+    pointer-events: none;
+}
+
+[data-role="crop-image"],
+[data-role="avatar-crop-image"] {
     position: absolute;
     top: 50%;
     left: 50%;
@@ -8245,9 +8337,6 @@ pre,
     pointer-events: none;
 }
 
-.cropper-controls input[type="range"] {
-    width: 100%;
-}
 
 .cropper-footer {
     display: flex;

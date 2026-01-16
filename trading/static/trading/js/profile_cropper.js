@@ -26,6 +26,7 @@
                 const modal = document.querySelector("[data-role='feature-cropper']");
                 const cropperImage = modal ? modal.querySelector("[data-role='crop-image']") : null;
                 const cropperStage = modal ? modal.querySelector("[data-role='crop-stage']") : null;
+                const cropperFrame = modal ? modal.querySelector("[data-role='crop-frame']") : null;
                 const cropZoom = modal ? modal.querySelector("[data-role='crop-zoom']") : null;
                 const cropCancel = modal ? modal.querySelector("[data-role='crop-cancel']") : null;
                 const cropSkip = modal ? modal.querySelector("[data-role='crop-skip']") : null;
@@ -148,9 +149,10 @@
                         cropZoom.value = "1";
                         cropperImage.onload = () => {
                             window.requestAnimationFrame(() => {
-                                const rect = cropperStage.getBoundingClientRect();
-                                cropState.stageWidth = rect.width || cropperStage.offsetWidth || 640;
-                                cropState.stageHeight = rect.height || cropperStage.offsetHeight || 360;
+                            const stageSource = cropperFrame || cropperStage;
+                            const rect = stageSource.getBoundingClientRect();
+                            cropState.stageWidth = rect.width || stageSource.offsetWidth || 640;
+                            cropState.stageHeight = rect.height || stageSource.offsetHeight || 360;
                                 cropState.imgWidth = cropperImage.naturalWidth;
                                 cropState.imgHeight = cropperImage.naturalHeight;
                                 cropState.baseScale = Math.max(
@@ -315,11 +317,12 @@
                     avatarUploader.querySelector("#avatar-cropped-input") ||
                     avatarUploader.querySelector("input[name='avatar_cropped_data']") ||
                     document.getElementById("avatar-cropped-input");
-                const dropzone = avatarUploader.querySelector("[data-role='avatar-dropzone']");
-                const pickBtn = avatarUploader.querySelector("[data-role='avatar-pick']");
-                const cropper = avatarUploader.querySelector("[data-role='avatar-cropper']");
-                const cropperStage = avatarUploader.querySelector("[data-role='avatar-crop-stage']");
-                const cropperImage = avatarUploader.querySelector("[data-role='avatar-crop-image']");
+            const dropzone = avatarUploader.querySelector("[data-role='avatar-dropzone']");
+            const pickBtn = avatarUploader.querySelector("[data-role='avatar-pick']");
+            const cropper = avatarUploader.querySelector("[data-role='avatar-cropper']");
+            const cropperStage = avatarUploader.querySelector("[data-role='avatar-crop-stage']");
+            const cropperFrame = avatarUploader.querySelector("[data-role='avatar-crop-frame']");
+            const cropperImage = avatarUploader.querySelector("[data-role='avatar-crop-image']");
                 const cropZoom = avatarUploader.querySelector("[data-role='avatar-crop-zoom']");
                 const statusLabel = avatarUploader.querySelector("[data-role='avatar-status']");
                 const saveBtn = document.querySelector("[data-role='avatar-save']");
@@ -437,9 +440,10 @@
                     cropZoom.value = "1";
                     cropperImage.onload = () => {
                         window.requestAnimationFrame(() => {
-                            const rect = cropperStage.getBoundingClientRect();
-                            cropState.stageWidth = rect.width || cropperStage.offsetWidth || 320;
-                            cropState.stageHeight = rect.height || cropperStage.offsetHeight || 320;
+                        const stageSource = cropperFrame || cropperStage;
+                        const rect = stageSource.getBoundingClientRect();
+                        cropState.stageWidth = rect.width || stageSource.offsetWidth || 320;
+                        cropState.stageHeight = rect.height || stageSource.offsetHeight || 320;
                             cropState.imgWidth = cropperImage.naturalWidth;
                             cropState.imgHeight = cropperImage.naturalHeight;
                             cropState.baseScale = Math.max(
