@@ -905,58 +905,55 @@
 
 <div class="modal fade" id="avatar-upload-modal" tabindex="-1" aria-labelledby="avatar-upload-modal-label" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-lg">
-        <div class="modal-content avatar-upload-modal">
+        <div class="modal-content avatar-upload-modal" data-role="avatar-uploader">
             <div class="modal-header">
                 <h5 class="modal-title" id="avatar-upload-modal-label">{% bilingual "Update avatar" "更新头像" %}</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{% bilingual 'Close' '关闭' %}"></button>
             </div>
             <div class="modal-body">
-                <div class="avatar-uploader" data-role="avatar-uploader">
+                <div class="avatar-dropzone p-4 text-center" data-role="avatar-dropzone">
+                    <input
+                        type="file"
+                        name="avatar"
+                        id="id_avatar"
+                        class="form-control d-none"
+                        data-role="avatar-input"
+                        accept="image/*"
+                        form="account-profile-form">
                     <input
                         type="hidden"
                         name="avatar_cropped_data"
-                        id="avatar-cropped-input"
                         data-role="avatar-cropped"
                         form="account-profile-form">
-                    <label class="avatar-dropzone" data-role="avatar-dropzone">
-                        <input
-                            type="file"
-                            name="avatar"
-                            id="avatar-file-input"
-                            class="avatar-file-input"
-                            data-role="avatar-input"
-                            accept="image/*"
-                            form="account-profile-form">
-                        <div class="avatar-dropzone-inner">
-                            <div class="dropzone-title">{% bilingual "Drag & drop your avatar here" "拖拽头像到这里" %}</div>
-                            <div class="dropzone-subtext">
-                                {% if profile_form.avatar.help_text %}
-                                    {{ profile_form.avatar.help_text }}
-                                {% else %}
-                                    {% bilingual "JPG/PNG recommended, 400x400 or larger." "支持 JPG/PNG，建议 400x400 以上。" %}
-                                {% endif %}
-                            </div>
-                            <span class="btn btn-outline-secondary btn-sm" data-role="avatar-pick">
-                                {% bilingual "Choose image" "选择图片" %}
-                            </span>
+                    <div class="avatar-dropzone-inner">
+                        <div class="dropzone-title">{% bilingual "Drag & drop your avatar here" "拖拽头像到这里" %}</div>
+                        <div class="dropzone-subtext">
+                            {% if profile_form.avatar.help_text %}
+                                {{ profile_form.avatar.help_text }}
+                            {% else %}
+                                {% bilingual "JPG/PNG recommended, 400x400 or larger." "支持 JPG/PNG，建议 400x400 以上。" %}
+                            {% endif %}
                         </div>
-                    </label>
-                    <div class="avatar-cropper d-none" data-role="avatar-cropper">
-                        <div class="cropper-stage avatar-cropper-stage" data-role="avatar-crop-stage">
-                            <img src="" alt="{% bilingual 'Avatar crop preview' '头像裁剪预览' %}" data-role="avatar-crop-image">
-                        </div>
-                        <div class="avatar-cropper-controls">
-                            <label class="form-label me-2">{% bilingual "Zoom" "缩放" %}</label>
-                            <input type="range" min="1" max="3" step="0.01" value="1" data-role="avatar-crop-zoom">
-                        </div>
+                        <button type="button" class="btn btn-outline-secondary btn-sm mt-2" data-role="avatar-pick">
+                            {% bilingual "Choose image" "选择图片" %}
+                        </button>
                     </div>
-                    <div class="avatar-upload-status text-muted small mt-2" data-role="avatar-status"></div>
-                    {% if profile_form.avatar.errors %}
-                        <div class="invalid-feedback d-block">
-                            {% for error in profile_form.avatar.errors %}{{ error }}{% if not forloop.last %}<br>{% endif %}{% endfor %}
-                        </div>
-                    {% endif %}
                 </div>
+                <div class="avatar-cropper d-none" data-role="avatar-cropper">
+                    <div class="cropper-stage avatar-cropper-stage" data-role="avatar-crop-stage">
+                        <img src="" alt="{% bilingual 'Avatar crop preview' '头像裁剪预览' %}" data-role="avatar-crop-image">
+                    </div>
+                    <div class="avatar-cropper-controls mt-3">
+                        <label class="form-label me-2">{% bilingual "Zoom" "缩放" %}</label>
+                        <input type="range" min="1" max="3" step="0.01" value="1" data-role="avatar-crop-zoom">
+                    </div>
+                </div>
+                <div class="avatar-upload-status text-muted small mt-2" data-role="avatar-status"></div>
+                {% if profile_form.avatar.errors %}
+                    <div class="invalid-feedback d-block">
+                        {% for error in profile_form.avatar.errors %}{{ error }}{% if not forloop.last %}<br>{% endif %}{% endfor %}
+                    </div>
+                {% endif %}
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
