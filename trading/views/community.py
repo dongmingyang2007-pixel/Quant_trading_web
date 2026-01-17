@@ -12,6 +12,8 @@ from django.views.decorators.http import require_POST
 from datetime import datetime
 from typing import Any
 import uuid
+import bleach
+from bleach.css_sanitizer import CSSSanitizer
 
 from ..community import (
     DEFAULT_TOPIC_ID,
@@ -31,6 +33,8 @@ from ..community import (
 )
 from ..forms import CommunityPostForm
 from ..history import get_history_record
+from ..models import CommunityPost as CommunityPostModel
+from ..models import CommunityTopic as CommunityTopicModel
 from ..profile import load_profile
 from ..storage_utils import save_uploaded_file, describe_image_error, decode_data_url_image, resolve_media_url
 from ..observability import record_metric
@@ -62,6 +66,43 @@ def _build_share_prefill(summary: dict[str, Any]) -> str:
             "Notes:",
         ]
     )
+
+
+def _sanitize_post_content(content: str) -> str:
+    allowed_tags = [
+        "p",
+        "b",
+        "i",
+        "u",
+        "em",
+        "strong",
+        "a",
+        "h1",
+        "h2",
+        "h3",
+        "ul",
+        "ol",
+        "li",
+        "blockquote",
+        "pre",
+        "span",
+        "div",
+        "br",
+    ]
+    allowed_attrs = {
+        "*": ["style", "class"],
+        "a": ["href", "target", "rel", "style", "class"],
+    }
+    css_sanitizer = CSSSanitizer(allowed_css_properties=["color", "background-color"])
+    cleaned = bleach.clean(
+        content or "",
+        tags=allowed_tags,
+        attributes=allowed_attrs,
+        strip=True,
+        css_sanitizer=css_sanitizer,
+    )
+    text_only = bleach.clean(cleaned, tags=[], strip=True)
+    return cleaned if text_only.strip() else ""
 
 
 @login_required
@@ -210,6 +251,7 @@ def community(request):
     sort = (request.GET.get("sort") or "").strip().lower()
     sort = "top" if sort == "top" else ""
     posts_qs = list_posts(limit=None, topic_id=topic_value, return_queryset=True)
+    posts_qs = posts_qs.filter(status=CommunityPostModel.STATUS_PUBLISHED)
     if search_query:
         posts_qs = posts_qs.filter(
             Q(content__icontains=search_query) | Q(author_display_name__icontains=search_query)
@@ -292,6 +334,130 @@ def community(request):
             "search_query": search_query,
             "sort": sort,
             "is_htmx": False,
+        },
+    )
+
+
+@login_required
+def write_post(request, post_id: int | None = None):
+    user = request.user
+    profile = load_profile(str(user.id))
+    display_name = profile.get("display_name") or user.username
+    language = (getattr(request, "LANGUAGE_CODE", "") or "").lower()
+    is_zh = language.startswith("zh")
+
+    topics = list_topics()
+    topic_choices = [(topic["topic_id"], topic["name"]) for topic in topics]
+    topic_ids = {topic["topic_id"] for topic in topics}
+
+    post = None
+    if post_id:
+        post = (
+            CommunityPostModel.objects.select_related("topic")
+            .filter(pk=post_id, author=user)
+            .first()
+        )
+        if not post:
+            return redirect(reverse("trading:community"))
+        if post.status != CommunityPostModel.STATUS_DRAFT:
+            return redirect(reverse("trading:community"))
+
+    error_message = None
+    selected_topic = post.topic.topic_id if post else DEFAULT_TOPIC_ID
+    title_value = post.title if post else ""
+    content_value = post.content if post else ""
+    draft_id = str(post.pk) if post else ""
+
+    if request.method == "POST":
+        action = (request.POST.get("action") or "").strip().lower()
+        title = (request.POST.get("title") or "").strip()
+        raw_content = request.POST.get("content") or ""
+        content = _sanitize_post_content(raw_content)
+        topic_id = (request.POST.get("topic") or "").strip() or DEFAULT_TOPIC_ID
+        if topic_id not in topic_ids:
+            topic_id = DEFAULT_TOPIC_ID
+        topic = CommunityTopicModel.objects.filter(topic_id=topic_id).first()
+        if not topic:
+            topic = CommunityTopicModel.objects.filter(topic_id=DEFAULT_TOPIC_ID).first()
+        if not topic:
+            topic = CommunityTopicModel.objects.create(
+                topic_id=DEFAULT_TOPIC_ID,
+                name=DEFAULT_TOPIC_NAME,
+                description="",
+                creator_name="system",
+            )
+
+        target_post = post
+        if not target_post:
+            draft_id = request.POST.get("post_id")
+            if draft_id:
+                target_post = (
+                    CommunityPostModel.objects.select_related("topic")
+                    .filter(pk=draft_id, author=user)
+                    .first()
+                )
+
+        if action == "save_draft":
+            if not target_post:
+                target_post = CommunityPostModel.objects.create(
+                    topic=topic,
+                    author=user,
+                    author_display_name=display_name,
+                    title=title,
+                    content=content,
+                    status=CommunityPostModel.STATUS_DRAFT,
+                )
+            else:
+                target_post.topic = topic
+                target_post.title = title
+                target_post.content = content
+                target_post.status = CommunityPostModel.STATUS_DRAFT
+                target_post.save(update_fields=["topic", "title", "content", "status", "updated_at"])
+            return JsonResponse({"status": "success", "post_id": target_post.pk})
+
+        if action == "publish":
+            if not title:
+                error_message = "标题不能为空。" if is_zh else "Title is required."
+            elif not content:
+                error_message = "内容不能为空。" if is_zh else "Content is required."
+            if error_message:
+                selected_topic = topic.topic_id
+                title_value = title
+                content_value = raw_content
+                if target_post:
+                    draft_id = str(target_post.pk)
+            else:
+                if not target_post:
+                    target_post = CommunityPostModel.objects.create(
+                        topic=topic,
+                        author=user,
+                        author_display_name=display_name,
+                        title=title,
+                        content=content,
+                        status=CommunityPostModel.STATUS_PUBLISHED,
+                    )
+                else:
+                    target_post.topic = topic
+                    target_post.title = title
+                    target_post.content = content
+                    target_post.status = CommunityPostModel.STATUS_PUBLISHED
+                    target_post.save(update_fields=["topic", "title", "content", "status", "updated_at"])
+                return redirect(f"{reverse('trading:community')}?topic={topic.topic_id}")
+        else:
+            return JsonResponse({"status": "error", "message": "invalid_action"}, status=400)
+
+    return render(
+        request,
+        "trading/community_write.html",
+        {
+            "display_name": display_name,
+            "topics": topics,
+            "topic_choices": topic_choices,
+            "selected_topic": selected_topic,
+            "title_value": title_value,
+            "content_value": content_value,
+            "draft_id": draft_id,
+            "post_error": error_message,
         },
     )
 

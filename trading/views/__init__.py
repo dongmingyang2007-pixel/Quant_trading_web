@@ -36,7 +36,7 @@ from .account import (
 )
 from .auth import activate, resend_activation, signup
 from .market import market_insights, market_insights_data
-from .community import community, community_like, community_comment, community_delete
+from .community import community, write_post, community_like, community_comment, community_delete
 from .account import profile_public
 from .learning import learning_center, learning_module_detail
 from .observability_dashboard import observability_dashboard
@@ -84,6 +84,7 @@ __all__ = [
     "market_insights",
     "market_insights_data",
     "community",
+    "write_post",
     "community_like",
     "community_comment",
     "community_delete",

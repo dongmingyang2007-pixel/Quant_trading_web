@@ -31,9 +31,12 @@ class CommunityPost:
     post_id: str
     user_id: str
     author: str
+    title: str
     content: str
+    status: str
     image_path: str | None
     created_at: str
+    updated_at: str = ""
     backtest_record_id: str | None = None
     liked_by: list[str] = field(default_factory=list)
     comments: list[dict[str, Any]] = field(default_factory=list)
@@ -202,11 +205,14 @@ def _serialize_post(post: CommunityPostModel, *, backtest_summaries: dict[str, d
         "user_slug": user_slug,
         "avatar_path": avatar_path,
         "author": post.author_display_name,
+        "title": post.title or "",
         "content": post.content,
+        "status": post.status,
         "image_path": post.image_path or "",
         "backtest_record_id": post.backtest_record_id or "",
         "backtest_summary": summary,
         "created_at": post.created_at.strftime("%Y-%m-%d %H:%M UTC"),
+        "updated_at": post.updated_at.strftime("%Y-%m-%d %H:%M UTC"),
         "liked_by": liked_ids,
         "like_count": len(liked_ids),
         "like_events": [
@@ -277,7 +283,9 @@ def append_post(post: CommunityPost) -> None:
         topic=topic,
         author=author,
         author_display_name=post.author,
+        title=post.title or "",
         content=post.content,
+        status=post.status,
         image_path=post.image_path or "",
         backtest_record_id=post.backtest_record_id or "",
     )
@@ -320,9 +328,11 @@ def build_post(
     topic_name: str,
     user_id: str,
     author: str,
+    title: str | None = None,
     content: str,
     image_path: str | None,
     backtest_record_id: str | None = None,
+    status: str = CommunityPostModel.STATUS_PUBLISHED,
 ) -> CommunityPost:
     return CommunityPost(
         topic_id=topic_id or DEFAULT_TOPIC_ID,
@@ -330,10 +340,13 @@ def build_post(
         user_id=user_id,
         post_id=f"post-{uuid.uuid4().hex[:10]}",
         author=author,
+        title=title or "",
         content=content,
+        status=status,
         image_path=image_path,
         backtest_record_id=backtest_record_id or "",
         created_at=timezone.now().strftime("%Y-%m-%d %H:%M UTC"),
+        updated_at=timezone.now().strftime("%Y-%m-%d %H:%M UTC"),
     )
 
 

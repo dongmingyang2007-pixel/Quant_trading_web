@@ -151,11 +151,20 @@ class CommunityTopic(models.Model):
 
 
 class CommunityPost(models.Model):
+    STATUS_DRAFT = "draft"
+    STATUS_PUBLISHED = "published"
+    STATUS_CHOICES = (
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_PUBLISHED, "Published"),
+    )
+
     post_id = models.CharField(max_length=40, unique=True, default=generate_post_id)
     topic = models.ForeignKey(CommunityTopic, on_delete=models.CASCADE, related_name="posts")
     author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="community_posts")
     author_display_name = models.CharField(max_length=120)
+    title = models.CharField(max_length=200, blank=True, default="")
     content = models.TextField()
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=STATUS_PUBLISHED)
     image_path = models.CharField(max_length=255, blank=True, default="")
     backtest_record_id = models.CharField(max_length=64, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -171,7 +180,8 @@ class CommunityPost(models.Model):
         ]
 
     def __str__(self) -> str:  # pragma: no cover
-        return f"{self.author_display_name}: {self.content[:20]}"
+        title = self.title or self.content[:20]
+        return f"{self.author_display_name}: {title}"
 
 
 class CommunityPostLike(models.Model):

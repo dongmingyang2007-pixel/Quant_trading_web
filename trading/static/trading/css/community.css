@@ -320,6 +320,32 @@
     box-shadow: 0 20px 40px rgba(15, 23, 42, 0.08);
 }
 
+.community-write-card {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.community-write-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.community-write-title {
+    margin: 0;
+    font-size: clamp(1.6rem, 2.4vw, 2rem);
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.community-write-subtitle {
+    margin: 6px 0 0;
+    color: #64748b;
+}
+
 .community-post {
     border: none;
     background: #ffffff;
