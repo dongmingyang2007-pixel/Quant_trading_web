@@ -37,8 +37,12 @@
     const mathInsertBtn = mathModal?.querySelector("[data-role='math-insert']");
     const mathCancelBtn = mathModal?.querySelector("[data-role='math-cancel']");
     const mathCloseBtn = mathModal?.querySelector("[data-role='math-close']");
+    const backtestModal = document.getElementById("backtestSelectModal");
+    const backtestListContainer = document.getElementById("backtest-list-container");
     let mathModalInstance = null;
+    let backtestModalInstance = null;
     let lastFormulaRange = null;
+    let backtestInsertRange = null;
 
     const AUTO_SAVE_DELAY = 1200;
     const AUTO_SAVE_INTERVAL = 30000;
@@ -152,6 +156,122 @@
     const openCoverPicker = () => {
         if (coverInput) {
             coverInput.click();
+        }
+    };
+
+    const openBacktestModal = () => {
+        if (!backtestModal) return;
+        if (!csrfToken) {
+            alert("Missing CSRF token.");
+            return;
+        }
+        backtestInsertRange = quill ? quill.getSelection(true) : null;
+        if (window.bootstrap && typeof window.bootstrap.Modal === "function") {
+            if (!backtestModalInstance) {
+                backtestModalInstance = new window.bootstrap.Modal(backtestModal);
+            }
+            backtestModalInstance.show();
+        } else {
+            backtestModal.removeAttribute("aria-hidden");
+        }
+    };
+
+    const renderBacktestList = (items) => {
+        if (!backtestListContainer) return;
+        backtestListContainer.innerHTML = "";
+        if (!items || items.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "text-muted";
+            empty.textContent = "No backtests found.";
+            backtestListContainer.appendChild(empty);
+            return;
+        }
+        const list = document.createElement("div");
+        list.className = "d-flex flex-column gap-3";
+        items.forEach((item) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "backtest-list-item text-start";
+            button.dataset.id = item.id || "";
+            button.dataset.name = item.strategy_name || "";
+            button.dataset.return = item.total_return || "";
+
+            const header = document.createElement("div");
+            header.className = "backtest-list-header";
+
+            const name = document.createElement("div");
+            name.className = "backtest-list-name";
+            name.textContent = item.strategy_name || "Strategy";
+
+            const returnEl = document.createElement("div");
+            returnEl.className = "backtest-list-return";
+            const returnValue = item.total_return || "--";
+            const parsedReturn = Number.parseFloat(String(returnValue).replace("%", ""));
+            if (Number.isFinite(parsedReturn)) {
+                returnEl.classList.add(parsedReturn >= 0 ? "is-positive" : "is-negative");
+            } else {
+                returnEl.classList.add("is-neutral");
+            }
+            returnEl.textContent = returnValue;
+
+            header.appendChild(name);
+            header.appendChild(returnEl);
+
+            const meta = document.createElement("div");
+            meta.className = "backtest-list-meta";
+            meta.textContent = item.created_at || "";
+
+            button.appendChild(header);
+            button.appendChild(meta);
+
+            button.addEventListener("click", () => {
+                if (!quill) return;
+                const payload = {
+                    id: item.id || "",
+                    name: item.strategy_name || "Strategy",
+                    return: item.total_return || "--",
+                };
+                const range = backtestInsertRange || quill.getSelection(true) || { index: quill.getLength(), length: 0 };
+                quill.insertEmbed(range.index, "backtestCard", payload, "user");
+                quill.insertText(range.index + 1, "\n", "user");
+                quill.setSelection(range.index + 2, 0, "silent");
+                backtestInsertRange = null;
+                if (backtestModalInstance) {
+                    backtestModalInstance.hide();
+                } else if (backtestModal) {
+                    backtestModal.setAttribute("aria-hidden", "true");
+                }
+            });
+
+            list.appendChild(button);
+        });
+        backtestListContainer.appendChild(list);
+    };
+
+    const loadBacktests = async () => {
+        if (!backtestListContainer) return;
+        backtestListContainer.innerHTML =
+            '<div class="d-flex align-items-center justify-content-center gap-2 text-muted"><div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div><span>Loading backtests...</span></div>';
+        try {
+            const response = await fetch("/api/get_user_backtests/", {
+                method: "GET",
+                credentials: "same-origin",
+                headers: {
+                    "X-Requested-With": "XMLHttpRequest",
+                    "X-CSRFToken": csrfToken,
+                },
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(payload?.error || `加载失败（${response.status}）`);
+            }
+            renderBacktestList(payload.backtests || []);
+        } catch (error) {
+            backtestListContainer.innerHTML = "";
+            const fallback = document.createElement("div");
+            fallback.className = "text-danger";
+            fallback.textContent = error.message || "加载回测失败，请稍后重试。";
+            backtestListContainer.appendChild(fallback);
         }
     };
 
@@ -549,6 +669,7 @@
                 node.dataset.id = recordId;
                 node.dataset.name = name;
                 node.dataset.return = totalReturn;
+                node.classList.add("backtest-card-embed");
 
                 const top = document.createElement("div");
                 top.className = "backtest-card-top";
@@ -600,23 +721,6 @@
 
         window.Quill.register(BacktestCard, true);
 
-        const mockBacktests = {
-            "bt-001": { id: "bt-001", name: "Momentum Breakout", return: "25.5%" },
-            "bt-002": { id: "bt-002", name: "Mean Reversion", return: "12.3%" },
-            "bt-003": { id: "bt-003", name: "Pairs Arbitrage", return: "8.7%" },
-        };
-
-        const resolveBacktest = (recordId) => {
-            const id = (recordId || "").trim();
-            if (!id) return null;
-            return (
-                mockBacktests[id] || {
-                    id,
-                    name: `Backtest ${id}`,
-                    return: "--",
-                }
-            );
-        };
         const fontWhitelist = ["SimSun", "SimHei", "Microsoft-YaHei", "Arial", "Times-New-Roman"];
         const sizeWhitelist = ["12px", "14px", "16px", "18px", "20px", "24px", "30px", "36px"];
         const Font = window.Quill.import("formats/font");
@@ -687,13 +791,7 @@
                     formula: () => showMathModal(),
                     backtest: () => {
                         if (!quill) return;
-                        const recordId = window.prompt("Enter Backtest Record ID", "bt-001");
-                        if (!recordId) return;
-                        const payload = resolveBacktest(recordId);
-                        if (!payload) return;
-                        const range = quill.getSelection(true) || { index: quill.getLength(), length: 0 };
-                        quill.insertEmbed(range.index, "backtestCard", payload, "user");
-                        quill.setSelection(range.index + 1, 0, "silent");
+                        openBacktestModal();
                     },
                 },
             },
@@ -835,6 +933,12 @@
             if (quill) {
                 quill.focus();
             }
+        });
+    }
+
+    if (backtestModal) {
+        backtestModal.addEventListener("shown.bs.modal", () => {
+            loadBacktests();
         });
     }
 

@@ -5,6 +5,7 @@ import json
 import os
 import queue
 import re
+import math
 from dataclasses import asdict
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime, timezone
@@ -35,6 +36,7 @@ from ..task_queue import (
 from ..train_ml import available_engines
 from ..rate_limit import check_rate_limit, rate_limit_key
 from ..history import get_history_record
+from ..models import BacktestRecord as BacktestRecordModel
 from ..portfolio import portfolio_stats
 from .dashboard import build_strategy_input
 
@@ -135,6 +137,16 @@ def _sanitize_short_text(value: str | None, *, max_length: int = 32) -> str:
         return ""
     cleaned = "".join(ch for ch in value if ch.isalnum() or ch in {"-", "_", " ", "/"})
     return cleaned[:max_length]
+
+
+def _format_signed_pct(value: Any, *, digits: int = 1) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "--"
+    if not math.isfinite(number):
+        return "--"
+    return f"{number * 100:+.{digits}f}%"
 
 
 def _sse_message(event: str, data: dict[str, object]) -> str:
@@ -1064,6 +1076,52 @@ def build_portfolio_api(request):
         "correlation": correlation_pairs,
     }
     return JsonResponse(response)
+
+
+@login_required
+def get_user_backtests(request):
+    request_id = ensure_request_id(request)
+    try:
+        records = (
+            BacktestRecordModel.objects.filter(user=request.user)
+            .order_by("-timestamp")
+            .only("record_id", "title", "stats", "timestamp", "engine", "ticker")
+        )[:10]
+        backtests = []
+        for record in records:
+            stats = record.stats if isinstance(record.stats, dict) else {}
+            total_return = _format_signed_pct(stats.get("total_return"))
+            strategy_name = (record.title or "").strip()
+            if not strategy_name:
+                engine = (record.engine or "").strip()
+                ticker = (record.ticker or "").strip()
+                if engine and ticker:
+                    strategy_name = f"{ticker} · {engine}"
+                else:
+                    strategy_name = engine or ticker or "Strategy"
+            created_at = ""
+            try:
+                created_at = record.timestamp.strftime("%Y-%m-%d")
+            except Exception:
+                created_at = ""
+            backtests.append(
+                {
+                    "id": record.record_id,
+                    "strategy_name": strategy_name,
+                    "total_return": total_return,
+                    "created_at": created_at,
+                }
+            )
+        return JsonResponse(
+            {"backtests": backtests, "request_id": request_id},
+            json_dumps_params={"ensure_ascii": False},
+        )
+    except Exception as exc:
+        return JsonResponse(
+            {"error": _("Failed to load backtests."), "details": str(exc), "request_id": request_id},
+            status=500,
+            json_dumps_params={"ensure_ascii": False},
+        )
 
 
 @login_required
