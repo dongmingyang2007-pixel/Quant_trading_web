@@ -11,6 +11,7 @@ from django.views.decorators.http import require_POST
 
 from datetime import datetime
 from typing import Any
+import json
 import uuid
 import bleach
 from bleach.css_sanitizer import CSSSanitizer
@@ -369,11 +370,21 @@ def write_post(request, post_id: int | None = None):
     draft_id = str(post.pk) if post else ""
 
     if request.method == "POST":
-        action = (request.POST.get("action") or "").strip().lower()
-        title = (request.POST.get("title") or "").strip()
-        raw_content = request.POST.get("content") or ""
+        is_json = request.content_type and "application/json" in request.content_type
+        payload = request.POST
+        if is_json:
+            try:
+                payload = json.loads(request.body or "{}")
+            except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
+                return JsonResponse({"status": "error", "message": str(exc)}, status=400)
+            if not isinstance(payload, dict):
+                return JsonResponse({"status": "error", "message": "invalid_payload"}, status=400)
+
+        action = (payload.get("action") or "").strip().lower()
+        title = (payload.get("title") or "").strip()
+        raw_content = payload.get("content") or ""
         content = _sanitize_post_content(raw_content)
-        topic_id = (request.POST.get("topic") or "").strip() or DEFAULT_TOPIC_ID
+        topic_id = (payload.get("topic") or "").strip() or DEFAULT_TOPIC_ID
         if topic_id not in topic_ids:
             topic_id = DEFAULT_TOPIC_ID
         topic = CommunityTopicModel.objects.filter(topic_id=topic_id).first()
@@ -389,7 +400,7 @@ def write_post(request, post_id: int | None = None):
 
         target_post = post
         if not target_post:
-            draft_id = request.POST.get("post_id")
+            draft_id = payload.get("post_id")
             if draft_id:
                 target_post = (
                     CommunityPostModel.objects.select_related("topic")
@@ -421,6 +432,8 @@ def write_post(request, post_id: int | None = None):
             elif not content:
                 error_message = "内容不能为空。" if is_zh else "Content is required."
             if error_message:
+                if is_json:
+                    return JsonResponse({"status": "error", "message": error_message}, status=400)
                 selected_topic = topic.topic_id
                 title_value = title
                 content_value = raw_content
@@ -442,9 +455,16 @@ def write_post(request, post_id: int | None = None):
                     target_post.content = content
                     target_post.status = CommunityPostModel.STATUS_PUBLISHED
                     target_post.save(update_fields=["topic", "title", "content", "status", "updated_at"])
-                return redirect(f"{reverse('trading:community')}?topic={topic.topic_id}")
+                redirect_url = f"{reverse('trading:community')}?topic={topic.topic_id}"
+                if is_json:
+                    return JsonResponse(
+                        {"status": "success", "post_id": target_post.pk, "redirect_url": redirect_url}
+                    )
+                return redirect(redirect_url)
         else:
-            return JsonResponse({"status": "error", "message": "invalid_action"}, status=400)
+            if is_json:
+                return JsonResponse({"status": "error", "message": "invalid_action"}, status=400)
+            error_message = "Invalid action."
 
     return render(
         request,

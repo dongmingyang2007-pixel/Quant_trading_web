@@ -2,7 +2,7 @@
     const form = document.querySelector("[data-role='write-form']");
     if (!form) return;
 
-    const editorContainer = form.querySelector("[data-role='editor']");
+    const editorContainer = form.querySelector("#editor") || form.querySelector("[data-role='editor']");
     const contentInput = form.querySelector("[data-role='content-input']");
     const actionInput = form.querySelector("[data-role='action-input']");
     const saveDraftBtn = form.querySelector("[data-role='save-draft']");
@@ -29,6 +29,17 @@
     let lastSavedSnapshot = "";
     let autoSaveTimer = null;
     let intervalId = null;
+
+    const getCookie = (name) => {
+        if (!document.cookie) return "";
+        const cookies = document.cookie.split(";").map((cookie) => cookie.trim());
+        for (const cookie of cookies) {
+            if (cookie.startsWith(`${name}=`)) {
+                return decodeURIComponent(cookie.substring(name.length + 1));
+            }
+        }
+        return "";
+    };
 
     const normalizeHtml = (html) => {
         const trimmed = (html || "").trim();
@@ -59,6 +70,14 @@
         return JSON.stringify({ title, content, topic });
     };
 
+    const buildPayload = (action) => ({
+        action,
+        title: (titleInput?.value || "").trim(),
+        content: quill ? normalizeHtml(quill.root.innerHTML) : normalizeHtml(contentInput?.value || ""),
+        topic: getTopicValue(),
+        post_id: postIdInput?.value || "",
+    });
+
     const markDirty = () => {
         pendingSave = true;
         if (autoSaveTimer) {
@@ -82,26 +101,29 @@
         isSaving = true;
         setStatus(statusMessages.saving);
         syncContent();
-        const formData = new FormData(form);
-        formData.set("action", "save_draft");
+        const payload = buildPayload("save_draft");
         try {
             const response = await fetch(form.action || window.location.pathname, {
                 method: "POST",
                 headers: {
                     "X-Requested-With": "XMLHttpRequest",
+                    "X-CSRFToken": getCookie("csrftoken"),
+                    "Content-Type": "application/json",
                 },
-                body: formData,
+                body: JSON.stringify(payload),
             });
-            const payload = await response.json();
-            if (!response.ok || !payload || payload.status !== "success") {
-                throw new Error("save_failed");
+            const responseData = await response.json().catch(() => ({}));
+            if (!response.ok || !responseData || responseData.status !== "success") {
+                const message = responseData?.message || statusMessages.failed;
+                alert(message);
+                throw new Error(message);
             }
-            if (postIdInput && payload.post_id) {
-                postIdInput.value = payload.post_id;
+            if (postIdInput && responseData.post_id) {
+                postIdInput.value = responseData.post_id;
             }
-            if (editBase && payload.post_id && window.location.pathname === editBase) {
+            if (editBase && responseData.post_id && window.location.pathname === editBase) {
                 const base = editBase.endsWith("/") ? editBase : `${editBase}/`;
-                window.history.replaceState(null, "", `${base}${payload.post_id}/`);
+                window.history.replaceState(null, "", `${base}${responseData.post_id}/`);
             }
             pendingSave = false;
             lastSavedSnapshot = snapshot;
@@ -110,6 +132,47 @@
             setStatus(statusMessages.failed);
         } finally {
             isSaving = false;
+        }
+    };
+
+    const publishPost = async () => {
+        if (isPublishing || isSaving) return;
+        if (titleInput) {
+            titleInput.value = titleInput.value.trim();
+            titleInput.required = true;
+            if (!titleInput.value) {
+                titleInput.reportValidity();
+                return;
+            }
+        }
+        isPublishing = true;
+        syncContent();
+        const payload = buildPayload("publish");
+        try {
+            const response = await fetch(form.action || window.location.pathname, {
+                method: "POST",
+                headers: {
+                    "X-Requested-With": "XMLHttpRequest",
+                    "X-CSRFToken": getCookie("csrftoken"),
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify(payload),
+            });
+            const responseData = await response.json().catch(() => ({}));
+            if (!response.ok || !responseData || responseData.status !== "success") {
+                const message = responseData?.message || "发布失败，请稍后重试。";
+                alert(message);
+                throw new Error(message);
+            }
+            const redirectUrl = responseData.redirect_url || form.dataset.redirectUrl || "";
+            if (redirectUrl) {
+                window.location.href = redirectUrl;
+            } else {
+                window.location.href = form.action || window.location.pathname;
+            }
+        } catch (error) {
+            setStatus(statusMessages.failed);
+            isPublishing = false;
         }
     };
 
@@ -199,19 +262,25 @@
 
     const initEditor = () => {
         if (!window.Quill || !editorContainer) return;
-        const placeholder = editorContainer.dataset.placeholder || "Write something thoughtful...";
-        const bounds = editorContainer.closest(".write-canvas") || editorContainer;
+        const placeholder = editorContainer.dataset.placeholder || "在此输入正文內容...";
+        const bounds = editorContainer.closest(".write-container") || editorContainer;
         quill = new window.Quill(editorContainer, {
-            theme: "bubble",
+            theme: "snow",
             placeholder,
             bounds,
             modules: {
+                formula: true,
                 toolbar: {
                     container: [
-                        ["bold", "italic", "underline"],
-                        [{ header: 1 }, { header: 2 }],
+                        [{ header: [1, 2, 3, false] }],
+                        [{ font: [] }],
+                        ["bold", "italic", "underline", "strike"],
+                        [{ color: [] }, { background: [] }],
+                        [{ script: "sub" }, { script: "super" }],
                         [{ list: "ordered" }, { list: "bullet" }],
-                        ["blockquote", "code-block", "link", "image"],
+                        [{ indent: "-1" }, { indent: "+1" }],
+                        [{ align: [] }],
+                        ["link", "image", "code-block", "formula"],
                         ["clean"],
                     ],
                     handlers: {
@@ -268,24 +337,8 @@
     });
 
     form.addEventListener("submit", (event) => {
-        if (isSaving) {
-            event.preventDefault();
-            return;
-        }
-        if (actionInput) {
-            actionInput.value = "publish";
-        }
-        if (titleInput) {
-            titleInput.value = titleInput.value.trim();
-            titleInput.required = true;
-            if (!titleInput.value) {
-                event.preventDefault();
-                titleInput.reportValidity();
-                return;
-            }
-        }
-        isPublishing = true;
-        syncContent();
+        event.preventDefault();
+        publishPost();
     });
 
     if (saveDraftBtn) {
