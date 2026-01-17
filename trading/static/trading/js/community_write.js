@@ -452,34 +452,68 @@
 
     const initEditor = () => {
         if (!window.Quill || !editorContainer) return;
+        const fontWhitelist = ["SimSun", "SimHei", "Microsoft-YaHei", "Arial", "Times-New-Roman"];
+        const sizeWhitelist = ["12px", "14px", "16px", "18px", "20px", "24px", "30px", "36px"];
+        const Font = window.Quill.import("formats/font");
+        Font.whitelist = fontWhitelist;
+        window.Quill.register(Font, true);
+        const SizeStyle = window.Quill.import("attributors/style/size");
+        SizeStyle.whitelist = sizeWhitelist;
+        window.Quill.register(SizeStyle, true);
+
+        const icons = window.Quill.import("ui/icons");
+        icons.undo =
+            '<svg viewBox="0 0 18 18"><path d="M7.5 4.5H3.75V2L0 5.75 3.75 9.5V7h3.75a3.75 3.75 0 1 1 0 7.5H6v1.5h1.5a5.25 5.25 0 0 0 0-10.5z"/></svg>';
+        icons.redo =
+            '<svg viewBox="0 0 18 18"><path d="M10.5 4.5h3.75V2L18 5.75 14.25 9.5V7H10.5a3.75 3.75 0 1 0 0 7.5H12v1.5h-1.5a5.25 5.25 0 0 1 0-10.5z"/></svg>';
+
+        if (window.ImageResize) {
+            window.Quill.register("modules/imageResize", window.ImageResize);
+        }
         const placeholder =
             "开始写作...（选中文字可弹出快捷菜单，连按回车可跳出代码块）";
         const bounds = editorContainer.closest(".write-container") || editorContainer;
+        const toolbarOptions = [
+            ["undo", "redo"],
+            [{ font: fontWhitelist }, { size: sizeWhitelist }],
+            ["bold", "italic", "underline", "strike", { color: [] }, { background: [] }],
+            [{ header: 1 }, { header: 2 }],
+            [{ list: "ordered" }, { list: "bullet" }, { indent: "-1" }, { indent: "+1" }],
+            [{ align: [] }],
+            ["link", "image", "video", "formula"],
+            ["clean"],
+        ];
+        const modules = {
+            formula: true,
+            history: {
+                delay: 1000,
+                maxStack: 200,
+                userOnly: true,
+            },
+            toolbar: {
+                container: toolbarOptions,
+                handlers: {
+                    undo() {
+                        this.quill.history.undo();
+                    },
+                    redo() {
+                        this.quill.history.redo();
+                    },
+                    image: () => pickImageFile(),
+                    formula: () => showMathModal(),
+                },
+            },
+        };
+        if (window.ImageResize) {
+            modules.imageResize = {
+                modules: ["Resize", "DisplaySize", "Toolbar"],
+            };
+        }
         quill = new window.Quill(editorContainer, {
             theme: "snow",
             placeholder,
             bounds,
-            modules: {
-                formula: true,
-                toolbar: {
-                    container: [
-                        [{ header: [1, 2, 3, false] }],
-                        [{ font: [] }],
-                        ["bold", "italic", "underline", "strike"],
-                        [{ color: [] }, { background: [] }],
-                        [{ script: "sub" }, { script: "super" }],
-                        [{ list: "ordered" }, { list: "bullet" }],
-                        [{ indent: "-1" }, { indent: "+1" }],
-                        [{ align: [] }],
-                        ["link", "image", "code-block", "formula"],
-                        ["clean"],
-                    ],
-                    handlers: {
-                        image: () => pickImageFile(),
-                        formula: () => showMathModal(),
-                    },
-                },
-            },
+            modules,
         });
 
         const clearBlockFormats = (range) => {
@@ -541,6 +575,7 @@
 
             applyTooltip(".ql-bold", tooltipMap["ql-bold"]);
             applyTooltip(".ql-italic", tooltipMap["ql-italic"]);
+            applyTooltip(".ql-header", tooltipMap["ql-header"]);
             applyTooltip(".ql-header .ql-picker-label", tooltipMap["ql-header"]);
             applyTooltip(".ql-list", tooltipMap["ql-list"]);
             applyTooltip(".ql-image", tooltipMap["ql-image"]);
