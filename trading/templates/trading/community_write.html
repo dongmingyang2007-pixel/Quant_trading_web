@@ -50,9 +50,8 @@
         width: 100%;
         z-index: 1030;
         height: 60px;
-        background: rgba(255, 255, 255, 0.82);
-        backdrop-filter: blur(10px);
-        border-bottom: 1px solid var(--write-border);
+        background: #ffffff;
+        border-bottom: 1px solid #f0f0f0;
         animation: write-slide-down 0.5s ease both;
     }
 
@@ -89,47 +88,74 @@
     .write-back {
         display: inline-flex;
         align-items: center;
-        gap: 10px;
+        gap: 8px;
         font-weight: 600;
-        font-size: 1.05rem;
-        color: var(--write-ink);
+        font-size: 1rem;
+        color: #9ca3af;
         text-decoration: none;
-        padding: 6px 10px;
+        padding: 6px;
         border-radius: 999px;
-        transition: background 0.2s ease, color 0.2s ease;
+        transition: color 0.2s ease;
+    }
+
+    .write-drafts-btn {
+        border: none;
+        background: transparent;
+        color: #6b7280;
+        font-weight: 600;
+        padding: 6px 8px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        transition: color 0.2s ease;
+    }
+
+    .write-drafts-btn:hover {
+        color: #111827;
+    }
+
+    .write-drafts-icon {
+        font-size: 1.1rem;
+        line-height: 1;
     }
 
     .write-back:hover {
-        background: rgba(226, 232, 240, 0.8);
-        color: var(--write-ink);
+        color: #111827;
     }
 
     .write-back-icon {
-        font-size: 1.4rem;
+        font-size: 1.3rem;
         line-height: 1;
     }
 
     .write-status {
-        font-size: 0.88rem;
-        color: var(--write-muted);
+        font-size: 0.85rem;
+        color: #9ca3af;
         min-height: 1.2em;
     }
 
     .write-publish-btn {
         border-radius: 999px;
-        padding: 8px 20px;
+        padding: 8px 22px;
         font-weight: 600;
-        box-shadow: 0 12px 24px rgba(37, 99, 235, 0.22);
-        border: none;
+        background: var(--write-brand);
+        border-color: var(--write-brand);
+        box-shadow: 0 10px 22px rgba(37, 99, 235, 0.2);
+    }
+
+    .write-publish-btn:hover,
+    .write-publish-btn:focus {
+        background: var(--write-brand-strong);
+        border-color: var(--write-brand-strong);
     }
 
     .write-more-btn {
         width: 38px;
         height: 38px;
         border-radius: 50%;
-        border: 1px solid var(--write-border);
-        background: #f1f5f9;
-        color: #475569;
+        border: 1px solid #e5e7eb;
+        background: transparent;
+        color: #6b7280;
         font-weight: 700;
         display: inline-flex;
         align-items: center;
@@ -147,9 +173,10 @@
         min-height: 100vh;
         margin: 32px auto 0;
         background: #ffffff;
-        border-radius: 24px;
-        padding: clamp(24px, 5vw, 48px);
-        box-shadow: var(--write-shadow);
+        border-radius: 18px;
+        padding: clamp(28px, 5vw, 48px);
+        border: 1px solid #f0f0f0;
+        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
         animation: write-fade-in 0.6s ease both;
     }
 
@@ -163,7 +190,7 @@
     .write-title-wrap {
         position: relative;
         padding-bottom: 10px;
-        margin-bottom: 16px;
+        margin-bottom: 20px;
     }
 
     .write-title-wrap::after {
@@ -173,7 +200,7 @@
         right: 0;
         bottom: 0;
         height: 1px;
-        background: rgba(148, 163, 184, 0.4);
+        background: #f0f0f0;
         opacity: 0;
         transition: opacity 0.2s ease;
     }
@@ -186,17 +213,17 @@
     .write-title-input {
         width: 100%;
         border: none;
-        padding: 0;
+        padding: 16px 0;
         margin-bottom: 0;
-        font-family: var(--write-font-title);
-        font-size: 3rem;
+        font-family: var(--write-font-body);
+        font-size: 40px;
         font-weight: 700;
-        color: var(--write-ink);
+        color: #333333;
         background: transparent;
     }
 
     .write-title-input::placeholder {
-        color: #94a3b8;
+        color: #b0b0b0;
     }
 
     .write-title-input:focus {
@@ -221,24 +248,25 @@
         position: sticky;
         top: 60px;
         z-index: 1000;
-        background: rgba(255, 255, 255, 0.9);
-        backdrop-filter: blur(10px);
+        background: #ffffff;
         padding: 10px 0;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
     }
 
     .write-editor .ql-container {
         font-family: var(--write-font-body);
-        font-size: 18px;
+        font-size: 17px;
         line-height: 1.8;
     }
 
     .write-editor .ql-editor {
         padding: 0;
         min-height: 60vh;
+        color: #222222;
     }
 
     .write-editor .ql-editor p {
-        margin-bottom: 1.1em;
+        margin-bottom: 1.5em;
     }
 
     .write-editor .ql-editor.ql-blank::before {
@@ -255,6 +283,125 @@
 
     .write-editor .ql-tooltip .ql-picker-options {
         border-radius: 12px;
+    }
+
+    .write-editor .ql-snow.ql-toolbar button,
+    .write-editor .ql-snow .ql-toolbar button {
+        width: 36px;
+        height: 36px;
+        padding: 6px;
+    }
+
+    .write-editor .ql-snow.ql-toolbar button svg,
+    .write-editor .ql-snow .ql-toolbar button svg {
+        width: 18px;
+        height: 18px;
+    }
+
+    .write-editor .ql-toolbar .ql-formats {
+        margin-right: 16px;
+        padding-right: 16px;
+        border-right: 1px solid rgba(148, 163, 184, 0.3);
+    }
+
+    .write-editor .ql-toolbar .ql-formats:last-child {
+        margin-right: 0;
+        padding-right: 0;
+        border-right: none;
+    }
+
+    .drafts-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+    }
+
+    .drafts-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .draft-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        border: 1px solid transparent;
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 15px 14px 15px 18px;
+        text-align: left;
+        transition: background 0.2s ease, border-color 0.2s ease;
+        position: relative;
+    }
+
+    .draft-item-meta {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .draft-item:hover {
+        background: #f9f9f9;
+        border-color: #f0f0f0;
+    }
+
+    .draft-item-title {
+        font-weight: 600;
+        color: #111827;
+        margin-bottom: 4px;
+    }
+
+    .draft-item-time {
+        font-size: 0.85rem;
+        color: var(--write-muted);
+    }
+
+    .draft-item-delete {
+        border: none;
+        background: transparent;
+        color: #ef4444;
+        border-radius: 8px;
+        width: 32px;
+        height: 32px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.2s ease, transform 0.2s ease, opacity 0.2s ease;
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    .draft-item-delete:hover {
+        background: rgba(239, 68, 68, 0.12);
+        transform: translateY(-1px);
+    }
+
+    .draft-item-delete svg {
+        width: 16px;
+        height: 16px;
+    }
+
+    .draft-item:hover .draft-item-delete {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .draft-item.is-active {
+        background: #f9fafb;
+        border-color: #e5e7eb;
+    }
+
+    .draft-item.is-active::before {
+        content: "";
+        position: absolute;
+        left: 6px;
+        top: 10px;
+        bottom: 10px;
+        width: 3px;
+        border-radius: 999px;
+        background: var(--write-brand);
     }
 
     #math-input {
@@ -401,6 +548,10 @@
         .write-container {
             margin: 20px auto 0;
         }
+
+        .write-editor .ql-toolbar {
+            top: 120px;
+        }
     }
 
     @media (max-width: 576px) {
@@ -431,7 +582,9 @@
     <form method="post"
           enctype="multipart/form-data"
           data-role="write-form"
-          data-edit-base="{% url 'trading:community_write' %}">
+          data-edit-base="{% url 'trading:community_write' %}"
+          data-drafts-endpoint="{% url 'trading:community_drafts' %}"
+          data-delete-base="{% url 'trading:delete_post' post_id=0 %}">
         {% csrf_token %}
         <input type="hidden" name="action" value="publish" data-role="action-input">
         <input type="hidden" name="post_id" value="{{ draft_id }}" data-role="post-id">
@@ -441,7 +594,7 @@
                 <div class="write-topbar-left">
                     <a class="write-back" href="{% url 'trading:community' %}">
                         <span class="write-back-icon" aria-hidden="true">&larr;</span>
-                        <span>{% bilingual "Back" "返回" %}</span>
+                        <span class="visually-hidden">{% bilingual "Back" "返回" %}</span>
                     </a>
                 </div>
                 <div class="write-topbar-center">
@@ -454,6 +607,15 @@
                     </span>
                 </div>
                 <div class="write-topbar-right">
+                    <button type="button"
+                            class="write-drafts-btn"
+                            data-role="open-drafts"
+                            data-bs-toggle="offcanvas"
+                            data-bs-target="#draftsDrawer"
+                            aria-controls="draftsDrawer">
+                        <span class="write-drafts-icon" aria-hidden="true">📁</span>
+                        <span>{% bilingual "Drafts" "草稿箱" %}</span>
+                    </button>
                     <button type="submit" class="btn btn-primary write-publish-btn">
                         {% bilingual "Publish" "发布" %}
                     </button>
@@ -475,8 +637,8 @@
             {% endif %}
 
             <div class="write-title-wrap">
-                <label class="visually-hidden" for="write-title">{% bilingual "Title" "标题" %}</label>
-                <input id="write-title"
+                <label class="visually-hidden" for="post-title">{% bilingual "Title" "标题" %}</label>
+                <input id="post-title"
                        type="text"
                        name="title"
                        maxlength="200"
@@ -533,6 +695,27 @@
                         <span>{% bilingual "JPG or PNG, up to 5MB" "JPG 或 PNG，最大 5MB" %}</span>
                         <input id="write-cover" type="file" name="cover_image" accept="image/*" class="d-none">
                     </label>
+                </div>
+            </div>
+        </div>
+
+        <div class="offcanvas offcanvas-start" tabindex="-1" id="draftsDrawer" aria-labelledby="draftsDrawerLabel">
+            <div class="offcanvas-header">
+                <h5 class="offcanvas-title" id="draftsDrawerLabel">{% bilingual "Drafts" "草稿箱" %}</h5>
+                <button type="button"
+                        class="btn-close"
+                        data-bs-dismiss="offcanvas"
+                        aria-label="{% bilingual 'Close' '关闭' %}"></button>
+            </div>
+            <div class="offcanvas-body">
+                <div class="drafts-panel">
+                    <button type="button" class="btn btn-primary" data-role="draft-new">
+                        + {% bilingual "New article" "新建文章" %}
+                    </button>
+                    <div class="drafts-list" data-role="drafts-list"></div>
+                    <div class="text-muted small d-none" data-role="drafts-empty">
+                        {% bilingual "No drafts yet." "暂无草稿" %}
+                    </div>
                 </div>
             </div>
         </div>

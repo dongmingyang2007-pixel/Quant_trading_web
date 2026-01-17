@@ -11,7 +11,13 @@
     const titleInput = form.querySelector("input[name='title']");
     const editBase = form.dataset.editBase || "";
     const uploadUrl = form.dataset.uploadUrl || editorContainer?.dataset.uploadUrl || "";
+    const draftsEndpoint = form.dataset.draftsEndpoint || "";
+    const deleteBase = form.dataset.deleteBase || "";
     const csrfToken = form.querySelector("input[name='csrfmiddlewaretoken']")?.value || "";
+    const draftsDrawer = document.getElementById("draftsDrawer");
+    const draftsList = draftsDrawer?.querySelector("[data-role='drafts-list']");
+    const draftsEmpty = draftsDrawer?.querySelector("[data-role='drafts-empty']");
+    const draftNewBtn = draftsDrawer?.querySelector("[data-role='draft-new']");
 
     const statusMessages = {
         saving: statusEl?.dataset.savingText || "Saving draft...",
@@ -56,6 +62,28 @@
     };
 
     const resolveFormAction = () => form.getAttribute("action") || window.location.pathname;
+    const resolveDeleteUrl = (postId) => {
+        const base = deleteBase || "/community/delete/0/";
+        if (base.includes("/0/")) {
+            return base.replace(/\/0\/?$/, `/${postId}/`);
+        }
+        return `${base}${postId}/`;
+    };
+
+    const updateDraftUrl = (postId, replace = true) => {
+        const url = new URL(window.location.href);
+        if (postId) {
+            url.searchParams.set("id", postId);
+        } else {
+            url.searchParams.delete("id");
+        }
+        const newUrl = `${url.pathname}${url.search}`;
+        if (replace) {
+            window.history.replaceState(null, "", newUrl);
+        } else {
+            window.history.pushState(null, "", newUrl);
+        }
+    };
 
     const syncContent = () => {
         if (!quill || !contentInput) return;
@@ -164,9 +192,8 @@
             if (postIdInput && responseData.post_id) {
                 postIdInput.value = responseData.post_id;
             }
-            if (editBase && responseData.post_id && window.location.pathname === editBase) {
-                const base = editBase.endsWith("/") ? editBase : `${editBase}/`;
-                window.history.replaceState(null, "", `${base}${responseData.post_id}/`);
+            if (responseData.post_id) {
+                updateDraftUrl(responseData.post_id, true);
             }
             pendingSave = false;
             lastSavedSnapshot = snapshot;
@@ -250,6 +277,124 @@
             throw new Error("upload_failed");
         }
         return payload.url || payload.image_url || "";
+    };
+
+    const renderDrafts = (drafts) => {
+        if (!draftsList) return;
+        draftsList.innerHTML = "";
+        if (!drafts || drafts.length === 0) {
+            draftsEmpty?.classList.remove("d-none");
+            return;
+        }
+        draftsEmpty?.classList.add("d-none");
+        const currentDraftId = postIdInput?.value ? String(postIdInput.value) : "";
+        drafts.forEach((draft) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "draft-item";
+            button.dataset.draftId = draft.id;
+            if (currentDraftId && String(draft.id) === currentDraftId) {
+                button.classList.add("is-active");
+                button.setAttribute("aria-current", "true");
+            }
+
+            const meta = document.createElement("div");
+            meta.className = "draft-item-meta";
+
+            const title = document.createElement("div");
+            title.className = "draft-item-title";
+            title.textContent = draft.title?.trim() || "无标题草稿";
+
+            const time = document.createElement("div");
+            time.className = "draft-item-time";
+            time.textContent = draft.updated_at || "";
+
+            meta.appendChild(title);
+            meta.appendChild(time);
+            button.appendChild(meta);
+
+            const deleteBtn = document.createElement("button");
+            deleteBtn.type = "button";
+            deleteBtn.className = "draft-item-delete";
+            deleteBtn.setAttribute("aria-label", "删除草稿");
+            deleteBtn.innerHTML =
+                '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v8h-2V9zm4 0h2v8h-2V9zM7 9h2v8H7V9z" fill="currentColor"/></svg>';
+            deleteBtn.addEventListener("click", async (event) => {
+                event.stopPropagation();
+                if (!confirm("确定要永久删除这个草稿吗？")) return;
+                try {
+                    const response = await fetch(resolveDeleteUrl(draft.id), {
+                        method: "POST",
+                        headers: {
+                            "X-Requested-With": "XMLHttpRequest",
+                            "X-CSRFToken": getCsrfToken(),
+                            "Content-Type": "application/json",
+                        },
+                        credentials: "same-origin",
+                        body: JSON.stringify({}),
+                    });
+                    const payload = await response.json().catch(() => ({}));
+                    if (!response.ok || payload?.status !== "success") {
+                        throw new Error(payload?.message || `删除失败（${response.status}）`);
+                    }
+                    button.remove();
+                    if (!draftsList?.querySelector(".draft-item")) {
+                        draftsEmpty?.classList.remove("d-none");
+                    }
+                    if (postIdInput?.value && String(postIdInput.value) === String(draft.id)) {
+                        resetEditorForNewDoc();
+                    }
+                } catch (error) {
+                    alert(error.message || "删除失败，请稍后重试。");
+                }
+            });
+            button.appendChild(deleteBtn);
+
+            button.addEventListener("click", () => {
+                window.location.href = `?id=${encodeURIComponent(draft.id)}`;
+            });
+            draftsList.appendChild(button);
+        });
+    };
+
+    const loadDrafts = async () => {
+        if (!draftsEndpoint) return;
+        draftsList && (draftsList.innerHTML = "");
+        draftsEmpty?.classList.add("d-none");
+        try {
+            const response = await fetch(draftsEndpoint, {
+                headers: { "X-Requested-With": "XMLHttpRequest" },
+                credentials: "same-origin",
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(payload?.message || `加载草稿失败（${response.status}）`);
+            }
+            renderDrafts(payload.drafts || []);
+        } catch (error) {
+            if (draftsEmpty) {
+                draftsEmpty.textContent = error.message || "加载草稿失败。";
+                draftsEmpty.classList.remove("d-none");
+            }
+        }
+    };
+
+    const resetEditorForNewDoc = () => {
+        if (titleInput) titleInput.value = "";
+        if (contentInput) contentInput.value = "";
+        if (postIdInput) postIdInput.value = "";
+        draftsList?.querySelectorAll(".draft-item.is-active").forEach((item) => {
+            item.classList.remove("is-active");
+            item.removeAttribute("aria-current");
+        });
+        if (quill) {
+            quill.setContents([]);
+            quill.focus();
+        }
+        pendingSave = false;
+        lastSavedSnapshot = getSnapshot();
+        setStatus(statusMessages.saved);
+        updateDraftUrl("", false);
     };
 
     const handleImageFile = async (file) => {
@@ -373,6 +518,36 @@
             quill.on("text-change", () => updateToolbar(quill.getSelection()));
         }
 
+        if (toolbarModule?.container) {
+            const tooltipMap = {
+                "ql-bold": "加粗 (Ctrl+B)",
+                "ql-italic": "斜体 (Ctrl+I)",
+                "ql-header": "标题",
+                "ql-list": "列表",
+                "ql-image": "插入图片",
+                "ql-formula": "插入公式",
+                "ql-code-block": "代码块",
+            };
+            const applyTooltip = (selector, title) => {
+                toolbarModule.container.querySelectorAll(selector).forEach((el) => {
+                    if (!el.getAttribute("title")) {
+                        el.setAttribute("title", title);
+                    }
+                    if (window.bootstrap?.Tooltip) {
+                        new window.bootstrap.Tooltip(el, { container: "body" });
+                    }
+                });
+            };
+
+            applyTooltip(".ql-bold", tooltipMap["ql-bold"]);
+            applyTooltip(".ql-italic", tooltipMap["ql-italic"]);
+            applyTooltip(".ql-header .ql-picker-label", tooltipMap["ql-header"]);
+            applyTooltip(".ql-list", tooltipMap["ql-list"]);
+            applyTooltip(".ql-image", tooltipMap["ql-image"]);
+            applyTooltip(".ql-formula", tooltipMap["ql-formula"]);
+            applyTooltip(".ql-code-block", tooltipMap["ql-code-block"]);
+        }
+
         if (contentInput && contentInput.value) {
             const initialValue = contentInput.value.trim();
             if (initialValue) {
@@ -462,6 +637,22 @@
     if (saveDraftBtn) {
         saveDraftBtn.addEventListener("click", () => {
             saveDraft("manual");
+        });
+    }
+
+    if (draftsDrawer) {
+        draftsDrawer.addEventListener("shown.bs.offcanvas", () => {
+            loadDrafts();
+        });
+    }
+
+    if (draftNewBtn) {
+        draftNewBtn.addEventListener("click", () => {
+            resetEditorForNewDoc();
+            if (window.bootstrap?.Offcanvas) {
+                const instance = window.bootstrap.Offcanvas.getInstance(draftsDrawer);
+                instance?.hide();
+            }
         });
     }
 

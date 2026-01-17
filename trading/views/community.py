@@ -355,10 +355,13 @@ def write_post(request, post_id: int | None = None):
     topic_ids = {topic["topic_id"] for topic in topics}
 
     post = None
-    if post_id:
+    requested_id = request.GET.get("id") or post_id
+    if requested_id:
+        if isinstance(requested_id, str) and not requested_id.isdigit():
+            return redirect(reverse("trading:community"))
         post = (
             CommunityPostModel.objects.select_related("topic")
-            .filter(pk=post_id, author=user)
+            .filter(pk=requested_id, author=user)
             .first()
         )
         if not post:
@@ -495,6 +498,41 @@ def write_post(request, post_id: int | None = None):
             "post_error": error_message,
         },
     )
+
+
+@login_required
+def get_user_drafts(request):
+    drafts = (
+        CommunityPostModel.objects.filter(author=request.user, status=CommunityPostModel.STATUS_DRAFT)
+        .order_by("-updated_at")
+        .only("id", "title", "updated_at")
+    )
+    payload = [
+        {
+            "id": draft.pk,
+            "title": draft.title or "",
+            "updated_at": draft.updated_at.strftime("%Y-%m-%d %H:%M"),
+        }
+        for draft in drafts
+    ]
+    return JsonResponse({"status": "success", "drafts": payload})
+
+
+@login_required
+@require_POST
+def delete_post(request, post_id: int):
+    post = CommunityPostModel.objects.filter(pk=post_id).first()
+    if not post:
+        return JsonResponse({"status": "error", "message": "not_found"}, status=404)
+    if post.author_id != request.user.id:
+        return JsonResponse({"status": "error", "message": "forbidden"}, status=403)
+    if post.status != CommunityPostModel.STATUS_DRAFT:
+        return JsonResponse({"status": "error", "message": "not_draft"}, status=400)
+    try:
+        post.delete()
+    except Exception as exc:
+        return JsonResponse({"status": "error", "message": str(exc)}, status=500)
+    return JsonResponse({"status": "success"})
 
 
 @login_required
