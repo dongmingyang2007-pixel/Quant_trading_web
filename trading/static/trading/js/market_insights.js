@@ -12,6 +12,7 @@
   const listGainers = document.querySelector('[data-role="gainers"]');
   const listLosers = document.querySelector('[data-role="losers"]');
   const statusText = document.querySelector('[data-role="status-text"]');
+  const sourceText = document.querySelector('[data-role="source-text"]');
   const timeframeButtons = Array.prototype.slice.call(document.querySelectorAll('.market-timeframe'));
   const searchForm = document.getElementById('market-search-form');
   const searchInput = document.getElementById('market-search-input');
@@ -62,6 +63,13 @@
         typeaheadHint: '↑↓ 选择，Enter 跳转或加入自选列表',
         historyCleared: '最近检索已清空',
         historyDeleted: (symbol) => `已删除 ${symbol}`,
+        sourcePrefix: '数据来源：',
+        sourceLabels: {
+          alpaca: 'Alpaca',
+          yfinance: 'Yahoo Finance',
+          cache: '缓存',
+          unknown: '未知',
+        },
       }
     : {
         timeframes: { '1d': '1D', '5d': '5D', '1mo': '1M', '6mo': '6M' },
@@ -88,6 +96,13 @@
         typeaheadHint: 'Use ↑↓ to browse, Enter to open or add to watchlist',
         historyCleared: 'Recent searches cleared',
         historyDeleted: (symbol) => `Removed ${symbol}`,
+        sourcePrefix: 'Data source: ',
+        sourceLabels: {
+          alpaca: 'Alpaca',
+          yfinance: 'Yahoo Finance',
+          cache: 'Cache',
+          unknown: 'Unknown',
+        },
       };
 
   if (typeaheadHint) {
@@ -157,6 +172,14 @@
     if (statusText) {
       statusText.textContent = text;
     }
+  }
+
+  function setSource(sourceKey) {
+    if (!sourceText) return;
+    const labels = TEXT.sourceLabels || {};
+    const normalizedKey = sourceKey && labels[sourceKey] ? sourceKey : 'unknown';
+    const label = labels[normalizedKey] || labels.unknown || '';
+    sourceText.textContent = `${TEXT.sourcePrefix || ''}${label}`;
   }
 
   function clearListState(container) {
@@ -713,9 +736,11 @@
         statusMessage += ` · ${deletedText}`;
       }
       setStatus(statusMessage);
+      setSource(payload.data_source);
     } catch (error) {
       renderError(listGainers, error && error.message);
       setStatus(TEXT.statusError);
+      setSource('unknown');
       hideChipSkeleton(recentChips);
       hideChipSkeleton(watchlistChips);
     }

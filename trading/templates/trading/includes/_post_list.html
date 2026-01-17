@@ -62,12 +62,20 @@
                         class="community-action-btn{% if post.liked %} is-active{% endif %}"
                         data-role="like-button"
                         data-liked="{{ post.liked|yesno:'1,0' }}">
-                    <span class="action-icon">❤️</span>
+                    <span class="action-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M12.1 20.4l-1.1-1.0C6 15 3 12.2 3 8.9 3 6.6 4.8 4.8 7.1 4.8c1.4 0 2.8 0.7 3.6 1.9 0.8-1.2 2.2-1.9 3.6-1.9 2.3 0 4.1 1.8 4.1 4.1 0 3.3-3 6.1-8 10.5l-1.1 1.0z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </span>
                     <span class="action-label">{% bilingual "Like" "赞" %}</span>
                     <span class="action-count" data-role="like-count">{{ post.like_count }}</span>
                 </button>
                 <button type="button" class="community-action-btn" data-role="toggle-comments">
-                    <span class="action-icon">💬</span>
+                    <span class="action-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M4.5 6.5h15a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H9l-4.5 3v-3H4.5a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </span>
                     <span class="action-label">{% bilingual "Comment" "评论" %}</span>
                     <span class="action-count" data-role="comment-count">{{ post.comment_count }}</span>
                 </button>

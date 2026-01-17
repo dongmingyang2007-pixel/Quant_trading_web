@@ -31,6 +31,12 @@
     const pickImageBtn = composerForm?.querySelector("[data-role='pick-image']");
     const replaceImageBtn = composerForm?.querySelector("[data-role='replace-image']");
     const removeImageBtn = composerForm?.querySelector("[data-role='remove-image']");
+    const mathModal = document.getElementById("mathModal");
+    const mathField = mathModal?.querySelector("#math-input");
+    const mathInsertBtn = mathModal?.querySelector("[data-role='math-insert']");
+    let mathModalInstance = null;
+    const langAttr = (document.documentElement.getAttribute("lang") || "zh").toLowerCase();
+    const langIsZh = langAttr.indexOf("zh") === 0;
 
     const cropperModal = document.querySelector("[data-role='cropper-modal']");
     const cropperImage = cropperModal?.querySelector("[data-role='crop-image']");
@@ -273,23 +279,86 @@
         mediaPlaceholder.classList.add("d-none");
     };
 
+    const clearMathField = () => {
+        if (!mathField) return;
+        if (typeof mathField.setValue === "function") {
+            mathField.setValue("");
+        } else {
+            mathField.value = "";
+        }
+    };
+
+    const getMathLatex = () => {
+        if (!mathField) return "";
+        if (typeof mathField.getValue === "function") {
+            return (mathField.getValue("latex") || "").trim();
+        }
+        return (mathField.value || "").trim();
+    };
+
+    const getMathModalInstance = () => {
+        if (!mathModal || !window.bootstrap) return null;
+        if (!mathModalInstance) {
+            mathModalInstance = window.bootstrap.Modal.getOrCreateInstance(mathModal);
+        }
+        return mathModalInstance;
+    };
+
+    const showMathModal = () => {
+        if (!mathModal) return;
+        clearMathField();
+        const modal = getMathModalInstance();
+        if (modal) {
+            modal.show();
+        } else {
+            mathModal.classList.add("show");
+            mathModal.style.display = "block";
+            mathModal.removeAttribute("aria-hidden");
+        }
+    };
+
+    const hideMathModal = () => {
+        if (!mathModal) return;
+        const modal = getMathModalInstance();
+        if (modal) {
+            modal.hide();
+        } else {
+            mathModal.classList.remove("show");
+            mathModal.style.display = "none";
+            mathModal.setAttribute("aria-hidden", "true");
+        }
+    };
+
     const initEditor = () => {
         if (!editorContainer || !window.Quill) return;
         const placeholder = editorContainer.dataset.placeholder || "分享你的策略灵感或市场观察...";
+        const toolbarConfig = {
+            container: [
+                ["bold", "italic", "underline"],
+                [{ size: ["small", false, "large", "huge"] }],
+                [{ color: [] }, { background: [] }],
+                [{ list: "ordered" }, { list: "bullet" }],
+                ["blockquote", "math"],
+                ["clean"],
+            ],
+            handlers: {
+                math: () => showMathModal(),
+            },
+        };
         quill = new window.Quill(editorContainer, {
             theme: "snow",
             placeholder,
             modules: {
-                toolbar: [
-                    ["bold", "italic", "underline"],
-                    [{ size: ["small", false, "large", "huge"] }],
-                    [{ color: [] }, { background: [] }],
-                    [{ list: "ordered" }, { list: "bullet" }],
-                    ["blockquote", "formula"],
-                    ["clean"],
-                ],
+                toolbar: toolbarConfig,
             },
         });
+        const toolbar = quill.getModule("toolbar");
+        const mathButton = toolbar?.container?.querySelector(".ql-math");
+        if (mathButton) {
+            mathButton.innerHTML = "Σ";
+            mathButton.setAttribute("type", "button");
+            mathButton.setAttribute("aria-label", langIsZh ? "插入公式" : "Insert formula");
+        }
         if (contentTextarea && contentTextarea.value) {
             const initialValue = contentTextarea.value.trim();
             if (initialValue) {
@@ -313,6 +382,37 @@
             if (!quill || !contentTextarea) return;
             const html = quill.root.innerHTML;
             contentTextarea.value = html === "<p><br></p>" ? "" : html;
+        });
+    }
+
+    if (mathModal) {
+        mathModal.addEventListener("shown.bs.modal", () => {
+            if (mathField && typeof mathField.focus === "function") {
+                mathField.focus();
+            }
+        });
+        mathModal.addEventListener("hidden.bs.modal", () => {
+            if (quill) {
+                quill.focus();
+            }
+        });
+    }
+
+    if (mathInsertBtn) {
+        mathInsertBtn.addEventListener("click", () => {
+            if (!quill) return;
+            const latex = getMathLatex();
+            if (!latex) return;
+            const range = quill.getSelection(true);
+            const index = range ? range.index : quill.getLength();
+            if (window.katex && typeof quill.insertEmbed === "function") {
+                quill.insertEmbed(index, "formula", latex, "user");
+                quill.setSelection(index + 1, 0, "silent");
+            } else {
+                quill.insertText(index, latex, "user");
+                quill.setSelection(index + latex.length, 0, "silent");
+            }
+            hideMathModal();
         });
     }
 

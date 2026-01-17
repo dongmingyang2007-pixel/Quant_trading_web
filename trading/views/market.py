@@ -251,6 +251,7 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         symbols = TOP_SYMBOLS
 
     future = None
+    data_source = "unknown"
     try:
         with track_latency(
             "market.insights.fetch",
@@ -265,7 +266,7 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                 resolved.timeframe,
                 user_id=str(request.user.id),
             )
-            series_map = future.result(timeout=MARKET_REQUEST_TIMEOUT)
+            series_map, data_source = future.result(timeout=MARKET_REQUEST_TIMEOUT)
     except FuturesTimeout:
         if future:
             future.cancel()
@@ -320,6 +321,7 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         },
         # Use timezone.utc for Python 3.13 compatibility (datetime.UTC removed)
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "data_source": data_source or "unknown",
         "query": resolved.query,
         "gainers": gainers,
         "losers": losers,
@@ -346,10 +348,10 @@ def _download_history(
     timeframe: Timeframe,
     *,
     user_id: str | None = None,
-) -> dict[str, pd.Series]:
+) -> tuple[dict[str, pd.Series], str]:
     unique = [sym for sym in dict.fromkeys(symbols) if sym]
     if not unique:
-        return {}
+        return {}, "unknown"
 
     history: dict[str, pd.Series] = {}
     data = market_data.fetch(
@@ -362,25 +364,50 @@ def _download_history(
         cache_alias=getattr(settings, "MARKET_HISTORY_CACHE_ALIAS", None),
         user_id=user_id,
     )
+    source = _infer_market_source(data)
+
+    def _extract_panel(frame: pd.DataFrame) -> pd.DataFrame:
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            return pd.DataFrame()
+        for field in ("Adj Close", "Close"):
+            for level in (0, 1):
+                try:
+                    panel = frame.xs(field, level=level, axis=1)
+                except Exception:
+                    continue
+                if isinstance(panel, pd.Series):
+                    panel = panel.to_frame()
+                if isinstance(panel, pd.DataFrame) and not panel.empty:
+                    return panel
+        return pd.DataFrame()
 
     try:
         if isinstance(data.columns, pd.MultiIndex):
-            for sym in unique:
-                try:
-                    close = data[sym]["Close"].dropna()
-                    if not close.empty:
-                        history[sym] = close
-                except Exception:
-                    continue
+            panel = _extract_panel(data)
+            if not panel.empty:
+                for sym in unique:
+                    try:
+                        close = panel.get(sym)
+                        if isinstance(close, pd.Series):
+                            close = close.dropna()
+                            if not close.empty:
+                                history[sym] = close
+                    except Exception:
+                        continue
         else:
-            close = data.get("Close") if isinstance(data, pd.DataFrame) else None
+            close = None
+            if isinstance(data, pd.DataFrame):
+                if "Adj Close" in data.columns:
+                    close = data.get("Adj Close")
+                else:
+                    close = data.get("Close")
             if isinstance(close, pd.Series):
                 close = close.dropna()
                 if not close.empty:
                     history[unique[0]] = close
     except Exception:
         pass
-    return history
+    return history, source
 
 
 def _fetch_history(
@@ -388,13 +415,37 @@ def _fetch_history(
     timeframe: Timeframe,
     *,
     user_id: str | None = None,
-) -> dict[str, pd.Series]:
+) -> tuple[dict[str, pd.Series], str]:
     cache_key = build_cache_key("market-history", timeframe.key, sorted(symbols))
-    return cache_memoize(
+    result = cache_memoize(
         cache_key,
         lambda: _download_history(symbols, timeframe, user_id=user_id),
         getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
-    ) or {}
+    )
+    if isinstance(result, tuple) and len(result) == 2:
+        series_map, source = result
+        return series_map or {}, source or "unknown"
+    if isinstance(result, dict):
+        return result, "unknown"
+    return {}, "unknown"
+
+
+def _infer_market_source(data: pd.DataFrame | None) -> str:
+    fields = {"Open", "High", "Low", "Close", "Adj Close", "Volume"}
+    if not isinstance(data, pd.DataFrame) or data.empty:
+        return "unknown"
+    columns = data.columns
+    if isinstance(columns, pd.MultiIndex):
+        level0 = set(columns.get_level_values(0))
+        if level0 & fields:
+            return "alpaca"
+        level1 = set(columns.get_level_values(1))
+        if level1 & fields:
+            return "yfinance"
+        return "unknown"
+    if set(columns) & fields:
+        return "yfinance"
+    return "unknown"
 
 
 def _rank_symbols(
