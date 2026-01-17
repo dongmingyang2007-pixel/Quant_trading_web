@@ -18,6 +18,13 @@
     const draftsList = draftsDrawer?.querySelector("[data-role='drafts-list']");
     const draftsEmpty = draftsDrawer?.querySelector("[data-role='drafts-empty']");
     const draftNewBtn = draftsDrawer?.querySelector("[data-role='draft-new']");
+    const coverInput = form.querySelector("[data-role='cover-input']");
+    const coverPreview = form.querySelector("[data-role='cover-preview']");
+    const coverImage = form.querySelector("[data-role='cover-image']");
+    const coverPlaceholder = form.querySelector("[data-role='cover-placeholder']");
+    const coverPickers = form.querySelectorAll("[data-role='cover-picker'], [data-role='cover-change']");
+    const coverRemoveBtn = form.querySelector("[data-role='cover-remove']");
+    const wordCountEl = form.querySelector("[data-role='word-count']");
 
     const statusMessages = {
         saving: statusEl?.dataset.savingText || "Saving draft...",
@@ -28,6 +35,8 @@
     const mathModal = document.getElementById("mathModal");
     const mathField = mathModal?.querySelector("#math-input");
     const mathInsertBtn = mathModal?.querySelector("[data-role='math-insert']");
+    const mathCancelBtn = mathModal?.querySelector("[data-role='math-cancel']");
+    const mathCloseBtn = mathModal?.querySelector("[data-role='math-close']");
     let mathModalInstance = null;
     let lastFormulaRange = null;
 
@@ -41,6 +50,7 @@
     let lastSavedSnapshot = "";
     let autoSaveTimer = null;
     let intervalId = null;
+    let coverObjectUrl = "";
 
     const getCookie = (name) => {
         if (!document.cookie) return "";
@@ -95,6 +105,56 @@
         statusEl.textContent = message || "";
     };
 
+    const countWords = (text) => {
+        const normalized = (text || "").replace(/\s+/g, " ").trim();
+        if (!normalized) return 0;
+        const cjkMatches = normalized.match(/[\u4E00-\u9FFF]/g) || [];
+        const wordMatches = normalized.match(/[A-Za-z0-9_'-]+/g) || [];
+        if (cjkMatches.length || wordMatches.length) {
+            return cjkMatches.length + wordMatches.length;
+        }
+        return normalized.split(" ").filter(Boolean).length;
+    };
+
+    const updateWordCount = () => {
+        if (!wordCountEl) return;
+        const text = quill ? quill.getText() : contentInput?.value || "";
+        const count = countWords(text);
+        const label = wordCountEl.dataset.label || "Words";
+        wordCountEl.textContent = `${label} ${count}`;
+    };
+
+    const clearCoverPreview = () => {
+        if (!coverPreview || !coverPlaceholder || !coverImage) return;
+        if (coverObjectUrl) {
+            URL.revokeObjectURL(coverObjectUrl);
+            coverObjectUrl = "";
+        }
+        coverImage.removeAttribute("src");
+        coverPreview.classList.add("d-none");
+        coverPlaceholder.classList.remove("d-none");
+        if (coverInput) {
+            coverInput.value = "";
+        }
+    };
+
+    const showCoverPreview = (file) => {
+        if (!coverPreview || !coverPlaceholder || !coverImage || !file) return;
+        if (coverObjectUrl) {
+            URL.revokeObjectURL(coverObjectUrl);
+        }
+        coverObjectUrl = URL.createObjectURL(file);
+        coverImage.src = coverObjectUrl;
+        coverPreview.classList.remove("d-none");
+        coverPlaceholder.classList.add("d-none");
+    };
+
+    const openCoverPicker = () => {
+        if (coverInput) {
+            coverInput.click();
+        }
+    };
+
     const showMathModal = () => {
         if (!mathModal) return;
         if (quill) {
@@ -120,9 +180,25 @@
         }
     };
 
+    const hideMathKeyboard = () => {
+        if (mathField && typeof mathField.executeCommand === "function") {
+            try {
+                mathField.executeCommand("hideVirtualKeyboard");
+            } catch (error) {
+                // Ignore MathLive command errors and fall back to global API.
+            }
+        }
+        if (window.mathVirtualKeyboard?.hide) {
+            window.mathVirtualKeyboard.hide();
+        }
+    };
+
     const hideMathModal = () => {
+        hideMathKeyboard();
         if (mathModalInstance) {
             mathModalInstance.hide();
+        } else if (mathModal) {
+            mathModal.setAttribute("aria-hidden", "true");
         }
     };
 
@@ -394,6 +470,7 @@
         pendingSave = false;
         lastSavedSnapshot = getSnapshot();
         setStatus(statusMessages.saved);
+        updateWordCount();
         updateDraftUrl("", false);
     };
 
@@ -451,7 +528,95 @@
     };
 
     const initEditor = () => {
-        if (!window.Quill || !editorContainer) return;
+        if (!window.Quill || !editorContainer) {
+            updateWordCount();
+            return;
+        }
+        if (window.hljs && typeof window.hljs.configure === "function") {
+            window.hljs.configure({ languages: ["python"] });
+        }
+        const BlockEmbed = window.Quill.import("blots/embed");
+
+        class BacktestCard extends BlockEmbed {
+            static create(value) {
+                const node = super.create();
+                const payload = value || {};
+                const recordId = String(payload.id || "").trim();
+                const name = payload.name || "Backtest Strategy";
+                const totalReturn = payload.return || "--";
+
+                node.setAttribute("contenteditable", "false");
+                node.dataset.id = recordId;
+                node.dataset.name = name;
+                node.dataset.return = totalReturn;
+
+                const top = document.createElement("div");
+                top.className = "backtest-card-top";
+
+                const icon = document.createElement("div");
+                icon.className = "backtest-card-icon";
+                icon.setAttribute("aria-hidden", "true");
+                icon.innerHTML =
+                    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h16v2H2V3h2v16zm4-2H6V9h2v8zm5 0h-2V5h2v12zm5 0h-2v-6h2v6z" fill="currentColor"/></svg>';
+
+                const title = document.createElement("div");
+                title.className = "backtest-card-title";
+                title.textContent = name;
+
+                top.appendChild(icon);
+                top.appendChild(title);
+
+                const metric = document.createElement("div");
+                metric.className = "backtest-card-metric";
+
+                const label = document.createElement("span");
+                label.className = "backtest-card-label";
+                label.textContent = "Total Return";
+
+                const valueEl = document.createElement("span");
+                valueEl.className = "backtest-card-value";
+                valueEl.textContent = totalReturn;
+
+                metric.appendChild(label);
+                metric.appendChild(valueEl);
+
+                node.appendChild(top);
+                node.appendChild(metric);
+                return node;
+            }
+
+            static value(node) {
+                return {
+                    id: node.dataset.id || "",
+                    name: node.dataset.name || "",
+                    return: node.dataset.return || "",
+                };
+            }
+        }
+
+        BacktestCard.blotName = "backtestCard";
+        BacktestCard.tagName = "div";
+        BacktestCard.className = "backtest-embed-card";
+
+        window.Quill.register(BacktestCard, true);
+
+        const mockBacktests = {
+            "bt-001": { id: "bt-001", name: "Momentum Breakout", return: "25.5%" },
+            "bt-002": { id: "bt-002", name: "Mean Reversion", return: "12.3%" },
+            "bt-003": { id: "bt-003", name: "Pairs Arbitrage", return: "8.7%" },
+        };
+
+        const resolveBacktest = (recordId) => {
+            const id = (recordId || "").trim();
+            if (!id) return null;
+            return (
+                mockBacktests[id] || {
+                    id,
+                    name: `Backtest ${id}`,
+                    return: "--",
+                }
+            );
+        };
         const fontWhitelist = ["SimSun", "SimHei", "Microsoft-YaHei", "Arial", "Times-New-Roman"];
         const sizeWhitelist = ["12px", "14px", "16px", "18px", "20px", "24px", "30px", "36px"];
         const Font = window.Quill.import("formats/font");
@@ -466,10 +631,28 @@
             '<svg viewBox="0 0 18 18"><path d="M7.5 4.5H3.75V2L0 5.75 3.75 9.5V7h3.75a3.75 3.75 0 1 1 0 7.5H6v1.5h1.5a5.25 5.25 0 0 0 0-10.5z"/></svg>';
         icons.redo =
             '<svg viewBox="0 0 18 18"><path d="M10.5 4.5h3.75V2L18 5.75 14.25 9.5V7H10.5a3.75 3.75 0 1 0 0 7.5H12v1.5h-1.5a5.25 5.25 0 0 1 0-10.5z"/></svg>';
+        icons.backtest =
+            '<svg viewBox="0 0 24 24"><path d="M4 19h16v2H2V3h2v16zm4-2H6V9h2v8zm5 0h-2V5h2v12zm5 0h-2v-6h2v6z" fill="currentColor"/></svg>';
 
-        if (window.ImageResize) {
-            window.Quill.register("modules/imageResize", window.ImageResize);
-        }
+        const resolveImageResizeModule = () => {
+            if (!window.Quill?.import) return null;
+            try {
+                const existing = window.Quill.import("modules/imageResize");
+                if (typeof existing === "function") {
+                    return existing;
+                }
+            } catch (error) {
+                // Ignore missing module and fall back to global export.
+            }
+            const candidate = window.ImageResize?.default || window.ImageResize;
+            if (typeof candidate === "function") {
+                window.Quill.register("modules/imageResize", candidate);
+                return candidate;
+            }
+            return null;
+        };
+
+        const imageResizeModule = resolveImageResizeModule();
         const placeholder =
             "开始写作...（选中文字可弹出快捷菜单，连按回车可跳出代码块）";
         const bounds = editorContainer.closest(".write-container") || editorContainer;
@@ -480,10 +663,11 @@
             [{ header: 1 }, { header: 2 }],
             [{ list: "ordered" }, { list: "bullet" }, { indent: "-1" }, { indent: "+1" }],
             [{ align: [] }],
-            ["link", "image", "video", "formula"],
+            ["link", "image", "video", "formula", "backtest"],
             ["clean"],
         ];
         const modules = {
+            syntax: true,
             formula: true,
             history: {
                 delay: 1000,
@@ -501,10 +685,20 @@
                     },
                     image: () => pickImageFile(),
                     formula: () => showMathModal(),
+                    backtest: () => {
+                        if (!quill) return;
+                        const recordId = window.prompt("Enter Backtest Record ID", "bt-001");
+                        if (!recordId) return;
+                        const payload = resolveBacktest(recordId);
+                        if (!payload) return;
+                        const range = quill.getSelection(true) || { index: quill.getLength(), length: 0 };
+                        quill.insertEmbed(range.index, "backtestCard", payload, "user");
+                        quill.setSelection(range.index + 1, 0, "silent");
+                    },
                 },
             },
         };
-        if (window.ImageResize) {
+        if (imageResizeModule) {
             modules.imageResize = {
                 modules: ["Resize", "DisplaySize", "Toolbar"],
             };
@@ -560,6 +754,7 @@
                 "ql-list": "列表",
                 "ql-image": "插入图片",
                 "ql-formula": "插入公式",
+                "ql-backtest": "插入回测卡片",
                 "ql-code-block": "代码块",
             };
             const applyTooltip = (selector, title) => {
@@ -580,6 +775,7 @@
             applyTooltip(".ql-list", tooltipMap["ql-list"]);
             applyTooltip(".ql-image", tooltipMap["ql-image"]);
             applyTooltip(".ql-formula", tooltipMap["ql-formula"]);
+            applyTooltip(".ql-backtest", tooltipMap["ql-backtest"]);
             applyTooltip(".ql-code-block", tooltipMap["ql-code-block"]);
         }
 
@@ -595,9 +791,11 @@
         }
 
         lastSavedSnapshot = getSnapshot();
+        updateWordCount();
 
         quill.on("text-change", () => {
             markDirty();
+            updateWordCount();
         });
 
         quill.root.addEventListener("drop", (event) => {
@@ -633,9 +831,7 @@
             }
         });
         mathModal.addEventListener("hidden.bs.modal", () => {
-            if (window.mathVirtualKeyboard?.hide) {
-                window.mathVirtualKeyboard.hide();
-            }
+            hideMathKeyboard();
             if (quill) {
                 quill.focus();
             }
@@ -644,6 +840,7 @@
 
     if (mathInsertBtn) {
         mathInsertBtn.addEventListener("click", () => {
+            hideMathKeyboard();
             if (!quill || !mathField) return;
             const latex = (mathField.value || "").trim();
             if (!latex) return;
@@ -656,8 +853,48 @@
         });
     }
 
+    if (mathCancelBtn) {
+        mathCancelBtn.addEventListener("click", () => {
+            hideMathKeyboard();
+        });
+    }
+
+    if (mathCloseBtn) {
+        mathCloseBtn.addEventListener("click", () => {
+            hideMathKeyboard();
+        });
+    }
+
     if (titleInput) {
         titleInput.addEventListener("input", markDirty);
+    }
+
+    if (coverPickers.length) {
+        coverPickers.forEach((button) => {
+            button.addEventListener("click", openCoverPicker);
+        });
+    }
+
+    if (coverInput) {
+        coverInput.addEventListener("change", () => {
+            const file = coverInput.files && coverInput.files[0];
+            if (!file) {
+                clearCoverPreview();
+                return;
+            }
+            if (!file.type || !file.type.startsWith("image/")) {
+                alert("请选择图片文件。");
+                coverInput.value = "";
+                return;
+            }
+            showCoverPreview(file);
+        });
+    }
+
+    if (coverRemoveBtn) {
+        coverRemoveBtn.addEventListener("click", () => {
+            clearCoverPreview();
+        });
     }
 
     form.querySelectorAll("input[name='topic'], select[name='topic']").forEach((el) => {
@@ -703,6 +940,10 @@
         }
         if (intervalId) {
             window.clearInterval(intervalId);
+        }
+        if (coverObjectUrl) {
+            URL.revokeObjectURL(coverObjectUrl);
+            coverObjectUrl = "";
         }
     });
 })();

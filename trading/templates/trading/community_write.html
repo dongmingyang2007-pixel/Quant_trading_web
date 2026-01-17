@@ -7,11 +7,13 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Source+Sans+3:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
 <link rel="stylesheet" href="https://unpkg.com/mathlive/dist/mathlive.core.css">
 <link rel="stylesheet" href="https://unpkg.com/mathlive/dist/mathlive.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.snow.css">
 <link rel="stylesheet" href="{% static 'trading/css/community.css' %}">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" nonce="{{ csp_nonce }}" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" nonce="{{ csp_nonce }}" defer></script>
 <script src="https://unpkg.com/mathlive" nonce="{{ csp_nonce }}" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.min.js" nonce="{{ csp_nonce }}" defer></script>
@@ -177,7 +179,7 @@
         background: #ffffff;
         border-radius: 18px;
         padding: clamp(28px, 5vw, 48px);
-        border: 1px solid #f0f0f0;
+        border: none;
         box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
         animation: write-fade-in 0.6s ease both;
     }
@@ -217,7 +219,7 @@
         border: none;
         padding: 16px 0;
         margin-bottom: 0;
-        font-family: var(--write-font-body);
+        font-family: var(--write-font-title);
         font-size: 40px;
         font-weight: 700;
         color: #333333;
@@ -233,6 +235,106 @@
         box-shadow: none;
     }
 
+    .write-cover-hero {
+        margin-bottom: 28px;
+    }
+
+    .write-cover-placeholder {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .write-cover-button {
+        border: 1px dashed rgba(148, 163, 184, 0.6);
+        background: rgba(248, 250, 252, 0.9);
+        color: var(--write-ink);
+        font-weight: 600;
+        padding: 10px 18px;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+    }
+
+    .write-cover-button:hover,
+    .write-cover-button:focus {
+        border-color: rgba(37, 99, 235, 0.5);
+        box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+        transform: translateY(-1px);
+    }
+
+    .write-cover-button:focus-visible {
+        outline: 2px solid rgba(37, 99, 235, 0.4);
+        outline-offset: 2px;
+    }
+
+    .write-cover-hint {
+        font-size: 0.88rem;
+        color: var(--write-muted);
+    }
+
+    .write-cover-preview {
+        position: relative;
+        border-radius: 20px;
+        overflow: hidden;
+        box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
+    }
+
+    .write-cover-image {
+        width: 100%;
+        height: clamp(200px, 30vw, 320px);
+        object-fit: cover;
+        display: block;
+    }
+
+    .write-cover-overlay {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: flex-start;
+        justify-content: flex-end;
+        gap: 10px;
+        padding: 16px;
+        background: linear-gradient(180deg, rgba(15, 23, 42, 0.45), rgba(15, 23, 42, 0));
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
+    }
+
+    .write-cover-preview:hover .write-cover-overlay,
+    .write-cover-preview:focus-within .write-cover-overlay {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .write-cover-action {
+        border: none;
+        background: rgba(15, 23, 42, 0.7);
+        color: #ffffff;
+        padding: 8px 14px;
+        border-radius: 999px;
+        font-weight: 600;
+        transition: background 0.2s ease;
+    }
+
+    .write-cover-action:hover,
+    .write-cover-action:focus {
+        background: rgba(15, 23, 42, 0.85);
+    }
+
+    .write-cover-remove {
+        background: rgba(239, 68, 68, 0.85);
+    }
+
+    .write-cover-remove:hover,
+    .write-cover-remove:focus {
+        background: rgba(220, 38, 38, 0.9);
+    }
+
     .write-editor {
         margin-top: 12px;
     }
@@ -241,7 +343,6 @@
         min-height: 60vh;
     }
 
-    .write-editor .ql-toolbar,
     .write-editor .ql-container {
         border: none !important;
     }
@@ -250,14 +351,25 @@
         position: sticky;
         top: 60px;
         z-index: 1000;
-        background: #ffffff;
-        padding: 10px 0;
-        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 6px;
+        width: fit-content;
+        max-width: 100%;
+        background: rgba(255, 255, 255, 0.86);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        border-radius: 999px;
+        padding: 8px 14px;
+        margin: 0 auto 18px;
+        box-shadow: 0 16px 32px rgba(15, 23, 42, 0.12);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
     }
 
     .write-editor .ql-container {
         font-family: var(--write-font-body);
-        font-size: 17px;
+        font-size: 18px;
         line-height: 1.8;
     }
 
@@ -271,10 +383,82 @@
         margin-bottom: 1.5em;
     }
 
+    .write-editor .ql-editor pre,
+    .write-editor .ql-editor .ql-syntax {
+        background: #282c34;
+        border-radius: 12px;
+        padding: 14px 16px;
+        color: #abb2bf;
+    }
+
     .write-editor .ql-editor.ql-blank::before {
         left: 0;
         color: rgba(100, 116, 139, 0.7);
         font-style: italic;
+    }
+
+    .backtest-embed-card {
+        margin: 20px 0;
+        padding: 18px 20px;
+        border-radius: 14px;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        border-left: 6px solid var(--write-brand);
+        background: linear-gradient(135deg, #f8fafc, #eef2f7);
+        box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .backtest-card-top {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .backtest-card-icon {
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        background: rgba(37, 99, 235, 0.12);
+        color: var(--write-brand);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .backtest-card-icon svg {
+        width: 18px;
+        height: 18px;
+    }
+
+    .backtest-card-title {
+        font-weight: 700;
+        color: #0f172a;
+        font-size: 1.05rem;
+    }
+
+    .backtest-card-metric {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 8px 12px;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.75);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        font-family: "SFMono-Regular", "Menlo", "Consolas", "Liberation Mono", monospace;
+    }
+
+    .backtest-card-label {
+        color: var(--write-muted);
+        font-size: 0.85rem;
+    }
+
+    .backtest-card-value {
+        font-weight: 700;
+        color: #0f172a;
+        font-size: 1rem;
     }
 
     .write-editor .ql-snow .ql-picker.ql-font .ql-picker-label[data-value="SimSun"]::before,
@@ -391,9 +575,9 @@
     }
 
     .write-editor .ql-toolbar .ql-formats {
-        margin-right: 16px;
-        padding-right: 16px;
-        border-right: 1px solid rgba(148, 163, 184, 0.3);
+        margin-right: 12px;
+        padding-right: 12px;
+        border-right: 1px solid rgba(148, 163, 184, 0.2);
     }
 
     .write-editor .ql-toolbar .ql-formats:last-child {
@@ -505,6 +689,23 @@
         font-size: 1.1rem;
     }
 
+    #mathModal {
+        z-index: 1990;
+    }
+
+    #mathModal .modal-dialog {
+        margin-bottom: 300px;
+        max-height: calc(100vh - 350px);
+    }
+
+    #mathModal .modal-content {
+        max-height: calc(100vh - 350px);
+    }
+
+    #mathModal .modal-body {
+        overflow-y: auto;
+    }
+
     .ML__keyboard {
         z-index: 2000 !important;
     }
@@ -522,6 +723,22 @@
         color: var(--write-muted);
         font-size: 0.9rem;
         margin-bottom: 16px;
+    }
+
+    .write-word-count {
+        position: fixed;
+        right: 24px;
+        bottom: 24px;
+        z-index: 1020;
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-size: 0.85rem;
+        color: var(--write-muted);
+        background: rgba(255, 255, 255, 0.75);
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
     }
 
     .write-pill-group {
@@ -551,36 +768,6 @@
         color: #ffffff;
         border-color: rgba(37, 99, 235, 0.4);
         box-shadow: 0 8px 18px rgba(37, 99, 235, 0.25);
-    }
-
-    .write-cover-drop {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        align-items: center;
-        justify-content: center;
-        text-align: center;
-        padding: 28px 16px;
-        border-radius: 16px;
-        border: 1px dashed rgba(148, 163, 184, 0.6);
-        background: rgba(248, 250, 252, 0.9);
-        cursor: pointer;
-        transition: border-color 0.2s ease, box-shadow 0.2s ease;
-    }
-
-    .write-cover-drop:hover {
-        border-color: rgba(37, 99, 235, 0.5);
-        box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
-    }
-
-    .write-cover-drop strong {
-        font-size: 1rem;
-        color: var(--write-ink);
-    }
-
-    .write-cover-drop span {
-        font-size: 0.88rem;
-        color: var(--write-muted);
     }
 
     @keyframes write-fade-in {
@@ -650,6 +837,15 @@
         .write-container {
             border-radius: 18px;
             margin: 16px 12px 0;
+        }
+
+        .write-cover-image {
+            height: clamp(180px, 45vw, 240px);
+        }
+
+        .write-word-count {
+            right: 12px;
+            bottom: 16px;
         }
 
         .write-title-input {
@@ -727,6 +923,37 @@
                 <div class="alert alert-danger write-alert">{{ post_error }}</div>
             {% endif %}
 
+            <div class="write-cover-hero" data-role="cover-hero">
+                <input id="write-cover"
+                       type="file"
+                       name="cover_image"
+                       accept="image/*"
+                       class="d-none"
+                       data-role="cover-input">
+                <div class="write-cover-placeholder" data-role="cover-placeholder">
+                    <button type="button" class="write-cover-button" data-role="cover-picker">
+                        <span aria-hidden="true">+</span>
+                        <span>{% bilingual "Add Cover Image" "添加封面图" %}</span>
+                    </button>
+                    <span class="write-cover-hint">
+                        {% bilingual "JPG or PNG, up to 5MB" "JPG 或 PNG，最大 5MB" %}
+                    </span>
+                </div>
+                <div class="write-cover-preview d-none" data-role="cover-preview">
+                    <img class="write-cover-image"
+                         data-role="cover-image"
+                         alt="{% bilingual 'Cover image preview' '封面预览' %}">
+                    <div class="write-cover-overlay">
+                        <button type="button" class="write-cover-action" data-role="cover-change">
+                            {% bilingual "Change" "更换" %}
+                        </button>
+                        <button type="button" class="write-cover-action write-cover-remove" data-role="cover-remove">
+                            {% bilingual "Remove" "移除" %}
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <div class="write-title-wrap">
                 <label class="visually-hidden" for="post-title">{% bilingual "Title" "标题" %}</label>
                 <input id="post-title"
@@ -776,17 +1003,6 @@
                     </div>
                 </div>
 
-                <div>
-                    <div class="write-meta-title">{% bilingual "Cover image" "封面图" %}</div>
-                    <p class="write-meta-hint">
-                        {% bilingual "Upload a wide image to set the mood (optional)." "上传一张宽图作为封面氛围（可选）。" %}
-                    </p>
-                    <label class="write-cover-drop" for="write-cover">
-                        <strong>{% bilingual "Upload cover" "上传封面" %}</strong>
-                        <span>{% bilingual "JPG or PNG, up to 5MB" "JPG 或 PNG，最大 5MB" %}</span>
-                        <input id="write-cover" type="file" name="cover_image" accept="image/*" class="d-none">
-                    </label>
-                </div>
             </div>
         </div>
 
@@ -816,7 +1032,11 @@
                 <div class="modal-content">
                     <div class="modal-header">
                         <h5 class="modal-title" id="mathModalLabel">{% bilingual "Insert formula" "插入公式" %}</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{% bilingual 'Close' '关闭' %}"></button>
+                        <button type="button"
+                                class="btn-close"
+                                data-bs-dismiss="modal"
+                                data-role="math-close"
+                                aria-label="{% bilingual 'Close' '关闭' %}"></button>
                     </div>
                     <div class="modal-body">
                         <math-field id="math-input" virtual-keyboard-mode="onfocus"></math-field>
@@ -825,7 +1045,7 @@
                         </div>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal" data-role="math-cancel">
                             {% bilingual "Cancel" "取消" %}
                         </button>
                         <button type="button" class="btn btn-primary" data-role="math-insert">
@@ -834,6 +1054,13 @@
                     </div>
                 </div>
             </div>
+        </div>
+
+        <div class="write-word-count"
+             data-role="word-count"
+             data-label="{% bilingual 'Words' '字数' %}"
+             aria-live="polite">
+            {% bilingual "Words" "字数" %} 0
         </div>
     </form>
 </div>
