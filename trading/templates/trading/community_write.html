@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends "base_focus.html" %}
 {% load static i18n %}
 
 {% block title %}{% bilingual "Write an article" "撰写长文" %}{% endblock %}
@@ -29,16 +29,6 @@
             linear-gradient(180deg, #f1f5f9 0%, #eef2f7 45%, #f8fafc 100%);
     }
 
-    nav.navbar,
-    footer {
-        display: none;
-    }
-
-    main.container-xl {
-        max-width: none;
-        padding: 0;
-    }
-
     .community-write-page {
         min-height: 100vh;
         display: flex;
@@ -51,16 +41,18 @@
         position: sticky;
         top: 0;
         z-index: 1030;
-        background: rgba(248, 250, 252, 0.92);
-        backdrop-filter: blur(16px);
+        height: 60px;
+        background: rgba(255, 255, 255, 0.82);
+        backdrop-filter: blur(10px);
         border-bottom: 1px solid var(--write-border);
         animation: write-slide-down 0.5s ease both;
     }
 
     .write-topbar-inner {
         max-width: 1100px;
+        height: 60px;
         margin: 0 auto;
-        padding: 16px clamp(18px, 4vw, 36px);
+        padding: 0 clamp(18px, 4vw, 36px);
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -142,10 +134,11 @@
         box-shadow: 0 8px 18px rgba(15, 23, 42, 0.1);
     }
 
-    .write-canvas {
-        max-width: 820px;
+    .write-container {
+        max-width: 800px;
+        min-height: 100vh;
         margin: 32px auto 0;
-        background: var(--write-paper);
+        background: #ffffff;
         border-radius: 24px;
         padding: clamp(24px, 5vw, 48px);
         box-shadow: var(--write-shadow);
@@ -158,20 +151,43 @@
         color: #b91c1c;
     }
 
+    .write-title-wrap {
+        position: relative;
+        padding-bottom: 10px;
+        margin-bottom: 16px;
+    }
+
+    .write-title-wrap::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 1px;
+        background: rgba(148, 163, 184, 0.4);
+        opacity: 0;
+        transition: opacity 0.2s ease;
+    }
+
+    .write-title-wrap:hover::after,
+    .write-title-wrap:focus-within::after {
+        opacity: 1;
+    }
+
     .write-title-input {
         width: 100%;
         border: none;
         padding: 0;
-        margin-bottom: 12px;
+        margin-bottom: 0;
         font-family: var(--write-font-title);
-        font-size: clamp(2.2rem, 5vw, 3.4rem);
+        font-size: 40px;
         font-weight: 700;
         color: var(--write-ink);
         background: transparent;
     }
 
     .write-title-input::placeholder {
-        color: rgba(100, 116, 139, 0.6);
+        color: #94a3b8;
     }
 
     .write-title-input:focus {
@@ -183,15 +199,33 @@
         margin-top: 12px;
     }
 
+    .write-editor .ql-toolbar,
+    .write-editor .ql-container {
+        border: none !important;
+    }
+
+    .write-editor .ql-toolbar {
+        position: sticky;
+        top: 60px;
+        z-index: 1000;
+        background: rgba(255, 255, 255, 0.9);
+        backdrop-filter: blur(10px);
+        padding: 8px 0;
+    }
+
     .write-editor .ql-container {
         font-family: var(--write-font-body);
-        font-size: 1.05rem;
-        line-height: 1.75;
+        font-size: 18px;
+        line-height: 1.8;
     }
 
     .write-editor .ql-editor {
         padding: 0;
         min-height: 360px;
+    }
+
+    .write-editor .ql-editor p {
+        margin-bottom: 1.1em;
     }
 
     .write-editor .ql-editor.ql-blank::before {
@@ -317,15 +351,19 @@
             justify-content: flex-start;
         }
 
-        .write-canvas {
+        .write-container {
             margin: 20px auto 0;
         }
     }
 
     @media (max-width: 576px) {
-        .write-canvas {
+        .write-container {
             border-radius: 18px;
             margin: 16px 12px 0;
+        }
+
+        .write-title-input {
+            font-size: 32px;
         }
 
         .write-more-btn {
@@ -357,7 +395,7 @@
                     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                         <path d="M15.5 5L8.5 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
                     </svg>
-                    <span>{% bilingual "Back" "返回" %}</span>
+                    <span>{% bilingual "Back to community" "返回社区" %}</span>
                 </a>
                 <div class="write-actions">
                     <span class="write-status"
@@ -383,19 +421,21 @@
             </div>
         </header>
 
-        <section class="write-canvas">
+        <section class="write-canvas write-container">
             {% if post_error %}
                 <div class="alert alert-danger write-alert">{{ post_error }}</div>
             {% endif %}
 
-            <label class="visually-hidden" for="write-title">{% bilingual "Title" "标题" %}</label>
-            <input id="write-title"
-                   type="text"
-                   name="title"
-                   maxlength="200"
-                   class="write-title-input"
-                   value="{{ title_value }}"
-                   placeholder="{% bilingual 'Enter your headline' '请输入标题' %}">
+            <div class="write-title-wrap">
+                <label class="visually-hidden" for="write-title">{% bilingual "Title" "标题" %}</label>
+                <input id="write-title"
+                       type="text"
+                       name="title"
+                       maxlength="200"
+                       class="write-title-input"
+                       value="{{ title_value }}"
+                       placeholder="{% bilingual 'Enter a title...' '请输入标题...' %}">
+            </div>
 
             <textarea name="content" class="d-none" data-role="content-input">{{ content_value }}</textarea>
             <div class="write-editor">

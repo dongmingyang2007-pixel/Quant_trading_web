@@ -49,6 +49,11 @@
                 <p class="community-hint">{% bilingual "Be friendly and professional. Respect every perspective." "保持友好、专业，尊重社区成员的观点。" %}</p>
             </div>
         </div>
+        <div class="community-hero-actions">
+            <a class="btn btn-light community-write-cta shadow-sm" href="{% url 'trading:community_write' %}">
+                <span class="me-2">✍️</span>{% bilingual "Write post" "写文章" %}
+            </a>
+        </div>
     </header>
 
     <section class="community-search-hero" aria-label="{% bilingual 'Search community posts' '搜索社区内容' %}">
@@ -100,13 +105,6 @@
         <aside class="community-topics">
             <div class="topic-head">
                 <span>{% bilingual "Topics" "话题广场" %}</span>
-                <button type="button"
-                        class="btn btn-sm btn-outline-primary"
-                        data-role="create-topic"
-                        aria-controls="community-compose-panel"
-                        aria-expanded="false">
-                    {% bilingual "New topic" "新建话题" %}
-                </button>
             </div>
             <ul class="topic-list" data-role="topic-list">
                 {% for topic in topics %}
@@ -136,13 +134,6 @@
             {% endif %}
 
             <div class="community-toolbar">
-                <button type="button"
-                        class="btn btn-primary"
-                        data-role="open-compose"
-                        aria-controls="community-compose-panel"
-                        aria-expanded="false">
-                    <span class="me-1">＋</span>{% bilingual "New post" "发布新动态" %}
-                </button>
                 <div class="community-topic-meta">
                     <div class="topic-name">#{{ active_topic.name }}</div>
                     <div class="topic-intro text-muted">
@@ -168,111 +159,6 @@
                     </div>
                 </div>
             </div>
-
-            <section class="community-card community-post-form d-none"
-                     data-role="compose-panel"
-                     id="community-compose-panel"
-                     role="region"
-                     aria-labelledby="community-compose-title"
-                     aria-hidden="true">
-                <h2 id="community-compose-title" class="visually-hidden">{% bilingual "Compose a new post" "发布新动态" %}</h2>
-                <form method="post" enctype="multipart/form-data" novalidate data-role="composer">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="create_post">
-                    <input type="hidden" name="topic" value="{{ post_form.topic.value|default:active_topic.topic_id }}" data-role="topic-input">
-                    <input type="hidden" name="image_cropped_data" value="{{ post_form.image_cropped_data.value|default_if_none:'' }}" data-role="cropped-data">
-                    <input type="hidden" name="backtest_record_id" value="{{ post_form.backtest_record_id.value|default_if_none:share_record_id|default_if_none:'' }}">
-                    <div class="compose-topic-bar">
-                        <span class="badge bg-primary-subtle text-primary-emphasis" data-role="selected-topic">
-                            #{{ active_topic.name }}
-                        </span>
-                        <button type="button"
-                                class="btn btn-link btn-sm"
-                                data-role="toggle-new-topic"
-                                aria-controls="community-new-topic-fields"
-                                aria-expanded="false">
-                            {% bilingual "Create topic" "创建新话题" %}
-                        </button>
-                        <button type="button" class="btn-close ms-auto" data-role="close-compose" aria-label="{% bilingual 'Close compose panel' '关闭发布面板' %}"></button>
-                    </div>
-                    <div class="compose-new-topic d-none"
-                         data-role="new-topic-fields"
-                         id="community-new-topic-fields"
-                         aria-hidden="true">
-                        <div class="row g-3 align-items-end">
-                            <div class="col-md-6">
-                                <label class="form-label">{% bilingual "Topic name" "新话题名称" %}</label>
-                                <input type="text" name="new_topic_name" class="form-control"
-                                       value="{{ post_form.new_topic_name.value|default_if_none:'' }}" maxlength="60">
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label">{% bilingual "Topic intro" "话题简介" %}</label>
-                                <textarea name="new_topic_description" rows="2" class="form-control"
-                                          placeholder="{% bilingual 'Introduce this discussion in one line…' '一句话介绍这个讨论区...' %}">{{ post_form.new_topic_description.value|default_if_none:'' }}</textarea>
-                            </div>
-                        </div>
-                    </div>
-                    {% if share_record %}
-                    <div class="community-share-card">
-                        <div class="share-card-header">
-                            <span class="badge bg-success-subtle text-success-emphasis">{% bilingual "Backtest summary" "回测摘要" %}</span>
-                            <span class="text-muted small">ID {{ share_record.record_id }}</span>
-                        </div>
-                        <div class="share-card-body">
-                            <div class="share-card-main">
-                                <span class="share-card-ticker">{{ share_record.ticker|default:"--" }}</span>
-                                {% if share_record.engine %}
-                                    <span class="share-card-engine">{{ share_record.engine }}</span>
-                                {% endif %}
-                                <span class="share-card-period">{{ share_record.start_date|default:"--" }} → {{ share_record.end_date|default:"--" }}</span>
-                            </div>
-                            <div class="share-card-metrics">
-                                <div><span>{% bilingual "Return" "收益" %}</span><strong>{{ share_record.total_return }}</strong></div>
-                                <div><span>{% bilingual "Sharpe" "夏普" %}</span><strong>{{ share_record.sharpe }}</strong></div>
-                                <div><span>{% bilingual "Max drawdown" "最大回撤" %}</span><strong>{{ share_record.max_drawdown }}</strong></div>
-                                <div><span>{% bilingual "Volatility" "波动率" %}</span><strong>{{ share_record.volatility }}</strong></div>
-                            </div>
-                        </div>
-                        <p class="share-card-note">{% bilingual "Editing this post will not change the original history record." "编辑内容不会影响原回测记录。" %}</p>
-                    </div>
-                    {% endif %}
-                    <div class="mb-3">
-                        <label class="form-label">{% bilingual "Idea" "想法" %}</label>
-                        <textarea name="content" rows="4" class="form-control d-none" data-role="content-input"
-                                  placeholder="{% bilingual 'Share your strategy insight or market view…' '分享你的策略灵感或市场观察...' %}">{{ post_form.content.value|default_if_none:'' }}</textarea>
-                        <div class="community-editor">
-                            <div id="editor-container"
-                                 data-role="editor"
-                                 data-placeholder="{% bilingual 'Share your strategy insight or market view…' '分享你的策略灵感或市场观察...' %}"></div>
-                        </div>
-                        {% if post_form.content.errors %}
-                            <div class="invalid-feedback d-block">
-                                {% for error in post_form.content.errors %}{{ error }}{% if not forloop.last %}<br>{% endif %}{% endfor %}
-                            </div>
-                        {% endif %}
-                    </div>
-                    <div class="compose-media" data-role="media-panel">
-                        <input type="file" name="image" accept="image/*" class="d-none" data-role="image-input">
-                        <div class="compose-media-preview d-none" data-role="media-preview">
-                            <img src="" alt="{% bilingual 'Preview' '预览图' %}" data-role="preview-image">
-                            <div class="compose-media-actions">
-                                <button type="button" class="btn btn-sm btn-outline-secondary" data-role="replace-image">{% bilingual "Replace" "重新选择" %}</button>
-                                <button type="button" class="btn btn-sm btn-outline-danger" data-role="remove-image">{% bilingual "Remove" "移除图片" %}</button>
-                            </div>
-                        </div>
-                        <div class="compose-media-placeholder" data-role="media-placeholder">
-                            <p class="text-muted mb-2">{% bilingual "Add an image for more context. You can crop it after upload." "添加图片更直观，可裁剪调整构图。" %}</p>
-                            <button type="button" class="btn btn-outline-secondary btn-sm" data-role="pick-image">
-                                {% bilingual "Upload image" "上传本地图片" %}
-                            </button>
-                        </div>
-                    </div>
-                    <div class="d-flex justify-content-between align-items-center">
-                        <small class="text-muted">{% bilingual "Drag & drop, paste, or click the button to upload." "支持拖拽、复制粘贴图片，或点击按钮上传。" %}</small>
-                        <button type="submit" class="btn btn-primary px-4" data-role="submit-post">{% bilingual "Publish" "发布" %}</button>
-                    </div>
-                </form>
-            </section>
 
             <section class="community-feed" data-role="feed">
                 <div id="community-post-list">

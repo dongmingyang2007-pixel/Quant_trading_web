@@ -180,6 +180,23 @@
     gap: 4px;
 }
 
+.community-hero-actions {
+    width: 100%;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.community-write-cta {
+    border-radius: 999px;
+    padding: 10px 22px;
+    font-weight: 600;
+    color: #1e293b;
+}
+
+.community-write-cta:hover {
+    color: #0f172a;
+}
+
 .community-welcome {
     margin: 0;
     font-weight: 700;
