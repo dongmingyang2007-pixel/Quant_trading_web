@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import markdown as md
 import bleach
 from bleach.linkifier import Linker
@@ -35,6 +36,8 @@ ALLOWED_ATTRS = {
     "pre": ["class"],
 }
 
+CASHTAG_PATTERN = re.compile(r"(?<![\\w])\\$([A-Z]{2,5})\\b")
+
 
 def _add_rel(attrs, new=False):
     href = attrs.get("href", "")
@@ -55,3 +58,19 @@ def markdown_format(value) -> str:
     linker = Linker(callbacks=[_add_rel])
     cleaned = linker.linkify(cleaned)
     return mark_safe(cleaned)
+
+
+@register.filter(name="parse_cashtags")
+def parse_cashtags(value) -> str:
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else str(value)
+
+    def replacer(match: re.Match) -> str:
+        symbol = match.group(1)
+        return (
+            f'<a href="/market/analysis/{symbol}/" class="cashtag" '
+            f'title="View {symbol} Market Data">${symbol}</a>'
+        )
+
+    return mark_safe(CASHTAG_PATTERN.sub(replacer, text))

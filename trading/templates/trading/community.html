@@ -27,7 +27,8 @@
      data-comment-endpoint="{% url 'trading:community_comment' %}"
      data-active-topic-id="{{ active_topic.topic_id }}"
      data-active-topic-name="{{ active_topic.name }}"
-     data-share-history-id="{{ share_history_id }}">
+     data-share-history-id="{{ share_history_id }}"
+     data-backtest-base="{% url 'trading:backtest' %}">
     <header class="community-hero">
         <div>
             <p class="community-kicker">Social Lounge</p>

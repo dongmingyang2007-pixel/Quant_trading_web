@@ -36,7 +36,9 @@ from ..community import (
 from ..forms import CommunityPostForm
 from ..history import get_history_record
 from ..models import CommunityPost as CommunityPostModel
+from ..models import CommunityPostComment
 from ..models import CommunityTopic as CommunityTopicModel
+from ..models import Notification
 from ..profile import load_profile
 from ..storage_utils import save_uploaded_file, describe_image_error, decode_data_url_image, resolve_media_url
 from ..observability import record_metric
@@ -341,6 +343,30 @@ def community(request):
 
 
 @login_required
+def community_notifications(request):
+    notifications_qs = (
+        Notification.objects.filter(recipient=request.user)
+        .select_related("actor", "target_post")
+        .order_by("-created_at")
+    )
+    page_number = request.GET.get("page") or 1
+    paginator = Paginator(notifications_qs, 20)
+    page_obj = paginator.get_page(page_number)
+    notifications = list(page_obj.object_list)
+    unread_ids = [notice.id for notice in notifications if not notice.is_read]
+    if unread_ids:
+        Notification.objects.filter(recipient=request.user, id__in=unread_ids).update(is_read=True)
+    return render(
+        request,
+        "trading/community_notifications.html",
+        {
+            "notifications": notifications,
+            "page_obj": page_obj,
+        },
+    )
+
+
+@login_required
 @ensure_csrf_cookie
 def write_post(request, post_id: int | None = None):
     print(f"Received data: {request.body}")
@@ -559,11 +585,23 @@ def community_like(request):
 def community_comment(request):
     post_id = request.POST.get("post_id", "")
     content = (request.POST.get("content") or "").strip()
+    parent_id = (request.POST.get("parent_id") or "").strip()
     if not post_id:
         return JsonResponse({"error": "missing_post_id"}, status=400)
     if not content:
         record_metric("community.comment.failure", user_id=str(request.user.id), post_id=post_id, error="empty_content")
         return JsonResponse({"error": "empty_content"}, status=400)
+    parent = None
+    if parent_id:
+        parent = CommunityPostComment.objects.filter(post__post_id=post_id, comment_id=parent_id).first()
+        if not parent:
+            record_metric(
+                "community.comment.failure",
+                user_id=str(request.user.id),
+                post_id=post_id,
+                error="parent_not_found",
+            )
+            return JsonResponse({"error": "parent_not_found"}, status=404)
     full_name = request.user.get_full_name()
     profile = load_profile(str(request.user.id))
     author_name = profile.get("display_name") or full_name or request.user.username
@@ -573,8 +611,9 @@ def community_comment(request):
         author=author_name,
         content=content,
         created_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        parent_id=parent_id or None,
     )
-    added = add_comment(post_id, comment)
+    added = add_comment(post_id, comment, parent=parent)
     if added is None:
         record_metric("community.comment.failure", user_id=str(request.user.id), post_id=post_id, error="not_found")
         return JsonResponse({"error": "not_found"}, status=404)
@@ -588,6 +627,7 @@ def community_comment(request):
         {
             "comment": {
                 "comment_id": added["comment_id"],
+                "parent_id": added.get("parent_id", ""),
                 "author": comment.author,
                 "content": comment.content,
                 "created_at": comment.created_at,

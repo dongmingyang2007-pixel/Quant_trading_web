@@ -3665,6 +3665,25 @@ pre,
     font-size: 1rem;
     line-height: 1;
 }
+.nav-notification {
+    position: relative;
+}
+.nav-notification-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: #ef4444;
+    color: #fff;
+    font-size: 0.65rem;
+    font-weight: 700;
+    line-height: 18px;
+    text-align: center;
+    box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.6);
+}
 .nav-lang-switcher {
     margin-bottom: 0;
 }
@@ -3757,6 +3776,16 @@ pre,
 }
 .nav-user-dropdown a.is-danger {
     color: #dc2626;
+}
+.notification-item {
+    border-left: 3px solid transparent;
+}
+.notification-unread {
+    border-left-color: #0d6efd;
+    background: rgba(13, 110, 253, 0.08);
+}
+.notification-unread:hover {
+    background: rgba(13, 110, 253, 0.12);
 }
 
 .news-ribbon {

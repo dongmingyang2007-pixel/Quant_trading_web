@@ -52,6 +52,7 @@
     const activeTopicId = root.dataset.activeTopicId;
     const activeTopicName = root.dataset.activeTopicName;
     const shareHistoryId = root.dataset.shareHistoryId;
+    const backtestBase = root.dataset.backtestBase || "/backtest/";
 
     const highlightBlocks = (scope) => {
         if (!window.hljs || typeof window.hljs.highlightElement !== "function") return;
@@ -609,20 +610,74 @@
             });
     };
 
-    const submitComment = (post) => {
+    const buildCommentItem = (comment, { isReply = false } = {}) => {
+        const li = document.createElement("li");
+        li.className = `community-comment-item${isReply ? " is-reply" : ""}`;
+        li.dataset.commentId = comment.comment_id || "";
+        const avatar = escapeHtml(comment.avatar_url || "");
+        const author = escapeHtml(comment.author || (langIsZh ? "匿名" : "Anonymous"));
+        const text = escapeHtml(comment.content || "");
+        const time = escapeHtml(comment.created_at || "");
+        const replyLabel = langIsZh ? "回复" : "Reply";
+        const replyPlaceholder = langIsZh ? "回复这条评论…" : "Write a reply…";
+        li.innerHTML = `
+            <div class="community-comment-row">
+                <span class="community-post-avatar small">
+                    ${avatar ? `<img src="${avatar}" alt="${author}">` : author.charAt(0).toUpperCase()}
+                </span>
+                <div class="community-comment-body">
+                    <div class="community-comment-meta">
+                        <span class="community-comment-author">${author}</span>
+                        <span class="community-comment-time text-muted small">${time}</span>
+                    </div>
+                    <p>${text.replace(/\n/g, "<br>")}</p>
+                    <div class="community-comment-actions">
+                        <button type="button"
+                                class="community-reply-btn"
+                                data-role="reply-toggle"
+                                data-parent-id="${comment.comment_id || ""}">
+                            ${replyLabel}
+                        </button>
+                    </div>
+                    <div class="community-reply-form d-none" data-role="reply-form" data-parent-id="${comment.comment_id || ""}">
+                        <textarea rows="2"
+                                  class="form-control"
+                                  placeholder="${replyPlaceholder}"
+                                  data-role="reply-input"></textarea>
+                        <div class="text-end mt-2">
+                            <button type="button"
+                                    class="btn btn-sm btn-outline-primary"
+                                    data-role="submit-reply"
+                                    data-parent-id="${comment.comment_id || ""}">
+                                ${replyLabel}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <ul class="community-comment-replies"></ul>
+        `;
+        return li;
+    };
+
+    const submitComment = (post, options = {}) => {
         if (!commentEndpoint) return;
-        const textarea = post.querySelector("[data-role='comment-input']");
+        const textarea = options.textarea || post.querySelector("[data-role='comment-input']");
         const countEl = post.querySelector("[data-role='comment-count']");
-        const list = post.querySelector(".community-comment-list");
+        const list = options.list || post.querySelector(".community-comment-list");
         if (!(textarea && list)) return;
         const content = textarea.value.trim();
         if (!content) {
             textarea.focus();
             return;
         }
+        const parentId = options.parentId || "";
         const formData = new URLSearchParams();
         formData.append("post_id", post.dataset.postId || "");
         formData.append("content", content);
+        if (parentId) {
+            formData.append("parent_id", parentId);
+        }
         fetch(commentEndpoint, {
             method: "POST",
             headers: {
@@ -634,30 +689,23 @@
             .then((res) => res.json())
             .then((data) => {
                 if (!data || !data.comment) return;
-                const li = document.createElement("li");
-                li.className = "community-comment-item";
-                const avatar = escapeHtml(data.comment.avatar_url || "");
-                const author = escapeHtml(data.comment.author || "匿名");
-                const text = escapeHtml(data.comment.content || "");
-                const time = escapeHtml(data.comment.created_at || "");
-                li.innerHTML = `
-                    <span class="community-post-avatar small">
-                        ${
-                            avatar
-                                ? `<img src="${avatar}" alt="${author}">`
-                                : author.charAt(0).toUpperCase()
-                        }
-                    </span>
-                    <div class="community-comment-body">
-                        <div class="community-comment-meta">
-                            <span class="community-comment-author">${author}</span>
-                            <span class="community-comment-time text-muted small">${time}</span>
-                        </div>
-                        <p>${text.replace(/\n/g, "<br>")}</p>
-                    </div>
-                `;
-                list.prepend(li);
+                const li = buildCommentItem(data.comment, { isReply: Boolean(parentId) });
+                if (parentId) {
+                    const parentItem = post.querySelector(`[data-comment-id="${parentId}"]`);
+                    const repliesList = parentItem?.querySelector(".community-comment-replies");
+                    if (repliesList) {
+                        repliesList.append(li);
+                    } else {
+                        list.prepend(li);
+                    }
+                } else {
+                    list.prepend(li);
+                }
                 textarea.value = "";
+                if (options.form) {
+                    options.form.classList.add("d-none");
+                    options.form.setAttribute("aria-hidden", "true");
+                }
                 if (countEl) {
                     const current = parseInt(countEl.textContent || "0", 10) || 0;
                     countEl.textContent = current + 1;
@@ -669,6 +717,21 @@
             });
     };
 
+    const toggleReplyForm = (button) => {
+        const commentItem = button.closest("[data-comment-id]");
+        if (!commentItem) return;
+        const form = commentItem.querySelector("[data-role='reply-form']");
+        if (!form) return;
+        const willShow = form.classList.contains("d-none");
+        form.classList.toggle("d-none", !willShow);
+        form.setAttribute("aria-hidden", willShow ? "false" : "true");
+        button.setAttribute("aria-expanded", willShow ? "true" : "false");
+        if (willShow) {
+            const input = form.querySelector("[data-role='reply-input']");
+            input?.focus();
+        }
+    };
+
     const showPostAlert = (kind, message) => {
         if (!postAlert) return;
         postAlert.textContent = message;
@@ -676,6 +739,42 @@
         postAlert.classList.remove("d-none");
         clearTimeout(showPostAlert._timer);
         showPostAlert._timer = setTimeout(() => postAlert.classList.add("d-none"), 4000);
+    };
+
+    const forkBacktest = async (button) => {
+        if (!button) return;
+        const forkUrl = button.dataset.forkUrl;
+        if (!forkUrl) return;
+        if (!csrfToken()) {
+            showPostAlert("danger", "缺少 CSRF Token。");
+            return;
+        }
+        if (button.disabled) return;
+        button.disabled = true;
+        button.classList.add("opacity-75");
+        try {
+            const response = await fetch(forkUrl, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {
+                    "X-CSRFToken": csrfToken(),
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || !payload.record_id) {
+                throw new Error(payload?.error || "clone_failed");
+            }
+            showPostAlert("success", "Strategy cloned to your workspace!");
+            const target = `${backtestBase}?history_id=${encodeURIComponent(payload.record_id)}`;
+            window.setTimeout(() => {
+                window.location.href = target;
+            }, 600);
+        } catch (error) {
+            showPostAlert("danger", error.message || "克隆失败，请稍后重试。");
+            button.disabled = false;
+            button.classList.remove("opacity-75");
+        }
     };
 
     const requestDelete = (form) => {
@@ -756,6 +855,31 @@
             const post = submitButton.closest("[data-post-id]");
             if (!post) return;
             submitComment(post);
+            return;
+        }
+
+        const replyToggle = event.target.closest("[data-role='reply-toggle']");
+        if (replyToggle && root.contains(replyToggle)) {
+            toggleReplyForm(replyToggle);
+            return;
+        }
+
+        const submitReply = event.target.closest("[data-role='submit-reply']");
+        if (submitReply && root.contains(submitReply)) {
+            const post = submitReply.closest("[data-post-id]");
+            if (!post) return;
+            const form = submitReply.closest("[data-role='reply-form']");
+            const textarea = form?.querySelector("[data-role='reply-input']");
+            const parentId = submitReply.dataset.parentId || form?.dataset.parentId || "";
+            const commentItem = submitReply.closest("[data-comment-id]");
+            const list = commentItem?.querySelector(".community-comment-replies");
+            submitComment(post, { textarea, parentId, list, form });
+            return;
+        }
+
+        const forkButton = event.target.closest("[data-role='fork-backtest']");
+        if (forkButton && root.contains(forkButton)) {
+            forkBacktest(forkButton);
         }
     });
 
@@ -767,6 +891,21 @@
             const post = textarea.closest("[data-post-id]");
             if (!post) return;
             submitComment(post);
+        }
+    });
+
+    root.addEventListener("keydown", (event) => {
+        const textarea = event.target.closest("[data-role='reply-input']");
+        if (!textarea || !root.contains(textarea)) return;
+        if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+            event.preventDefault();
+            const post = textarea.closest("[data-post-id]");
+            if (!post) return;
+            const form = textarea.closest("[data-role='reply-form']");
+            const parentId = form?.dataset.parentId || "";
+            const commentItem = textarea.closest("[data-comment-id]");
+            const list = commentItem?.querySelector(".community-comment-replies");
+            submitComment(post, { textarea, parentId, list, form });
         }
     });
 

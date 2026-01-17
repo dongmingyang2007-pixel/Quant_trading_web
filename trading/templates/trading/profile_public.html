@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load static %}
+{% load static i18n markdown_extras %}
 
 {% block title %}{{ public_user.display_name }} · 个人主页{% endblock %}
 
@@ -130,7 +130,7 @@
                         </div>
                     </header>
                     <div class="feed-body">
-                        <p>{{ post.content|linebreaks }}</p>
+                        <p>{{ post.content|linebreaks|parse_cashtags }}</p>
                         {% if post.image_url %}
                             <figure>
                                 <img src="{{ post.image_url }}" alt="分享图片" loading="lazy">

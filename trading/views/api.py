@@ -6,6 +6,8 @@ import os
 import queue
 import re
 import math
+import uuid
+import copy
 from dataclasses import asdict
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime, timezone
@@ -19,6 +21,7 @@ from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse, StreamingHttpResponse
 from django.views.decorators.http import require_POST
 from typing import Any
+from django.utils import timezone as dj_timezone
 from django.utils.translation import gettext as _
 
 from .. import screener
@@ -1195,6 +1198,65 @@ def get_user_backtests(request):
     except Exception as exc:
         return JsonResponse(
             {"error": _("Failed to load backtests."), "details": str(exc), "request_id": request_id},
+            status=500,
+            json_dumps_params={"ensure_ascii": False},
+        )
+
+
+@login_required
+@require_POST
+def fork_backtest(request, record_id: str):
+    request_id = ensure_request_id(request)
+    try:
+        source = BacktestRecordModel.objects.filter(record_id=record_id).first()
+        if not source:
+            return JsonResponse(
+                {"error": _("Backtest not found."), "request_id": request_id},
+                status=404,
+                json_dumps_params={"ensure_ascii": False},
+            )
+        base_title = (source.title or "").strip()
+        if not base_title:
+            engine = (source.engine or "").strip()
+            ticker = (source.ticker or "").strip()
+            if engine and ticker:
+                base_title = f"{ticker} · {engine}"
+            else:
+                base_title = engine or ticker or "Strategy"
+        new_title = base_title
+        if not base_title.startswith("Copy of "):
+            new_title = f"Copy of {base_title}"
+
+        params_copy = copy.deepcopy(source.params) if source.params is not None else {}
+        if isinstance(params_copy, dict):
+            params_copy["user_id"] = str(request.user.id)
+
+        new_record = BacktestRecordModel.objects.create(
+            record_id=uuid.uuid4().hex,
+            user=request.user,
+            timestamp=dj_timezone.now(),
+            ticker=source.ticker,
+            benchmark=source.benchmark,
+            engine=source.engine,
+            start_date=source.start_date,
+            end_date=source.end_date,
+            metrics=copy.deepcopy(source.metrics),
+            stats=copy.deepcopy(source.stats),
+            params=params_copy,
+            warnings=copy.deepcopy(source.warnings),
+            snapshot=copy.deepcopy(source.snapshot),
+            title=new_title,
+            tags=copy.deepcopy(source.tags),
+            notes=source.notes,
+            starred=False,
+        )
+        return JsonResponse(
+            {"status": "success", "record_id": new_record.record_id, "request_id": request_id},
+            json_dumps_params={"ensure_ascii": False},
+        )
+    except Exception as exc:
+        return JsonResponse(
+            {"error": _("Failed to fork backtest."), "details": str(exc), "request_id": request_id},
             status=500,
             json_dumps_params={"ensure_ascii": False},
         )

@@ -1,3 +1,4 @@
+{% load markdown_extras %}
 {% if posts %}
     {% for post in posts %}
     <article class="community-card community-post" data-post-id="{{ post.post_id }}">
@@ -29,8 +30,21 @@
             {% if post.backtest_summary %}
             <div class="community-share-card is-inline">
                 <div class="share-card-header">
-                    <span class="badge bg-primary-subtle text-primary-emphasis">{% bilingual "Shared backtest" "回测分享" %}</span>
-                    <span class="text-muted small">ID {{ post.backtest_summary.record_id }}</span>
+                    <div class="share-card-header-left">
+                        <span class="badge bg-primary-subtle text-primary-emphasis">{% bilingual "Shared backtest" "回测分享" %}</span>
+                        <span class="text-muted small">ID {{ post.backtest_summary.record_id }}</span>
+                    </div>
+                    <button type="button"
+                            class="share-card-fork"
+                            data-role="fork-backtest"
+                            data-fork-url="{% url 'trading:backtest_fork' record_id=post.backtest_summary.record_id %}">
+                        <span class="share-card-fork-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                <path d="M6 3a2 2 0 1 0 0 4v10a3 3 0 0 0 3 3h5a2 2 0 1 0 0-2H9a1 1 0 0 1-1-1V7a2 2 0 0 0 0-4zm10 12a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </span>
+                        <span>{% bilingual "Fork Strategy" "克隆策略" %}</span>
+                    </button>
                 </div>
                 <div class="share-card-body">
                     <div class="share-card-main">
@@ -49,7 +63,7 @@
                 </div>
             </div>
             {% endif %}
-            <div class="community-post-content">{{ post.content|safe }}</div>
+            <div class="community-post-content">{{ post.content|parse_cashtags }}</div>
             {% if post.image_url %}
                 <figure class="community-post-image">
                     <img src="{{ post.image_url }}" alt="{% bilingual 'Shared image' '分享图片' %}" loading="lazy">
@@ -123,21 +137,90 @@
             </div>
             <ul class="community-comment-list">
                 {% for comment in post.comments %}
-                <li class="community-comment-item">
-                    <span class="community-post-avatar small">
-                        {% if comment.avatar_url %}
-                            <img src="{{ comment.avatar_url }}" alt="{{ comment.author }}" loading="lazy">
-                        {% else %}
-                            {{ comment.author|first|upper }}
-                        {% endif %}
-                    </span>
-                    <div class="community-comment-body">
-                        <div class="community-comment-meta">
-                            <span class="community-comment-author">{{ comment.author }}</span>
-                            <span class="community-comment-time text-muted small">{{ comment.created_at }}</span>
+                <li class="community-comment-item" data-comment-id="{{ comment.comment_id }}">
+                    <div class="community-comment-row">
+                        <span class="community-post-avatar small">
+                            {% if comment.avatar_url %}
+                                <img src="{{ comment.avatar_url }}" alt="{{ comment.author }}" loading="lazy">
+                            {% else %}
+                                {{ comment.author|first|upper }}
+                            {% endif %}
+                        </span>
+                        <div class="community-comment-body">
+                            <div class="community-comment-meta">
+                                <span class="community-comment-author">{{ comment.author }}</span>
+                                <span class="community-comment-time text-muted small">{{ comment.created_at }}</span>
+                            </div>
+                            <p>{{ comment.content|linebreaksbr }}</p>
+                            <div class="community-comment-actions">
+                                <button type="button"
+                                        class="community-reply-btn"
+                                        data-role="reply-toggle"
+                                        data-parent-id="{{ comment.comment_id }}">
+                                    {% bilingual "Reply" "回复" %}
+                                </button>
+                            </div>
+                            <div class="community-reply-form d-none" data-role="reply-form" data-parent-id="{{ comment.comment_id }}">
+                                <textarea rows="2"
+                                          class="form-control"
+                                          placeholder="{% bilingual 'Write a reply…' '回复这条评论…' %}"
+                                          data-role="reply-input"></textarea>
+                                <div class="text-end mt-2">
+                                    <button type="button"
+                                            class="btn btn-sm btn-outline-primary"
+                                            data-role="submit-reply"
+                                            data-parent-id="{{ comment.comment_id }}">
+                                        {% bilingual "Reply" "回复" %}
+                                    </button>
+                                </div>
+                            </div>
                         </div>
-                        <p>{{ comment.content|linebreaksbr }}</p>
                     </div>
+                    <ul class="community-comment-replies">
+                        {% for reply in comment.replies %}
+                        <li class="community-comment-item is-reply" data-comment-id="{{ reply.comment_id }}">
+                            <div class="community-comment-row">
+                                <span class="community-post-avatar small">
+                                    {% if reply.avatar_url %}
+                                        <img src="{{ reply.avatar_url }}" alt="{{ reply.author }}" loading="lazy">
+                                    {% else %}
+                                        {{ reply.author|first|upper }}
+                                    {% endif %}
+                                </span>
+                                <div class="community-comment-body">
+                                    <div class="community-comment-meta">
+                                        <span class="community-comment-author">{{ reply.author }}</span>
+                                        <span class="community-comment-time text-muted small">{{ reply.created_at }}</span>
+                                    </div>
+                                    <p>{{ reply.content|linebreaksbr }}</p>
+                                    <div class="community-comment-actions">
+                                        <button type="button"
+                                                class="community-reply-btn"
+                                                data-role="reply-toggle"
+                                                data-parent-id="{{ reply.comment_id }}">
+                                            {% bilingual "Reply" "回复" %}
+                                        </button>
+                                    </div>
+                                    <div class="community-reply-form d-none" data-role="reply-form" data-parent-id="{{ reply.comment_id }}">
+                                        <textarea rows="2"
+                                                  class="form-control"
+                                                  placeholder="{% bilingual 'Write a reply…' '回复这条评论…' %}"
+                                                  data-role="reply-input"></textarea>
+                                        <div class="text-end mt-2">
+                                            <button type="button"
+                                                    class="btn btn-sm btn-outline-primary"
+                                                    data-role="submit-reply"
+                                                    data-parent-id="{{ reply.comment_id }}">
+                                                {% bilingual "Reply" "回复" %}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <ul class="community-comment-replies"></ul>
+                        </li>
+                        {% endfor %}
+                    </ul>
                 </li>
                 {% endfor %}
             </ul>

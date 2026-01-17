@@ -128,6 +128,7 @@ TEMPLATES = [
                 "django.contrib.messages.context_processors.messages",
                 "trading.context_processors.csp_nonce",
                 "trading.context_processors.user_flags",
+                "trading.context_processors.unread_notifications",
             ],
             "builtins": [
                 "trading.templatetags.i18n_extras",

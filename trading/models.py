@@ -196,6 +196,13 @@ class CommunityPostLike(models.Model):
 class CommunityPostComment(models.Model):
     comment_id = models.CharField(max_length=48, unique=True, default=generate_comment_id)
     post = models.ForeignKey(CommunityPost, on_delete=models.CASCADE, related_name="comments")
+    parent = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="replies",
+    )
     author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     author_display_name = models.CharField(max_length=120)
     content = models.TextField()
@@ -203,3 +210,38 @@ class CommunityPostComment(models.Model):
 
     class Meta:
         ordering = ["created_at"]
+
+
+class Notification(models.Model):
+    VERB_LIKED = "liked"
+    VERB_COMMENTED = "commented"
+    VERB_CHOICES = (
+        (VERB_LIKED, "Liked"),
+        (VERB_COMMENTED, "Commented"),
+    )
+
+    recipient = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="notifications",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="notifications_sent",
+    )
+    verb = models.CharField(max_length=20, choices=VERB_CHOICES)
+    target_post = models.ForeignKey(
+        CommunityPost,
+        on_delete=models.CASCADE,
+        related_name="notifications",
+    )
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["recipient", "is_read"]),
+            models.Index(fields=["recipient", "-created_at"]),
+        ]

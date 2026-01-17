@@ -66,6 +66,7 @@ class CommunityComment:
     author: str
     content: str
     created_at: str
+    parent_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -168,7 +169,7 @@ def get_topic(topic_id: str | None) -> dict[str, Any]:
     return _serialize_topic(topic)
 
 
-def _serialize_comment(comment: CommunityPostComment) -> dict[str, Any]:
+def _serialize_comment(comment: CommunityPostComment, *, parent_comment_id: str | None = None) -> dict[str, Any]:
     profile = getattr(comment.author, "profile", None)
     user_slug = str(profile.slug) if profile else ""
     avatar_path = ""
@@ -176,6 +177,7 @@ def _serialize_comment(comment: CommunityPostComment) -> dict[str, Any]:
         avatar_path = profile.avatar_path
     return {
         "comment_id": comment.comment_id,
+        "parent_id": parent_comment_id or "",
         "user_id": str(comment.author_id),
         "user_slug": user_slug,
         "author": comment.author_display_name,
@@ -192,7 +194,23 @@ def _serialize_post(post: CommunityPostModel, *, backtest_summaries: dict[str, d
     if profile and profile.avatar_path:
         avatar_path = profile.avatar_path
     comments_qs = post.comments.all()
-    comment_entries = [_serialize_comment(comment) for comment in comments_qs]
+    comments_list = list(comments_qs)
+    comment_id_by_pk = {comment.pk: comment.comment_id for comment in comments_list}
+    comment_entries = [
+        _serialize_comment(comment, parent_comment_id=comment_id_by_pk.get(comment.parent_id))
+        for comment in comments_list
+    ]
+    comments_by_id = {entry["comment_id"]: entry for entry in comment_entries}
+    top_level_comments: list[dict[str, Any]] = []
+    for entry in comment_entries:
+        parent_id = entry.get("parent_id")
+        if parent_id and parent_id in comments_by_id:
+            parent = comments_by_id[parent_id]
+            parent.setdefault("replies", []).append(entry)
+        else:
+            top_level_comments.append(entry)
+    for entry in top_level_comments:
+        entry.setdefault("replies", [])
     liked_ids = [str(pk) for pk in post.liked_by.values_list("id", flat=True)]
     summary = None
     if backtest_summaries and post.backtest_record_id:
@@ -219,7 +237,7 @@ def _serialize_post(post: CommunityPostModel, *, backtest_summaries: dict[str, d
             {"user_id": str(entry.user_id), "created_at": entry.created_at.strftime("%Y-%m-%d %H:%M UTC")}
             for entry in post.like_entries.order_by("-created_at")[:20]
         ],
-        "comments": comment_entries,
+        "comments": top_level_comments,
         "comment_count": len(comment_entries),
     }
 
@@ -380,7 +398,12 @@ def toggle_like(post_id: str, user_id: str) -> dict[str, Any] | None:
     return {"liked": liked, "like_count": like_count}
 
 
-def add_comment(post_id: str, comment: CommunityComment) -> dict[str, Any] | None:
+def add_comment(
+    post_id: str,
+    comment: CommunityComment,
+    *,
+    parent: CommunityPostComment | None = None,
+) -> dict[str, Any] | None:
     try:
         post = CommunityPostModel.objects.get(post_id=post_id)
     except CommunityPostModel.DoesNotExist:
@@ -390,14 +413,20 @@ def add_comment(post_id: str, comment: CommunityComment) -> dict[str, Any] | Non
         author = UserModel.objects.get(pk=comment.user_id)
     except UserModel.DoesNotExist:
         return None
+    if comment.parent_id and parent is None:
+        parent = CommunityPostComment.objects.filter(post=post, comment_id=comment.parent_id).first()
+        if not parent:
+            return None
     obj = CommunityPostComment.objects.create(
         comment_id=comment.comment_id,
         post=post,
+        parent=parent,
         author=author,
         author_display_name=comment.author,
         content=comment.content,
     )
-    payload = _serialize_comment(obj)
+    parent_comment_id = parent.comment_id if parent else ""
+    payload = _serialize_comment(obj, parent_comment_id=parent_comment_id)
     record_metric(
         "community.post.comment",
         post_id=post_id,

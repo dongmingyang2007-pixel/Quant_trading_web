@@ -72,9 +72,9 @@
 }
 
 .search-hero-submit {
-    border-radius: 999px;
-    margin: 6px;
-    padding: 8px 20px;
+    border-radius: 0 999px 999px 0;
+    margin: 0;
+    padding: 10px 24px;
     font-weight: 600;
 }
 
@@ -402,6 +402,44 @@
     gap: 8px;
 }
 
+.share-card-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.share-card-fork {
+    border: 1px solid rgba(13, 110, 253, 0.35);
+    background: #ffffff;
+    color: #0d6efd;
+    font-weight: 600;
+    font-size: 0.85rem;
+    padding: 6px 10px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.share-card-fork:hover,
+.share-card-fork:focus {
+    border-color: rgba(13, 110, 253, 0.6);
+    box-shadow: 0 8px 18px rgba(13, 110, 253, 0.15);
+    transform: translateY(-1px);
+}
+
+.share-card-fork-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.share-card-fork-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
 .share-card-body {
     display: flex;
     flex-direction: column;
@@ -444,6 +482,25 @@
     margin: 0;
     font-size: 0.82rem;
     color: #64748b;
+}
+
+.cashtag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-weight: 700;
+    color: #1976d2;
+    background: #e3f2fd;
+    text-decoration: none;
+}
+
+.cashtag:hover,
+.cashtag:focus {
+    color: #125ea5;
+    background: #d7ebff;
+    text-decoration: none;
 }
 
 .compose-topic-bar {
@@ -900,7 +957,14 @@
 
 .community-comment-item {
     display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.community-comment-row {
+    display: flex;
     gap: 12px;
+    align-items: flex-start;
 }
 
 .community-delete-btn {
@@ -955,6 +1019,38 @@
 .community-comment-author {
     font-weight: 600;
     color: #0f172a;
+}
+
+.community-comment-actions {
+    margin-top: 6px;
+}
+
+.community-reply-btn {
+    border: none;
+    background: transparent;
+    color: #2563eb;
+    font-weight: 600;
+    font-size: 0.85rem;
+    padding: 0;
+    cursor: pointer;
+}
+
+.community-reply-btn:hover {
+    text-decoration: underline;
+}
+
+.community-reply-form {
+    margin-top: 8px;
+}
+
+.community-comment-replies {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-left: 44px;
 }
 
 .community-empty {

@@ -17,6 +17,7 @@ from .api import (
     enqueue_rl_task,
     enqueue_training_task,
     get_user_backtests,
+    fork_backtest,
     rag_ingest,
     rag_query_api,
     rl_task_status,
@@ -39,6 +40,7 @@ from .auth import activate, resend_activation, signup
 from .market import market_insights, market_insights_data
 from .community import (
     community,
+    community_notifications,
     write_post,
     get_user_drafts,
     delete_post,
@@ -77,6 +79,7 @@ __all__ = [
     "enqueue_rl_task",
     "rl_task_status",
     "get_user_backtests",
+    "fork_backtest",
     "delete_history",
     "update_history_meta",
     "export_report",
@@ -94,6 +97,7 @@ __all__ = [
     "market_insights",
     "market_insights_data",
     "community",
+    "community_notifications",
     "write_post",
     "get_user_drafts",
     "delete_post",

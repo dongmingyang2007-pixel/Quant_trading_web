@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .models import Notification
+
 
 def user_flags(request) -> dict[str, Any]:
     user = getattr(request, "user", None)
@@ -18,3 +20,11 @@ def csp_nonce(request) -> dict[str, Any]:
     Returns an empty string when the middleware was bypassed (e.g., tests).
     """
     return {"csp_nonce": getattr(request, "csp_nonce", "")}
+
+
+def unread_notifications(request) -> dict[str, Any]:
+    user = getattr(request, "user", None)
+    if not user or not user.is_authenticated:
+        return {"unread_notifications_count": 0}
+    count = Notification.objects.filter(recipient=user, is_read=False).count()
+    return {"unread_notifications_count": count}
