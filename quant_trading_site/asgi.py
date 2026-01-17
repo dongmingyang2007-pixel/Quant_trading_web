@@ -22,8 +22,21 @@ def _bootstrap_pycache_prefix() -> None:
 _bootstrap_pycache_prefix()
 
 from django.core.asgi import get_asgi_application  # noqa: E402
+from channels.auth import AuthMiddlewareStack  # noqa: E402
+from channels.routing import ProtocolTypeRouter, URLRouter  # noqa: E402
+
+from trading import routing  # noqa: E402
 
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "quant_trading_site.settings")
 
-application = get_asgi_application()
+django_app = get_asgi_application()
+
+application = ProtocolTypeRouter(
+    {
+        "http": django_app,
+        "websocket": AuthMiddlewareStack(
+            URLRouter(routing.websocket_urlpatterns),
+        ),
+    }
+)

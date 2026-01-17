@@ -1,7 +1,7 @@
 {% load markdown_extras community_extras %}
 {% if posts %}
     {% for post in posts %}
-    <article class="community-card community-post" data-post-id="{{ post.post_id }}">
+    <article class="community-card community-post" data-post-id="{{ post.post_id }}" id="post-{{ post.post_id }}">
         <header class="community-post-head">
             <div class="community-post-meta">
                 <span class="community-post-avatar">

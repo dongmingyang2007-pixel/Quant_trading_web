@@ -252,6 +252,7 @@ def community(request):
     topic_value = topic_filter if topic_filter and topic_filter != "all" else None
     page_number = request.GET.get("page") or 1
     search_query = (request.GET.get("q") or "").strip()
+    focus_post_id = (request.GET.get("post") or "").strip()
     sort = (request.GET.get("sort") or "latest").strip().lower()
     if sort in {"top", "trending"}:
         sort = "trending"
@@ -263,6 +264,8 @@ def community(request):
         posts_qs = posts_qs.filter(
             Q(content__icontains=search_query) | Q(author_display_name__icontains=search_query)
         )
+    if focus_post_id:
+        posts_qs = posts_qs.filter(post_id=focus_post_id)
     if sort == "trending":
         posts_qs = posts_qs.annotate(
             like_count=Count("liked_by", distinct=True),

@@ -17,7 +17,7 @@
             <div class="list-group shadow-sm">
                 {% for notice in notifications %}
                     <a class="list-group-item list-group-item-action d-flex justify-content-between align-items-start notification-item{% if not notice.is_read %} notification-unread{% endif %}"
-                       href="{% url 'trading:community' %}">
+                       href="{% url 'trading:community' %}?post={{ notice.target_post.post_id }}#post-{{ notice.target_post.post_id }}">
                         <div class="me-3">
                             <div class="fw-semibold">
                                 {{ notice.actor.username }}

@@ -128,6 +128,8 @@ def execute_tool_call(name: str, arguments: Any, *, user_id: str | None = None) 
                 start=start,
                 end=end,
                 limit=limit,
+                feed="sip",
+                adjustment="split",
                 user_id=user_id,
             )
         }

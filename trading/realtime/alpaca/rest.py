@@ -35,7 +35,8 @@ def fetch_bars_frame(
         symbols,
         timeframe=timeframe,
         limit=limit,
-        feed=feed,
+        feed="sip",
+        adjustment="split",
         user_id=user_id,
         timeout=timeout,
     )

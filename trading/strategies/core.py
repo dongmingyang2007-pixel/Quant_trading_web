@@ -308,6 +308,8 @@ def fetch_price_data(
                 start=start,
                 end=alpaca_end,
                 timeframe="1Day",
+                feed="sip",
+                adjustment="split",
                 user_id=user_id,
             )
             if isinstance(frame, pd.DataFrame) and not frame.empty:

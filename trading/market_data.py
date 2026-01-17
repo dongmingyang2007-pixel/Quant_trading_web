@@ -24,7 +24,7 @@ try:  # optional dependency
 except Exception:  # pragma: no cover
     yf = None  # type: ignore
 
-RATE_LIMIT_PER_WINDOW = int(os.environ.get("MARKET_FETCH_RATE_LIMIT", "120") or 0)
+RATE_LIMIT_PER_WINDOW = int(os.environ.get("MARKET_FETCH_RATE_LIMIT", "10000") or 0)
 RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("MARKET_FETCH_RATE_WINDOW", "60") or 0)
 
 _RATE_LOCK = threading.Lock()
@@ -278,6 +278,8 @@ def fetch(
                     start=alpaca_start,
                     end=alpaca_end,
                     timeframe=timeframe,
+                    feed="sip",
+                    adjustment="split",
                     user_id=user_id,
                     timeout=alpaca_timeout,
                 )
@@ -386,6 +388,8 @@ def fetch_recent_window(
                 unique_symbols,
                 timeframe=timeframe,
                 limit=limit,
+                feed="sip",
+                adjustment="split",
                 user_id=user_id,
             )
         except Exception:

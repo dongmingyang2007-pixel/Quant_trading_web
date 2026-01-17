@@ -79,6 +79,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "django.contrib.humanize",
     "django_bootstrap5",
+    "channels",
     "rest_framework",
     "paper",
     "trading",
@@ -145,6 +146,12 @@ DATABASES = {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": DATA_ROOT / "db.sqlite3",
     }
+}
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer",
+    },
 }
 
 AUTH_PASSWORD_VALIDATORS = [

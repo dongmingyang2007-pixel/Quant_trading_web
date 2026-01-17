@@ -13,6 +13,7 @@
   const listLosers = document.querySelector('[data-role="losers"]');
   const statusText = document.querySelector('[data-role="status-text"]');
   const sourceText = document.querySelector('[data-role="source-text"]');
+  const statusSection = document.querySelector('.market-status');
   const timeframeButtons = Array.prototype.slice.call(document.querySelectorAll('.market-timeframe'));
   const searchForm = document.getElementById('market-search-form');
   const searchInput = document.getElementById('market-search-input');
@@ -27,6 +28,10 @@
   const typeaheadPanel = document.querySelector('[data-role="typeahead-panel"]');
   const typeaheadList = typeaheadPanel && typeaheadPanel.querySelector('[data-role="typeahead-list"]');
   const typeaheadHint = typeaheadPanel && typeaheadPanel.querySelector('[data-role="typeahead-hint"]');
+  const marketSocketUrl = (() => {
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    return `${protocol}://${window.location.host}/ws/market/`;
+  })();
 
   const initialBtn = document.querySelector('.market-timeframe.is-active');
   let currentTimeframe = (initialBtn && initialBtn.getAttribute('data-timeframe')) || '1mo';
@@ -36,6 +41,10 @@
   let hideTypeaheadTimer = null;
   let typeaheadOptions = [];
   let typeaheadActiveIndex = -1;
+  let retryTimer = null;
+  let lastRequest = { query: '', options: {} };
+  let marketSocket = null;
+  let socketRetryTimer = null;
 
   const TEXT = langPrefix === 'zh'
     ? {
@@ -44,6 +53,7 @@
         dataSuffix: '数据…',
         updated: '数据已更新',
         justNow: '刚刚',
+        retrying: '请求过快，正在重试',
         emptySymbol: '暂无可展示的标的。',
         emptyList: '暂无数据',
         statusError: '加载失败，请稍后再试。',
@@ -77,6 +87,7 @@
         dataSuffix: 'data…',
         updated: 'Data refreshed',
         justNow: 'just now',
+        retrying: 'Rate limited, retrying',
         emptySymbol: 'No symbols to display.',
         emptyList: 'No data',
         statusError: 'Failed to load, please try again later.',
@@ -174,12 +185,71 @@
     }
   }
 
+  function setRetryingState(retryAfterSeconds) {
+    const delaySeconds = Math.min(Math.max(parseInt(retryAfterSeconds, 10) || 3, 2), 30);
+    if (statusSection) {
+      statusSection.classList.add('is-retrying');
+    }
+    setStatus(TEXT.retrying);
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+    }
+    retryTimer = setTimeout(() => {
+      if (statusSection) {
+        statusSection.classList.remove('is-retrying');
+      }
+      loadData(lastRequest.query || '', lastRequest.options || {});
+    }, delaySeconds * 1000);
+  }
+
   function setSource(sourceKey) {
     if (!sourceText) return;
     const labels = TEXT.sourceLabels || {};
     const normalizedKey = sourceKey && labels[sourceKey] ? sourceKey : 'unknown';
     const label = labels[normalizedKey] || labels.unknown || '';
     sourceText.textContent = `${TEXT.sourcePrefix || ''}${label}`;
+  }
+
+  function applyLiveUpdate(update) {
+    if (!update || typeof update !== 'object') return;
+    const symbol = normalizeSymbol(update.symbol || '');
+    if (!symbol) return;
+    const price = typeof update.price === 'number' ? update.price : Number.parseFloat(update.price);
+    const changePct = typeof update.change_pct === 'number' ? update.change_pct : Number.parseFloat(update.change_pct);
+    document.querySelectorAll(`.market-card[data-symbol="${symbol}"]`).forEach((card) => {
+      const priceEl = card.querySelector('[data-role="price"]');
+      const dayEl = card.querySelector('[data-role="day-change"]');
+      if (priceEl && Number.isFinite(price)) {
+        priceEl.textContent = price.toFixed(2);
+      }
+      if (dayEl && Number.isFinite(changePct)) {
+        dayEl.textContent = formatChange(changePct);
+        applyChangeState(dayEl, changePct, card.dataset.invert === '1', true);
+      }
+    });
+  }
+
+  function connectMarketSocket() {
+    if (!window.WebSocket) return;
+    if (socketRetryTimer) {
+      clearTimeout(socketRetryTimer);
+      socketRetryTimer = null;
+    }
+    if (marketSocket && (marketSocket.readyState === WebSocket.OPEN || marketSocket.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    marketSocket = new WebSocket(marketSocketUrl);
+    marketSocket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        applyLiveUpdate(payload);
+      } catch (error) {
+        return;
+      }
+    };
+    marketSocket.onclose = () => {
+      socketRetryTimer = setTimeout(connectMarketSocket, 3000);
+    };
   }
 
   function clearListState(container) {
@@ -257,9 +327,35 @@
       return;
     }
 
-    const points = series.map((value) =>
-      typeof value === 'number' ? Math.min(Math.max(value, 0), 1) : 0
-    );
+    let min = Number.POSITIVE_INFINITY;
+    let max = Number.NEGATIVE_INFINITY;
+    const rawValues = series.map((value) => {
+      const parsed = typeof value === 'number' ? value : Number.parseFloat(value);
+      if (!Number.isFinite(parsed)) {
+        return null;
+      }
+      min = Math.min(min, parsed);
+      max = Math.max(max, parsed);
+      return parsed;
+    });
+    if (!Number.isFinite(min) || !Number.isFinite(max)) {
+      ctx.strokeStyle = '#cbd5f5';
+      ctx.beginPath();
+      ctx.moveTo(0, height / 2);
+      ctx.lineTo(width, height / 2);
+      ctx.stroke();
+      return;
+    }
+    const shouldNormalize = min < 0 || max > 1;
+    const range = max - min;
+    const points = rawValues.map((value) => {
+      if (!Number.isFinite(value)) return 0;
+      if (shouldNormalize && range === 0) {
+        return 0.5;
+      }
+      const normalized = shouldNormalize ? (value - min) / range : value;
+      return Math.min(Math.max(normalized, 0), 1);
+    });
 
     const gradient = ctx.createLinearGradient(0, 0, 0, height);
     if (invert) {
@@ -270,10 +366,13 @@
       gradient.addColorStop(1, 'rgba(59, 130, 246, 0)');
     }
 
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.moveTo(0, height - points[0] * height);
+    const step = width / (points.length - 1);
     points.forEach((point, index) => {
-      ctx.lineTo((index / (points.length - 1)) * width, height - point * height);
+      ctx.lineTo(step * index, height - point * height);
     });
     ctx.strokeStyle = invert ? '#f43f5e' : '#3b82f6';
     ctx.stroke();
@@ -638,6 +737,7 @@
 
   async function loadData(query = '', options = {}) {
     const normalizedQuery = normalizeSymbol(query);
+    lastRequest = { query: normalizedQuery || '', options: { ...options } };
     const requestPayload = {
       timeframe: currentTimeframe,
     };
@@ -660,6 +760,13 @@
       requestPayload.limit = options.limit;
     }
 
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+    if (statusSection) {
+      statusSection.classList.remove('is-retrying');
+    }
     setStatus(`${TEXT.loading} ${TEXT.timeframes[currentTimeframe] || currentTimeframe} ${TEXT.dataSuffix}`);
     setListLoading(listGainers);
     setListLoading(listLosers);
@@ -695,6 +802,10 @@
         });
       }
       const payload = await response.json();
+      if (response.status === 429 || payload.rate_limited) {
+        setRetryingState(payload.retry_after_seconds);
+        return;
+      }
       if (!response.ok) {
         throw new Error(payload.error || TEXT.genericError);
       }
@@ -805,6 +916,11 @@
       if (canvas) {
         drawSparkline(canvas, item.series || [], invert);
       }
+      const card = fragment.querySelector('.market-card');
+      if (card) {
+        card.dataset.symbol = normalizeSymbol(item.symbol || '');
+        card.dataset.invert = invert ? '1' : '0';
+      }
       container.appendChild(fragment);
     });
   }
@@ -813,4 +929,5 @@
   attachChipHandler(watchlistChips, { allowRemove: true, watch: true });
 
   loadData();
+  connectMarketSocket();
 })();

@@ -114,7 +114,8 @@ def _download_macro_series(
             end=end_date,
             timeframe="1Day",
             user_id=user_id,
-            adjustment="all"
+            feed="sip",
+            adjustment="split",
         )
     except Exception:
         df = pd.DataFrame()
@@ -253,7 +254,8 @@ def _download_capital_flows_snapshot(
             end=end_date,
             timeframe="1Day",
             user_id=user_id,
-            adjustment="all"
+            feed="sip",
+            adjustment="split",
         )
     except Exception:
         df = pd.DataFrame()

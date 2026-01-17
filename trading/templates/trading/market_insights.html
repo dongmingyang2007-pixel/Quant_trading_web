@@ -57,14 +57,20 @@
                 <a class="btn btn-outline-light tradingview-link" href="https://www.tradingview.com/screener/" target="_blank" rel="noopener">
                     {% if lang_prefix == 'zh' %}打开 TradingView 筛选器{% else %}Open TradingView screener{% endif %}
                 </a>
-                <div class="market-timeframes" role="group" aria-label="{% if lang_prefix == 'zh' %}时间范围选择{% else %}Timeframe selector{% endif %}">
-                    {% for tf in timeframes.values %}
-                    <button type="button"
-                            class="market-timeframe{% if tf.key == default_timeframe.key %} is-active{% endif %}"
-                            data-timeframe="{{ tf.key }}">
-                        {% if lang_prefix == 'zh' %}{{ tf.label }}{% else %}{{ tf.label_en }}{% endif %}
-                    </button>
-                    {% endfor %}
+                <div class="market-timeframe-row">
+                    <div class="market-timeframes" role="group" aria-label="{% if lang_prefix == 'zh' %}时间范围选择{% else %}Timeframe selector{% endif %}">
+                        {% for tf in timeframes.values %}
+                        <button type="button"
+                                class="market-timeframe{% if tf.key == default_timeframe.key %} is-active{% endif %}"
+                                data-timeframe="{{ tf.key }}">
+                            {% if lang_prefix == 'zh' %}{{ tf.label }}{% else %}{{ tf.label_en }}{% endif %}
+                        </button>
+                        {% endfor %}
+                    </div>
+                    <span class="market-data-indicator"
+                          title="{% if lang_prefix == 'zh' %}SIP 全量行情 + 拆股复权{% else %}SIP full feed + split-adjusted{% endif %}">
+                        {% if lang_prefix == 'zh' %}数据：SIP/复权{% else %}Data: SIP/Adjusted{% endif %}
+                    </span>
                 </div>
             </div>
         </div>

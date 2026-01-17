@@ -58,7 +58,7 @@ WINDOW_LENGTHS = {
 }
 _QUERY_SANITIZER = re.compile(r"[^A-Z0-9\.\-]")
 MARKET_REQUEST_TIMEOUT = max(5, getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", 25))
-MARKET_MAX_WORKERS = max(1, getattr(settings, "MARKET_DATA_MAX_WORKERS", 4))
+MARKET_MAX_WORKERS = max(1, getattr(settings, "MARKET_DATA_MAX_WORKERS", 20))
 MARKET_RATE_WINDOW = max(10, getattr(settings, "MARKET_DATA_RATE_WINDOW_SECONDS", 90))
 MARKET_RATE_MAX_CALLS = max(1, getattr(settings, "MARKET_DATA_RATE_MAX_CALLS", 45))
 MARKET_RATE_CACHE_ALIAS = getattr(settings, "MARKET_DATA_RATE_CACHE_ALIAS", "default")
