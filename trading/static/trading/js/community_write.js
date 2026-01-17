@@ -159,6 +159,26 @@
         }
     };
 
+    const generateSparklineSVG = (dataPoints, width = 200, height = 44) => {
+        if (!Array.isArray(dataPoints) || dataPoints.length < 2) return "";
+        const values = dataPoints.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+        if (values.length < 2) return "";
+        const minVal = Math.min(...values);
+        const maxVal = Math.max(...values);
+        const range = maxVal - minVal || 1;
+        const padding = 2;
+        const innerWidth = Math.max(width - padding * 2, 1);
+        const innerHeight = Math.max(height - padding * 2, 1);
+        const step = values.length > 1 ? innerWidth / (values.length - 1) : innerWidth;
+        const points = values.map((value, index) => {
+            const x = padding + index * step;
+            const y = padding + (1 - (value - minVal) / range) * innerHeight;
+            return `${x.toFixed(2)},${y.toFixed(2)}`;
+        });
+        const path = points.reduce((acc, point, index) => `${acc}${index === 0 ? "M" : " L"} ${point}`, "");
+        return `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-hidden="true"><path d="${path}" stroke="#0d6efd" stroke-width="1.5" fill="none"/></svg>`;
+    };
+
     const openBacktestModal = () => {
         if (!backtestModal) return;
         if (!csrfToken) {
@@ -230,6 +250,11 @@
                     id: item.id || "",
                     name: item.strategy_name || "Strategy",
                     return: item.total_return || "--",
+                    sharpe: item.sharpe || "N/A",
+                    max_drawdown: item.max_drawdown || "N/A",
+                    win_rate: item.win_rate || "N/A",
+                    date: item.created_at || "",
+                    equity_curve: Array.isArray(item.equity_curve) ? item.equity_curve : null,
                 };
                 const range = backtestInsertRange || quill.getSelection(true) || { index: quill.getLength(), length: 0 };
                 quill.insertEmbed(range.index, "backtestCard", payload, "user");
@@ -664,17 +689,29 @@
                 const recordId = String(payload.id || "").trim();
                 const name = payload.name || "Backtest Strategy";
                 const totalReturn = payload.return || "--";
+                const sharpe = payload.sharpe || "N/A";
+                const maxDrawdown = payload.max_drawdown || payload.maxDrawdown || "N/A";
+                const winRate = payload.win_rate || payload.winRate || "N/A";
+                const date = payload.date || payload.created_at || "";
+                const equityCurve = Array.isArray(payload.equity_curve) ? payload.equity_curve : null;
 
                 node.setAttribute("contenteditable", "false");
                 node.dataset.id = recordId;
                 node.dataset.name = name;
                 node.dataset.return = totalReturn;
+                node.dataset.sharpe = sharpe;
+                node.dataset.maxDrawdown = maxDrawdown;
+                node.dataset.winRate = winRate;
+                node.dataset.date = date;
                 node.classList.add("backtest-card-embed");
 
-                const top = document.createElement("div");
-                top.className = "backtest-card-top";
+                const header = document.createElement("div");
+                header.className = "backtest-card-header";
 
-                const icon = document.createElement("div");
+                const titleGroup = document.createElement("div");
+                titleGroup.className = "backtest-card-title-group";
+
+                const icon = document.createElement("span");
                 icon.className = "backtest-card-icon";
                 icon.setAttribute("aria-hidden", "true");
                 icon.innerHTML =
@@ -684,25 +721,70 @@
                 title.className = "backtest-card-title";
                 title.textContent = name;
 
-                top.appendChild(icon);
-                top.appendChild(title);
+                titleGroup.appendChild(icon);
+                titleGroup.appendChild(title);
 
-                const metric = document.createElement("div");
-                metric.className = "backtest-card-metric";
+                const meta = document.createElement("div");
+                meta.className = "backtest-card-meta";
 
-                const label = document.createElement("span");
-                label.className = "backtest-card-label";
-                label.textContent = "Total Return";
+                const dateEl = document.createElement("div");
+                dateEl.className = "backtest-card-date";
+                dateEl.textContent = date || "—";
 
-                const valueEl = document.createElement("span");
-                valueEl.className = "backtest-card-value";
-                valueEl.textContent = totalReturn;
+                const action = document.createElement("div");
+                action.className = "backtest-card-action";
+                action.textContent = "VIEW REPORT";
 
-                metric.appendChild(label);
-                metric.appendChild(valueEl);
+                meta.appendChild(dateEl);
+                meta.appendChild(action);
 
-                node.appendChild(top);
-                node.appendChild(metric);
+                header.appendChild(titleGroup);
+                header.appendChild(meta);
+
+                const metrics = document.createElement("div");
+                metrics.className = "backtest-card-metrics";
+
+                const createMetric = (labelText, valueText, valueClass) => {
+                    const metric = document.createElement("div");
+                    metric.className = "backtest-card-metric";
+
+                    const label = document.createElement("div");
+                    label.className = "backtest-card-metric-label";
+                    label.textContent = labelText;
+
+                    const value = document.createElement("div");
+                    value.className = "backtest-card-metric-value";
+                    if (valueClass) {
+                        value.classList.add(valueClass);
+                    }
+                    value.textContent = valueText;
+
+                    metric.appendChild(label);
+                    metric.appendChild(value);
+                    return metric;
+                };
+
+                const returnValue = Number.parseFloat(String(totalReturn).replace("%", ""));
+                const returnClass = Number.isFinite(returnValue)
+                    ? returnValue >= 0
+                        ? "is-positive"
+                        : "is-negative"
+                    : "is-neutral";
+
+                metrics.appendChild(createMetric("Return", totalReturn, returnClass));
+                metrics.appendChild(createMetric("Sharpe", sharpe));
+                metrics.appendChild(createMetric("Max DD", maxDrawdown, "is-negative"));
+                metrics.appendChild(createMetric("Win Rate", winRate));
+
+                node.appendChild(header);
+                const sparklineSvg = generateSparklineSVG(equityCurve);
+                if (sparklineSvg) {
+                    const sparklineWrap = document.createElement("div");
+                    sparklineWrap.className = "backtest-card-sparkline";
+                    sparklineWrap.innerHTML = sparklineSvg;
+                    node.appendChild(sparklineWrap);
+                }
+                node.appendChild(metrics);
                 return node;
             }
 
@@ -711,13 +793,17 @@
                     id: node.dataset.id || "",
                     name: node.dataset.name || "",
                     return: node.dataset.return || "",
+                    sharpe: node.dataset.sharpe || "",
+                    max_drawdown: node.dataset.maxDrawdown || "",
+                    win_rate: node.dataset.winRate || "",
+                    date: node.dataset.date || "",
                 };
             }
         }
 
         BacktestCard.blotName = "backtestCard";
         BacktestCard.tagName = "div";
-        BacktestCard.className = "backtest-embed-card";
+        BacktestCard.className = "backtest-smart-card";
 
         window.Quill.register(BacktestCard, true);
 

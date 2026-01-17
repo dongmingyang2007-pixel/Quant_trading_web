@@ -149,6 +149,67 @@ def _format_signed_pct(value: Any, *, digits: int = 1) -> str:
     return f"{number * 100:+.{digits}f}%"
 
 
+def _parse_numeric(value: Any) -> tuple[float | None, bool]:
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None, False
+        is_percent = text.endswith("%")
+        if is_percent:
+            text = text[:-1].strip()
+        try:
+            return float(text), is_percent
+        except (TypeError, ValueError):
+            return None, False
+    try:
+        return float(value), False
+    except (TypeError, ValueError):
+        return None, False
+
+
+def _format_pct(value: Any, *, digits: int = 1, default: str = "N/A") -> str:
+    number, is_percent = _parse_numeric(value)
+    if number is None or not math.isfinite(number):
+        return default
+    if not is_percent and abs(number) <= 1.5:
+        number *= 100
+    return f"{number:.{digits}f}%"
+
+
+def _format_ratio(value: Any, *, digits: int = 2, default: str = "N/A") -> str:
+    number, _is_percent = _parse_numeric(value)
+    if number is None or not math.isfinite(number):
+        return default
+    return f"{number:.{digits}f}"
+
+
+def _normalize_metrics(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+        value = parsed
+    if isinstance(value, list):
+        metrics: dict[str, Any] = {}
+        for entry in value:
+            if not isinstance(entry, dict):
+                continue
+            key = entry.get("key") or entry.get("name") or entry.get("metric") or entry.get("label")
+            if key:
+                metrics[str(key)] = entry.get("value", entry.get("val", entry.get("score")))
+                continue
+            for fallback_key in ("sharpe_ratio", "sharpe", "max_drawdown", "win_rate", "hit_ratio"):
+                if fallback_key in entry:
+                    metrics[fallback_key] = entry[fallback_key]
+        return metrics
+    return {}
+
+
 def _sse_message(event: str, data: dict[str, object]) -> str:
     payload = json.dumps(data, ensure_ascii=False)
     return f"event: {event}\ndata: {payload}\n\n"
@@ -1085,12 +1146,17 @@ def get_user_backtests(request):
         records = (
             BacktestRecordModel.objects.filter(user=request.user)
             .order_by("-timestamp")
-            .only("record_id", "title", "stats", "timestamp", "engine", "ticker")
+            .only("record_id", "title", "stats", "metrics", "timestamp", "engine", "ticker")
         )[:10]
         backtests = []
         for record in records:
             stats = record.stats if isinstance(record.stats, dict) else {}
             total_return = _format_signed_pct(stats.get("total_return"))
+            metrics = _normalize_metrics(record.metrics)
+            sharpe = _format_ratio(metrics.get("sharpe_ratio", metrics.get("sharpe")))
+            max_drawdown = _format_pct(metrics.get("max_drawdown"))
+            win_rate_value = metrics.get("win_rate", metrics.get("hit_ratio"))
+            win_rate = _format_pct(win_rate_value, digits=0)
             strategy_name = (record.title or "").strip()
             if not strategy_name:
                 engine = (record.engine or "").strip()
@@ -1104,14 +1170,24 @@ def get_user_backtests(request):
                 created_at = record.timestamp.strftime("%Y-%m-%d")
             except Exception:
                 created_at = ""
-            backtests.append(
-                {
-                    "id": record.record_id,
-                    "strategy_name": strategy_name,
-                    "total_return": total_return,
-                    "created_at": created_at,
-                }
-            )
+            entry = {
+                "id": record.record_id,
+                "strategy_name": strategy_name,
+                "total_return": total_return,
+                "sharpe": sharpe,
+                "max_drawdown": max_drawdown,
+                "win_rate": win_rate,
+                "created_at": created_at,
+            }
+            equity_curve = metrics.get("equity_curve")
+            if isinstance(equity_curve, str):
+                try:
+                    equity_curve = json.loads(equity_curve)
+                except (TypeError, ValueError):
+                    equity_curve = None
+            if isinstance(equity_curve, list) and all(isinstance(item, (int, float)) for item in equity_curve):
+                entry["equity_curve"] = [float(item) for item in equity_curve]
+            backtests.append(entry)
         return JsonResponse(
             {"backtests": backtests, "request_id": request_id},
             json_dumps_params={"ensure_ascii": False},
