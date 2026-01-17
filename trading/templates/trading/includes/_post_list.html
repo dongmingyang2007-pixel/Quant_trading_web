@@ -1,4 +1,4 @@
-{% load markdown_extras %}
+{% load markdown_extras community_extras %}
 {% if posts %}
     {% for post in posts %}
     <article class="community-card community-post" data-post-id="{{ post.post_id }}">
@@ -17,6 +17,10 @@
                             <a href="{% url 'trading:profile_public' post.profile_slug %}" class="community-profile-link">{{ post.display_name }}</a>
                         {% else %}
                             {{ post.display_name }}
+                        {% endif %}
+                        {% get_user_badge post.user_id as user_badge %}
+                        {% if user_badge %}
+                            <span class="badge rounded-pill bg-{{ user_badge.color }}">{{ user_badge.label }}</span>
                         {% endif %}
                         <a class="community-post-topic" href="?topic={{ post.topic_id }}">#{{ post.topic_name }}</a>
                     </div>
@@ -63,6 +67,36 @@
                 </div>
             </div>
             {% endif %}
+            {% if post.title %}
+                <h3 class="community-post-title">{{ post.title }}</h3>
+            {% endif %}
+            {% with metrics=post.backtest_record.metrics|default:post.backtest_summary %}
+                {% if metrics %}
+                    {% with total_return=metrics.total_return|default:"--" sharpe=metrics.sharpe_ratio|default:metrics.sharpe max_dd=metrics.max_drawdown|default:"--" %}
+                    <div class="strategy-snapshot">
+                        <span class="strategy-snapshot-label">{% bilingual "Strategy Snapshot" "策略快照" %}</span>
+                        <div class="strategy-snapshot-metrics">
+                            {% with return_text=total_return|stringformat:"s" %}
+                                <span class="strategy-metric">
+                                    <span class="metric-label">{% bilingual "Return" "收益" %}</span>
+                                    <span class="metric-value{% if return_text|slice:":1" == "-" %} text-danger{% elif return_text != "--" %} text-success{% else %} text-muted{% endif %}">
+                                        {{ total_return }}
+                                    </span>
+                                </span>
+                            {% endwith %}
+                            <span class="strategy-metric">
+                                <span class="metric-label">{% bilingual "Sharpe" "夏普" %}</span>
+                                <span class="metric-value">{{ sharpe|default:"--" }}</span>
+                            </span>
+                            <span class="strategy-metric">
+                                <span class="metric-label">{% bilingual "DD" "回撤" %}</span>
+                                <span class="metric-value">{{ max_dd|default:"--" }}</span>
+                            </span>
+                        </div>
+                    </div>
+                    {% endwith %}
+                {% endif %}
+            {% endwith %}
             <div class="community-post-content">{{ post.content|parse_cashtags }}</div>
             {% if post.image_url %}
                 <figure class="community-post-image">

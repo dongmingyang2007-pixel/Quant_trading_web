@@ -147,15 +147,15 @@
                 </div>
                 <div class="community-toolbar-actions">
                     <div class="community-sort-tabs btn-group" role="tablist" aria-label="{% bilingual 'Sort posts' '帖子排序' %}">
-                        <a class="btn btn-outline-secondary btn-sm{% if not sort %} active{% endif %}"
+                        <a class="btn btn-outline-secondary btn-sm{% if sort == 'trending' %} active{% endif %}"
                            role="tab"
-                           href="?topic={{ active_topic.topic_id }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}">
-                            {% bilingual "Latest" "最新" %}
+                           href="?topic={{ active_topic.topic_id }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}&sort=trending">
+                            🔥 {% bilingual "Trending" "趋势" %}
                         </a>
-                        <a class="btn btn-outline-secondary btn-sm{% if sort == 'top' %} active{% endif %}"
+                        <a class="btn btn-outline-secondary btn-sm{% if sort == 'latest' %} active{% endif %}"
                            role="tab"
-                           href="?topic={{ active_topic.topic_id }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}&sort=top">
-                            {% bilingual "Top" "最热" %}
+                           href="?topic={{ active_topic.topic_id }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}&sort=latest">
+                            🕒 {% bilingual "Latest" "最新" %}
                         </a>
                     </div>
                 </div>

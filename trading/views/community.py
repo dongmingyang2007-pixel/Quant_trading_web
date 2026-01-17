@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
-from django.db.models import Count, Q
+from django.db.models import Count, F, Q
 from django.http import JsonResponse
 from django.shortcuts import render, redirect
 from django.urls import reverse
@@ -252,19 +252,22 @@ def community(request):
     topic_value = topic_filter if topic_filter and topic_filter != "all" else None
     page_number = request.GET.get("page") or 1
     search_query = (request.GET.get("q") or "").strip()
-    sort = (request.GET.get("sort") or "").strip().lower()
-    sort = "top" if sort == "top" else ""
+    sort = (request.GET.get("sort") or "latest").strip().lower()
+    if sort in {"top", "trending"}:
+        sort = "trending"
+    else:
+        sort = "latest"
     posts_qs = list_posts(limit=None, topic_id=topic_value, return_queryset=True)
     posts_qs = posts_qs.filter(status=CommunityPostModel.STATUS_PUBLISHED)
     if search_query:
         posts_qs = posts_qs.filter(
             Q(content__icontains=search_query) | Q(author_display_name__icontains=search_query)
         )
-    if sort == "top":
-        posts_qs = posts_qs.annotate(like_count=Count("liked_by", distinct=True)).order_by(
-            "-like_count",
-            "-created_at",
-        )
+    if sort == "trending":
+        posts_qs = posts_qs.annotate(
+            like_count=Count("liked_by", distinct=True),
+            comment_count=Count("comments", distinct=True),
+        ).annotate(score=F("like_count") + F("comment_count")).order_by("-score", "-created_at")
     else:
         posts_qs = posts_qs.order_by("-created_at")
     paginator = Paginator(posts_qs, 20)
