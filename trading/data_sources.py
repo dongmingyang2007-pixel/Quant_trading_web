@@ -1,21 +1,25 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
 
 from django.conf import settings
 
+from .alpaca_data import (
+    DEFAULT_DATA_URL,
+    _alpaca_get,
+    _alpaca_headers,
+    fetch_stock_bars_frame,
+    resolve_alpaca_credentials,
+)
 from .cache_utils import build_cache_key, cache_memoize
-from .network import get_requests_session, resolve_retry_config, retry_call, retry_call_result
 from .security import sanitize_html_fragment
-from . import market_data
+
 MACRO_TICKERS = {
     "^VIX": {"label": "芝加哥VIX波动率", "short": "VIX"},
     "^TNX": {"label": "美国10年期国债收益率", "short": "10Y"},
@@ -24,6 +28,16 @@ MACRO_TICKERS = {
     "CL=F": {"label": "WTI 原油", "short": "WTI"},
     "HYG": {"label": "高收益债ETF (HYG)", "short": "HY Credit"},
     "BTC-USD": {"label": "比特币", "short": "BTC"},
+}
+
+MACRO_PROXY_MAP = {
+    "^VIX": ["VIXY", "VXX"],
+    "^TNX": ["IEF", "TLT"],
+    "DX-Y.NYB": ["UUP"],
+    "GC=F": ["GLD"],
+    "CL=F": ["USO"],
+    "HYG": ["HYG"],
+    "BTC-USD": ["BITO"],
 }
 
 GLOBAL_MACRO_FILE = settings.LEARNING_CONTENT_DIR / "global_macro.json"
@@ -59,7 +73,7 @@ class AuxiliaryData:
 
 
 def _select_panel(frame: pd.DataFrame, field: str) -> pd.DataFrame:
-    """Normalize yfinance output (multi-index vs single) to a flat panel."""
+    """Normalize a multi-index panel to a flat field panel."""
     if frame is None or frame.empty:
         return pd.DataFrame()
     columns = frame.columns
@@ -85,17 +99,29 @@ def _select_panel(frame: pd.DataFrame, field: str) -> pd.DataFrame:
     return frame
 
 
-def _yf_retry_config(timeout: float | None = None):
-    return resolve_retry_config(
-        timeout=timeout,
-        retries=os.environ.get("MARKET_FETCH_MAX_RETRIES"),
-        backoff=os.environ.get("MARKET_FETCH_RETRY_BACKOFF"),
-        default_timeout=getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", None),
-    )
-
-
 def _empty_frame(value: object) -> bool:
     return not isinstance(value, pd.DataFrame) or value.empty
+
+
+def _fetch_alpaca_asset(symbol: str) -> Dict[str, Any] | None:
+    key_id, secret = resolve_alpaca_credentials()
+    if not key_id or not secret:
+        return None
+    url = f"{DEFAULT_DATA_URL.rstrip('/')}/v2/assets/{symbol.upper()}"
+    headers = _alpaca_headers(key_id, secret)
+    response = _alpaca_get(
+        url,
+        params={},
+        headers=headers,
+        timeout=getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", None),
+    )
+    if response is None:
+        return None
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _download_macro_series(
@@ -108,14 +134,18 @@ def _download_macro_series(
     start = end_date - timedelta(days=lookback_days)
     records: Dict[str, Any] = {}
     fetch_failed = False
+    proxy_map = {symbol: MACRO_PROXY_MAP.get(symbol, [symbol]) for symbol in MACRO_TICKERS}
+    proxy_symbols: list[str] = []
+    for proxies in proxy_map.values():
+        for proxy in proxies:
+            if proxy and proxy not in proxy_symbols:
+                proxy_symbols.append(proxy)
     try:
-        raw = market_data.fetch(
-            list(MACRO_TICKERS.keys()),
+        raw = fetch_stock_bars_frame(
+            proxy_symbols,
             start=start,
             end=end_date + timedelta(days=1),
-            interval="1d",
-            cache=True,
-            ttl=getattr(settings, "MACRO_DATA_CACHE_TTL", 600),
+            timeframe="1Day",
             user_id=user_id,
         )
         if _empty_frame(raw):
@@ -133,8 +163,15 @@ def _download_macro_series(
         data = data.to_frame()
 
     for symbol, meta in MACRO_TICKERS.items():
-        series = data.get(symbol)
-        if series is None or series.dropna().empty:
+        series = None
+        proxy_used = None
+        for proxy in proxy_map.get(symbol, []):
+            candidate = data.get(proxy) if isinstance(data, pd.DataFrame) else None
+            if candidate is not None and not candidate.dropna().empty:
+                series = candidate.dropna()
+                proxy_used = proxy
+                break
+        if series is None:
             message = "缺少历史数据"
             if fetch_failed or data.empty:
                 message = "暂未获取到最新数据（可能离线或接口限制）"
@@ -142,22 +179,27 @@ def _download_macro_series(
                 "label": meta["label"],
                 "short": meta["short"],
                 "available": False,
+                "latest": 0.0,
+                "change_5d": 0.0,
+                "change_21d": 0.0,
+                "trend": "平稳",
                 "message": message,
+                "proxy": proxy_used or (proxy_map.get(symbol) or [None])[0],
             }
             continue
-        series = series.dropna()
         latest = float(series.iloc[-1])
-        change_5d = float((series.iloc[-1] / series.iloc[-5] - 1) * 100) if len(series) >= 5 else None
-        change_21d = float((series.iloc[-1] / series.iloc[-21] - 1) * 100) if len(series) >= 21 else None
-        trend = "上升" if change_21d and change_21d > 0 else "下降" if change_21d and change_21d < 0 else "平稳"
+        change_5d = float((series.iloc[-1] / series.iloc[-5] - 1) * 100) if len(series) >= 5 else 0.0
+        change_21d = float((series.iloc[-1] / series.iloc[-21] - 1) * 100) if len(series) >= 21 else 0.0
+        trend = "上升" if change_21d > 0 else "下降" if change_21d < 0 else "平稳"
         records[symbol] = {
             "label": meta["label"],
             "short": meta["short"],
             "available": True,
             "latest": round(latest, 4),
-            "change_5d": None if change_5d is None else round(change_5d, 2),
-            "change_21d": None if change_21d is None else round(change_21d, 2),
+            "change_5d": round(change_5d, 2),
+            "change_21d": round(change_21d, 2),
             "trend": trend,
+            "proxy": proxy_used,
         }
     return records
 
@@ -177,66 +219,35 @@ def _fetch_macro_series(
 
 
 def _fetch_fundamental_snapshot(ticker: str) -> Dict[str, Any]:
-    """使用 yfinance 抽取公司的基本面与财务摘要。"""
-    fundamentals: Dict[str, Any] = {}
-    financials: Dict[str, Any] = {}
-    config = _yf_retry_config()
-    session = get_requests_session(config.timeout)
-    try:
-        def _download() -> tuple[Dict[str, Any], Dict[str, Any]]:
-            fundamentals_local: Dict[str, Any] = {}
-            financials_local: Dict[str, Any] = {}
-            yft = yf.Ticker(ticker, session=session)
-            info = yft.info or {}
-            for field in [
-                "sector",
-                "industry",
-                "marketCap",
-                "enterpriseValue",
-                "profitMargins",
-                "grossMargins",
-                "operatingMargins",
-                "returnOnEquity",
-                "returnOnAssets",
-                "revenueGrowth",
-                "earningsQuarterlyGrowth",
-            ]:
-                value = info.get(field)
-                if value is None:
-                    continue
-                if isinstance(value, (int, float)):
-                    fundamentals_local[field] = float(value)
-                else:
-                    fundamentals_local[field] = value
+    """使用 Alpaca assets API 获取基础元信息，并对财报缺口做降级处理。"""
+    fundamentals: Dict[str, Any] = {
+        "available": False,
+        "message": "Data source migrating...",
+    }
+    financials: Dict[str, Any] = {
+        "available": False,
+        "message": "Data source migrating...",
+    }
+    asset = _fetch_alpaca_asset(ticker)
+    if not asset:
+        return fundamentals, financials
 
-            fundamentals_local["summary"] = info.get("longBusinessSummary") or ""
-
-            def parse_financial_table(frame: pd.DataFrame | None, label: str) -> Dict[str, Any]:
-                if frame is None or frame.empty:
-                    return {}
-                # yfinance financial tables columns are periods.
-                latest_col = frame.columns[0]
-                return {f"{label}:{idx}": float(val) for idx, val in frame[latest_col].dropna().items()}
-
-            financials_local["income_statement"] = parse_financial_table(getattr(yft, "financials", None), "IS")
-            financials_local["balance_sheet"] = parse_financial_table(getattr(yft, "balance_sheet", None), "BS")
-            financials_local["cashflow"] = parse_financial_table(getattr(yft, "cashflow", None), "CF")
-            return fundamentals_local, financials_local
-
-        def _should_retry(result: object) -> bool:
-            if not isinstance(result, tuple) or len(result) != 2:
-                return True
-            fundamentals_local, financials_local = result
-            return not fundamentals_local and not financials_local
-
-        fundamentals, financials = retry_call_result(
-            _download,
-            config=config,
-            should_retry=_should_retry,
-        )
-    except Exception:
-        fundamentals = {}
-        financials = {}
+    fundamentals = {
+        "available": True,
+        "source": "alpaca",
+        "symbol": asset.get("symbol", ticker.upper()),
+        "name": asset.get("name") or "",
+        "exchange": asset.get("exchange"),
+        "class": asset.get("class"),
+        "status": asset.get("status"),
+        "tradable": asset.get("tradable"),
+        "marginable": asset.get("marginable"),
+        "shortable": asset.get("shortable"),
+        "easy_to_borrow": asset.get("easy_to_borrow"),
+        "fractionable": asset.get("fractionable"),
+        "summary": asset.get("name") or "",
+        "message": "Fundamental data limited to asset metadata.",
+    }
     return fundamentals, financials
 
 
@@ -260,13 +271,11 @@ def _download_capital_flows_snapshot(
     start = end_date - timedelta(days=lookback_days)
     flows: Dict[str, Any] = {}
     try:
-        raw = market_data.fetch(
+        raw = fetch_stock_bars_frame(
             list(proxies.keys()),
             start=start,
             end=end_date + timedelta(days=1),
-            interval="1d",
-            cache=True,
-            ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
+            timeframe="1Day",
             user_id=user_id,
         )
     except Exception:
@@ -373,43 +382,10 @@ def _compute_news_sentiment(news_items: List[Dict[str, Any]] | None) -> Dict[str
 
 
 def _fetch_options_metrics(ticker: str) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
+    return {
         "available": False,
-        "message": "暂无期权数据",
+        "message": "Data source migrating...",
     }
-    config = _yf_retry_config()
-    session = get_requests_session(config.timeout)
-    try:
-        def _download() -> Dict[str, Any]:
-            tk = yf.Ticker(ticker, session=session)
-            expiries = tk.options
-            if not expiries:
-                return result
-            expiry = expiries[0]
-            chain = tk.option_chain(expiry)
-            calls = chain.calls
-            puts = chain.puts
-            if calls.empty or puts.empty:
-                return result
-            call_iv = float(calls["impliedVolatility"].mean())
-            put_iv = float(puts["impliedVolatility"].mean())
-            put_call = float(puts["volume"].sum() / calls["volume"].sum()) if calls["volume"].sum() else None
-            atm_call = calls.iloc[(calls["strike"] - tk.info.get("currentPrice", calls["strike"].median())).abs().idxmin()]
-            atm_put = puts.iloc[(puts["strike"] - tk.info.get("currentPrice", puts["strike"].median())).abs().idxmin()]
-            return {
-                "available": True,
-                "expiry": expiry,
-                "call_iv": round(call_iv * 100, 2),
-                "put_iv": round(put_iv * 100, 2),
-                "put_call_ratio": None if put_call is None else round(put_call, 2),
-                "atm_call_bid": float(atm_call.get("bid", 0.0)),
-                "atm_put_bid": float(atm_put.get("bid", 0.0)),
-            }
-
-        result = retry_call(_download, config=config)
-    except Exception:
-        pass
-    return result
 
 
 def _load_global_macro_snapshot(end_date: date) -> Dict[str, Any]:
