@@ -8,6 +8,7 @@ from django.shortcuts import render, redirect
 from django.urls import reverse
 from urllib.parse import urlencode
 from django.views.decorators.http import require_POST
+from django.views.decorators.csrf import ensure_csrf_cookie
 
 from datetime import datetime
 from typing import Any
@@ -340,7 +341,9 @@ def community(request):
 
 
 @login_required
+@ensure_csrf_cookie
 def write_post(request, post_id: int | None = None):
+    print(f"Received data: {request.body}")
     user = request.user
     profile = load_profile(str(user.id))
     display_name = profile.get("display_name") or user.username
@@ -381,6 +384,12 @@ def write_post(request, post_id: int | None = None):
                 return JsonResponse({"status": "error", "message": "invalid_payload"}, status=400)
 
         action = (payload.get("action") or "").strip().lower()
+        status = (payload.get("status") or "").strip().lower()
+        if not action and status:
+            if status in {"draft", "save_draft"}:
+                action = "save_draft"
+            elif status in {"published", "publish"}:
+                action = "publish"
         title = (payload.get("title") or "").strip()
         raw_content = payload.get("content") or ""
         content = _sanitize_post_content(raw_content)
@@ -409,21 +418,24 @@ def write_post(request, post_id: int | None = None):
                 )
 
         if action == "save_draft":
-            if not target_post:
-                target_post = CommunityPostModel.objects.create(
-                    topic=topic,
-                    author=user,
-                    author_display_name=display_name,
-                    title=title,
-                    content=content,
-                    status=CommunityPostModel.STATUS_DRAFT,
-                )
-            else:
-                target_post.topic = topic
-                target_post.title = title
-                target_post.content = content
-                target_post.status = CommunityPostModel.STATUS_DRAFT
-                target_post.save(update_fields=["topic", "title", "content", "status", "updated_at"])
+            try:
+                if not target_post:
+                    target_post = CommunityPostModel.objects.create(
+                        topic=topic,
+                        author=user,
+                        author_display_name=display_name,
+                        title=title,
+                        content=content,
+                        status=CommunityPostModel.STATUS_DRAFT,
+                    )
+                else:
+                    target_post.topic = topic
+                    target_post.title = title
+                    target_post.content = content
+                    target_post.status = CommunityPostModel.STATUS_DRAFT
+                    target_post.save(update_fields=["topic", "title", "content", "status", "updated_at"])
+            except Exception as exc:
+                return JsonResponse({"status": "error", "message": str(exc)}, status=500)
             return JsonResponse({"status": "success", "post_id": target_post.pk})
 
         if action == "publish":
@@ -440,21 +452,24 @@ def write_post(request, post_id: int | None = None):
                 if target_post:
                     draft_id = str(target_post.pk)
             else:
-                if not target_post:
-                    target_post = CommunityPostModel.objects.create(
-                        topic=topic,
-                        author=user,
-                        author_display_name=display_name,
-                        title=title,
-                        content=content,
-                        status=CommunityPostModel.STATUS_PUBLISHED,
-                    )
-                else:
-                    target_post.topic = topic
-                    target_post.title = title
-                    target_post.content = content
-                    target_post.status = CommunityPostModel.STATUS_PUBLISHED
-                    target_post.save(update_fields=["topic", "title", "content", "status", "updated_at"])
+                try:
+                    if not target_post:
+                        target_post = CommunityPostModel.objects.create(
+                            topic=topic,
+                            author=user,
+                            author_display_name=display_name,
+                            title=title,
+                            content=content,
+                            status=CommunityPostModel.STATUS_PUBLISHED,
+                        )
+                    else:
+                        target_post.topic = topic
+                        target_post.title = title
+                        target_post.content = content
+                        target_post.status = CommunityPostModel.STATUS_PUBLISHED
+                        target_post.save(update_fields=["topic", "title", "content", "status", "updated_at"])
+                except Exception as exc:
+                    return JsonResponse({"status": "error", "message": str(exc)}, status=500)
                 redirect_url = f"{reverse('trading:community')}?topic={topic.topic_id}"
                 if is_json:
                     return JsonResponse(

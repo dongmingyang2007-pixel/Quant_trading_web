@@ -19,6 +19,12 @@
         failed: statusEl?.dataset.failedText || "Save failed. Please try again.",
     };
 
+    const mathModal = document.getElementById("mathModal");
+    const mathField = mathModal?.querySelector("#math-input");
+    const mathInsertBtn = mathModal?.querySelector("[data-role='math-insert']");
+    let mathModalInstance = null;
+    let lastFormulaRange = null;
+
     const AUTO_SAVE_DELAY = 1200;
     const AUTO_SAVE_INTERVAL = 30000;
 
@@ -41,10 +47,15 @@
         return "";
     };
 
+    const getCsrfToken = () =>
+        getCookie("csrftoken") || form.querySelector("input[name='csrfmiddlewaretoken']")?.value || "";
+
     const normalizeHtml = (html) => {
         const trimmed = (html || "").trim();
         return trimmed === "<p><br></p>" ? "" : trimmed;
     };
+
+    const resolveFormAction = () => form.getAttribute("action") || window.location.pathname;
 
     const syncContent = () => {
         if (!quill || !contentInput) return;
@@ -54,6 +65,37 @@
     const setStatus = (message) => {
         if (!statusEl) return;
         statusEl.textContent = message || "";
+    };
+
+    const showMathModal = () => {
+        if (!mathModal) return;
+        if (quill) {
+            lastFormulaRange = quill.getSelection(true);
+        }
+        if (window.bootstrap && typeof window.bootstrap.Modal === "function") {
+            if (!mathModalInstance) {
+                mathModalInstance = new window.bootstrap.Modal(mathModal);
+            }
+            mathModalInstance.show();
+        } else {
+            mathModal.removeAttribute("aria-hidden");
+        }
+        if (mathField && typeof mathField.focus === "function") {
+            setTimeout(() => {
+                mathField.focus();
+                if (typeof mathField.executeCommand === "function") {
+                    mathField.executeCommand("showVirtualKeyboard");
+                } else if (window.mathVirtualKeyboard?.show) {
+                    window.mathVirtualKeyboard.show();
+                }
+            }, 80);
+        }
+    };
+
+    const hideMathModal = () => {
+        if (mathModalInstance) {
+            mathModalInstance.hide();
+        }
     };
 
     const getTopicValue = () => {
@@ -72,6 +114,7 @@
 
     const buildPayload = (action) => ({
         action,
+        status: action === "publish" ? "published" : "draft",
         title: (titleInput?.value || "").trim(),
         content: quill ? normalizeHtml(quill.root.innerHTML) : normalizeHtml(contentInput?.value || ""),
         topic: getTopicValue(),
@@ -103,19 +146,19 @@
         syncContent();
         const payload = buildPayload("save_draft");
         try {
-            const response = await fetch(form.action || window.location.pathname, {
+            const response = await fetch(resolveFormAction(), {
                 method: "POST",
+                credentials: "same-origin",
                 headers: {
                     "X-Requested-With": "XMLHttpRequest",
-                    "X-CSRFToken": getCookie("csrftoken"),
+                    "X-CSRFToken": getCsrfToken(),
                     "Content-Type": "application/json",
                 },
                 body: JSON.stringify(payload),
             });
             const responseData = await response.json().catch(() => ({}));
             if (!response.ok || !responseData || responseData.status !== "success") {
-                const message = responseData?.message || statusMessages.failed;
-                alert(message);
+                const message = responseData?.message || `保存失败（${response.status}）`;
                 throw new Error(message);
             }
             if (postIdInput && responseData.post_id) {
@@ -130,6 +173,7 @@
             setStatus(statusMessages.saved);
         } catch (error) {
             setStatus(statusMessages.failed);
+            alert(error.message || statusMessages.failed);
         } finally {
             isSaving = false;
         }
@@ -149,29 +193,30 @@
         syncContent();
         const payload = buildPayload("publish");
         try {
-            const response = await fetch(form.action || window.location.pathname, {
+            const response = await fetch(resolveFormAction(), {
                 method: "POST",
+                credentials: "same-origin",
                 headers: {
                     "X-Requested-With": "XMLHttpRequest",
-                    "X-CSRFToken": getCookie("csrftoken"),
+                    "X-CSRFToken": getCsrfToken(),
                     "Content-Type": "application/json",
                 },
                 body: JSON.stringify(payload),
             });
             const responseData = await response.json().catch(() => ({}));
             if (!response.ok || !responseData || responseData.status !== "success") {
-                const message = responseData?.message || "发布失败，请稍后重试。";
-                alert(message);
+                const message = responseData?.message || `发布失败（${response.status}）`;
                 throw new Error(message);
             }
             const redirectUrl = responseData.redirect_url || form.dataset.redirectUrl || "";
             if (redirectUrl) {
                 window.location.href = redirectUrl;
             } else {
-                window.location.href = form.action || window.location.pathname;
+                window.location.href = resolveFormAction();
             }
         } catch (error) {
             setStatus(statusMessages.failed);
+            alert(error.message || "发布失败，请稍后重试。");
             isPublishing = false;
         }
     };
@@ -262,7 +307,8 @@
 
     const initEditor = () => {
         if (!window.Quill || !editorContainer) return;
-        const placeholder = editorContainer.dataset.placeholder || "在此输入正文內容...";
+        const placeholder =
+            "开始写作...（选中文字可弹出快捷菜单，连按回车可跳出代码块）";
         const bounds = editorContainer.closest(".write-container") || editorContainer;
         quill = new window.Quill(editorContainer, {
             theme: "snow",
@@ -285,10 +331,47 @@
                     ],
                     handlers: {
                         image: () => pickImageFile(),
+                        formula: () => showMathModal(),
                     },
                 },
             },
         });
+
+        const clearBlockFormats = (range) => {
+            quill.formatLine(range.index, 1, "code-block", false);
+            quill.formatLine(range.index, 1, "blockquote", false);
+        };
+
+        quill.keyboard.addBinding(
+            { key: 13, collapsed: true, format: ["code-block"] },
+            (range, context) => {
+                if (!context.empty) return true;
+                clearBlockFormats(range);
+                return false;
+            },
+        );
+
+        quill.keyboard.addBinding(
+            { key: 13, collapsed: true, format: ["blockquote"] },
+            (range, context) => {
+                if (!context.empty) return true;
+                clearBlockFormats(range);
+                return false;
+            },
+        );
+
+        const toolbarModule = quill.getModule("toolbar");
+        if (toolbarModule && typeof toolbarModule.update === "function") {
+            const updateToolbar = (range) => {
+                try {
+                    toolbarModule.update(range);
+                } catch (error) {
+                    toolbarModule.update();
+                }
+            };
+            quill.on("selection-change", (range) => updateToolbar(range));
+            quill.on("text-change", () => updateToolbar(quill.getSelection()));
+        }
 
         if (contentInput && contentInput.value) {
             const initialValue = contentInput.value.trim();
@@ -326,6 +409,41 @@
         document.addEventListener("DOMContentLoaded", initEditor);
     } else {
         initEditor();
+    }
+
+    if (mathModal) {
+        mathModal.addEventListener("shown.bs.modal", () => {
+            if (mathField && typeof mathField.focus === "function") {
+                mathField.focus();
+                if (typeof mathField.executeCommand === "function") {
+                    mathField.executeCommand("showVirtualKeyboard");
+                } else if (window.mathVirtualKeyboard?.show) {
+                    window.mathVirtualKeyboard.show();
+                }
+            }
+        });
+        mathModal.addEventListener("hidden.bs.modal", () => {
+            if (window.mathVirtualKeyboard?.hide) {
+                window.mathVirtualKeyboard.hide();
+            }
+            if (quill) {
+                quill.focus();
+            }
+        });
+    }
+
+    if (mathInsertBtn) {
+        mathInsertBtn.addEventListener("click", () => {
+            if (!quill || !mathField) return;
+            const latex = (mathField.value || "").trim();
+            if (!latex) return;
+            const range = lastFormulaRange || quill.getSelection(true);
+            const index = range ? range.index : quill.getLength();
+            quill.insertEmbed(index, "formula", latex, "user");
+            quill.setSelection(index + 1, 0, "silent");
+            mathField.value = "";
+            hideMathModal();
+        });
     }
 
     if (titleInput) {
