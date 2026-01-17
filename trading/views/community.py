@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from django.contrib.auth.decorators import login_required
+from django.core.paginator import Paginator
+from django.db.models import Count, Q
 from django.http import JsonResponse
 from django.shortcuts import render, redirect
 from django.urls import reverse
@@ -23,6 +25,7 @@ from ..community import (
     get_topic,
     list_posts,
     list_topics,
+    serialize_posts,
     toggle_like,
     remove_post,
 )
@@ -69,6 +72,7 @@ def community(request):
     avatar_path = profile.get("avatar_path") or ""
     language = (getattr(request, "LANGUAGE_CODE", "") or "").lower()
     is_zh = language.startswith("zh")
+    is_htmx = bool(request.headers.get("HX-Request"))
 
     def resolve_media(path: str | None) -> str:
         return resolve_media_url(path)
@@ -201,7 +205,25 @@ def community(request):
 
     topic_filter = topic_meta.get("topic_id")
     topic_value = topic_filter if topic_filter and topic_filter != "all" else None
-    posts = list_posts(limit=200, topic_id=topic_value)
+    page_number = request.GET.get("page") or 1
+    search_query = (request.GET.get("q") or "").strip()
+    sort = (request.GET.get("sort") or "").strip().lower()
+    sort = "top" if sort == "top" else ""
+    posts_qs = list_posts(limit=None, topic_id=topic_value, return_queryset=True)
+    if search_query:
+        posts_qs = posts_qs.filter(
+            Q(content__icontains=search_query) | Q(author_display_name__icontains=search_query)
+        )
+    if sort == "top":
+        posts_qs = posts_qs.annotate(like_count=Count("liked_by", distinct=True)).order_by(
+            "-like_count",
+            "-created_at",
+        )
+    else:
+        posts_qs = posts_qs.order_by("-created_at")
+    paginator = Paginator(posts_qs, 20)
+    page_obj = paginator.get_page(page_number)
+    posts = serialize_posts(page_obj.object_list)
     enriched_posts: list[dict[str, Any]] = []
     for post in posts:
         post = post.copy()
@@ -222,6 +244,33 @@ def community(request):
         post["comment_count"] = len(comment_entries)
         enriched_posts.append(post)
 
+    next_page_url = None
+    if page_obj.has_next():
+        query = {"page": page_obj.next_page_number()}
+        if requested_topic:
+            query["topic"] = requested_topic
+        if search_query:
+            query["q"] = search_query
+        if sort:
+            query["sort"] = sort
+        next_page_url = f"?{urlencode(query)}"
+
+    show_empty_message = page_obj.number == 1
+
+    if is_htmx:
+        return render(
+            request,
+            "trading/includes/_post_list.html",
+            {
+                "posts": enriched_posts,
+                "avatar_url": resolve_media(avatar_path),
+                "display_name": display_name,
+                "next_page_url": next_page_url,
+                "show_empty_message": show_empty_message,
+                "is_htmx": True,
+            },
+        )
+
     return render(
         request,
         "trading/community.html",
@@ -238,6 +287,11 @@ def community(request):
             "share_record": share_record,
             "share_history_id": share_history_id,
             "share_record_id": share_record_id,
+            "next_page_url": next_page_url,
+            "show_empty_message": show_empty_message,
+            "search_query": search_query,
+            "sort": sort,
+            "is_htmx": False,
         },
     )
 

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict, field
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 import uuid
 
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError
+from django.db.models import QuerySet
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -217,12 +218,7 @@ def _serialize_post(post: CommunityPostModel, *, backtest_summaries: dict[str, d
     }
 
 
-def list_posts(
-    limit: int = 50,
-    *,
-    topic_id: str | None = None,
-    user_id: str | None = None,
-) -> list[dict[str, Any]]:
+def _build_posts_queryset(*, topic_id: str | None = None, user_id: str | None = None):
     qs = (
         CommunityPostModel.objects.select_related("topic", "author", "author__profile")
         .prefetch_related(
@@ -238,15 +234,38 @@ def list_posts(
         qs = qs.filter(topic__topic_id=topic_id)
     if user_id:
         qs = qs.filter(author_id=user_id)
-    if limit:
-        qs = qs[:limit]
-    posts = list(qs)
+    return qs
+
+
+def serialize_posts(posts: Iterable[CommunityPostModel]) -> list[dict[str, Any]]:
+    posts_list = list(posts)
     backtest_summaries: dict[str, dict[str, Any]] = {}
-    record_ids = {post.backtest_record_id for post in posts if post.backtest_record_id}
+    record_ids = {post.backtest_record_id for post in posts_list if post.backtest_record_id}
     if record_ids:
         for record in BacktestRecordModel.objects.filter(record_id__in=record_ids):
             backtest_summaries[record.record_id] = build_backtest_summary(record)
-    return [_serialize_post(post, backtest_summaries=backtest_summaries) for post in posts]
+    return [_serialize_post(post, backtest_summaries=backtest_summaries) for post in posts_list]
+
+
+def list_posts(
+    limit: int | None = 50,
+    *,
+    topic_id: str | None = None,
+    user_id: str | None = None,
+    offset: int | None = None,
+    return_queryset: bool = False,
+) -> list[dict[str, Any]] | QuerySet[CommunityPostModel]:
+    qs = _build_posts_queryset(topic_id=topic_id, user_id=user_id)
+    if offset is not None:
+        if limit is not None:
+            qs = qs[offset : offset + limit]
+        else:
+            qs = qs[offset:]
+    elif limit is not None:
+        qs = qs[:limit]
+    if return_queryset:
+        return qs
+    return serialize_posts(qs)
 
 
 def append_post(post: CommunityPost) -> None:

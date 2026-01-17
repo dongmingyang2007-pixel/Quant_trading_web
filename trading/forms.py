@@ -6,6 +6,9 @@ from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.utils.translation import get_language
 
+import bleach
+from bleach.css_sanitizer import CSSSanitizer
+
 from .strategy_defaults import ADVANCED_STRATEGY_DEFAULTS
 
 
@@ -791,6 +794,45 @@ class CommunityPostForm(forms.Form):
             self.fields["topic"].choices = topics
         else:
             self.fields["topic"].choices = []
+
+    def clean_content(self) -> str:
+        content = self.cleaned_data.get("content") or ""
+        allowed_tags = [
+            "p",
+            "b",
+            "i",
+            "u",
+            "em",
+            "strong",
+            "a",
+            "h1",
+            "h2",
+            "h3",
+            "ul",
+            "ol",
+            "li",
+            "blockquote",
+            "pre",
+            "span",
+            "div",
+            "br",
+        ]
+        allowed_attrs = {
+            "*": ["style", "class"],
+            "a": ["href", "target", "rel", "style", "class"],
+        }
+        css_sanitizer = CSSSanitizer(allowed_css_properties=["color", "background-color"])
+        cleaned = bleach.clean(
+            content,
+            tags=allowed_tags,
+            attributes=allowed_attrs,
+            strip=True,
+            css_sanitizer=css_sanitizer,
+        )
+        text_only = bleach.clean(cleaned, tags=[], strip=True)
+        if not text_only.strip():
+            return ""
+        return cleaned
 
 
 class SignupForm(UserCreationForm):

@@ -16,6 +16,10 @@
       };
 
   const getCsrfToken = () => {
+    const input = document.querySelector('input[name="csrfmiddlewaretoken"]');
+    if (input) return input.value;
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    if (meta) return meta.getAttribute('content') || '';
     const match = document.cookie.match(/csrftoken=([^;]+)/i);
     return match ? decodeURIComponent(match[1]) : '';
   };
@@ -162,7 +166,7 @@
         statusEl.textContent = TEXT.saving;
       }
 
-      const payload = {};
+      const payload = { id: recordId };
       if (saveBtn) {
         const titleInput = item.querySelector('[data-role="history-title"]');
         const tagsInput = item.querySelector('[data-role="history-tags"]');
@@ -177,12 +181,13 @@
 
       try {
         const response = await fetch(url, {
-          method: 'PATCH',
+          method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'X-CSRFToken': getCsrfToken(),
             'X-Requested-With': 'XMLHttpRequest',
           },
+          credentials: 'same-origin',
           body: JSON.stringify(payload),
         });
         const data = await response.json().catch(() => ({}));

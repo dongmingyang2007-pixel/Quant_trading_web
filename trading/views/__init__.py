@@ -22,7 +22,7 @@ from .api import (
     screener_snapshot_api,
     training_task_status,
 )
-from .history import delete_history
+from .history import delete_history, update_history_meta
 from .reports import export_report
 from .account import (
     account,
@@ -68,6 +68,7 @@ __all__ = [
     "enqueue_rl_task",
     "rl_task_status",
     "delete_history",
+    "update_history_meta",
     "export_report",
     "signup",
     "activate",

@@ -21,7 +21,7 @@
     if (openComposeBtn) composeTriggers.push(openComposeBtn);
     if (createTopicBtn) composeTriggers.push(createTopicBtn);
     const composerForm = composePanel?.querySelector("[data-role='composer']");
-    const contentTextarea = composerForm?.querySelector("textarea[name='content']");
+    const contentTextarea = composerForm?.querySelector("[data-role='content-input']");
     const croppedInput = composerForm?.querySelector("[data-role='cropped-data']");
     const imageInput = composerForm?.querySelector("[data-role='image-input']");
     const mediaPanel = composerForm?.querySelector("[data-role='media-panel']");
@@ -47,6 +47,16 @@
     const activeTopicName = root.dataset.activeTopicName;
     const shareHistoryId = root.dataset.shareHistoryId;
 
+    const highlightBlocks = (scope) => {
+        if (!window.hljs || typeof window.hljs.highlightElement !== "function") return;
+        const target = scope || document;
+        target.querySelectorAll("pre code").forEach((block) => {
+            window.hljs.highlightElement(block);
+        });
+    };
+
+    const editorContainer = composerForm?.querySelector("[data-role='editor']");
+    let quill = null;
     let objectUrl = null;
     let lastComposeTrigger = null;
     let lastDialogFocus = null;
@@ -98,7 +108,9 @@
         if (!composePanel) return;
         composePanel.classList.remove("d-none");
         setComposeExpanded(true);
-        if (contentTextarea) {
+        if (quill) {
+            setTimeout(() => quill.focus(), 50);
+        } else if (contentTextarea) {
             setTimeout(() => contentTextarea.focus(), 50);
         }
         if (topicInput && !opts.newTopic) {
@@ -260,6 +272,49 @@
         mediaPreview.classList.remove("d-none");
         mediaPlaceholder.classList.add("d-none");
     };
+
+    const initEditor = () => {
+        if (!editorContainer || !window.Quill) return;
+        const placeholder = editorContainer.dataset.placeholder || "分享你的策略灵感或市场观察...";
+        quill = new window.Quill(editorContainer, {
+            theme: "snow",
+            placeholder,
+            modules: {
+                toolbar: [
+                    ["bold", "italic", "underline"],
+                    [{ size: ["small", false, "large", "huge"] }],
+                    [{ color: [] }, { background: [] }],
+                    [{ list: "ordered" }, { list: "bullet" }],
+                    ["blockquote", "formula"],
+                    ["clean"],
+                ],
+            },
+        });
+        if (contentTextarea && contentTextarea.value) {
+            const initialValue = contentTextarea.value.trim();
+            if (initialValue) {
+                if (initialValue.includes("<")) {
+                    quill.clipboard.dangerouslyPasteHTML(initialValue);
+                } else {
+                    quill.setText(initialValue);
+                }
+            }
+        }
+    };
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", initEditor);
+    } else {
+        initEditor();
+    }
+
+    if (composerForm) {
+        composerForm.addEventListener("submit", () => {
+            if (!quill || !contentTextarea) return;
+            const html = quill.root.innerHTML;
+            contentTextarea.value = html === "<p><br></p>" ? "" : html;
+        });
+    }
 
     if (openComposeBtn && composePanel) {
         openComposeBtn.addEventListener("click", (event) => {
@@ -579,32 +634,39 @@
             });
     };
 
-    root.querySelectorAll("[data-role='like-button']").forEach((button) => {
-        button.addEventListener("click", () => toggleLike(button));
-    });
+    root.addEventListener("click", (event) => {
+        const likeButton = event.target.closest("[data-role='like-button']");
+        if (likeButton && root.contains(likeButton)) {
+            toggleLike(likeButton);
+            return;
+        }
 
-    root.querySelectorAll("[data-role='toggle-comments']").forEach((button) => {
-        button.addEventListener("click", () => {
-            const post = button.closest("[data-post-id]");
+        const toggleButton = event.target.closest("[data-role='toggle-comments']");
+        if (toggleButton && root.contains(toggleButton)) {
+            const post = toggleButton.closest("[data-post-id]");
             if (!post) return;
             const comments = post.querySelector("[data-role='comments']");
             if (!comments) return;
             comments.classList.toggle("d-none");
-        });
+            return;
+        }
+
+        const submitButton = event.target.closest("[data-role='submit-comment']");
+        if (submitButton && root.contains(submitButton)) {
+            const post = submitButton.closest("[data-post-id]");
+            if (!post) return;
+            submitComment(post);
+        }
     });
 
-    root.querySelectorAll("[data-role='submit-comment']").forEach((button) => {
-        const post = button.closest("[data-post-id]");
-        if (!post) return;
-        button.addEventListener("click", () => submitComment(post));
-        const textarea = post.querySelector("[data-role='comment-input']");
-        if (textarea) {
-            textarea.addEventListener("keydown", (event) => {
-                if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-                    event.preventDefault();
-                    submitComment(post);
-                }
-            });
+    root.addEventListener("keydown", (event) => {
+        const textarea = event.target.closest("[data-role='comment-input']");
+        if (!textarea || !root.contains(textarea)) return;
+        if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+            event.preventDefault();
+            const post = textarea.closest("[data-post-id]");
+            if (!post) return;
+            submitComment(post);
         }
     });
 
@@ -620,4 +682,14 @@
             requestDelete(form);
         }
     });
+
+    document.body.addEventListener("htmx:afterSwap", (event) => {
+        const target = event.detail?.target;
+        if (!target) return;
+        if (target.id === "community-post-list" || target.closest?.("#community-post-list")) {
+            highlightBlocks(target);
+        }
+    });
+
+    highlightBlocks(root);
 })();

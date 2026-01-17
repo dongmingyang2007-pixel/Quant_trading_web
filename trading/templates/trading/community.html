@@ -4,11 +4,17 @@
 {% block title %}{% bilingual "Community Hub" "社区广场" %}{% endblock %}
 
 {% block extra_head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.snow.css">
 <link rel="stylesheet" href="{% static 'trading/css/community.css' %}">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css">
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="{% static 'trading/js/community.js' %}"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/highlight.min.js" nonce="{{ csp_nonce }}" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" nonce="{{ csp_nonce }}" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.min.js" nonce="{{ csp_nonce }}" defer></script>
+<script src="{% static 'trading/js/community.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
 {% endblock %}
 
 {% block content %}
@@ -56,7 +62,7 @@
             <ul class="topic-list" data-role="topic-list">
                 {% for topic in topics %}
                 <li class="topic-item{% if topic.topic_id == active_topic.topic_id %} is-active{% endif %}">
-                    <a href="?topic={{ topic.topic_id }}" data-topic-id="{{ topic.topic_id }}">
+                    <a href="?topic={{ topic.topic_id }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}{% if sort %}&sort={{ sort }}{% endif %}" data-topic-id="{{ topic.topic_id }}">
                         #{{ topic.name }}
                     </a>
                     <span class="topic-desc text-muted">
@@ -97,6 +103,36 @@
                             {% bilingual "Kick off the discussion anytime." "欢迎开始讨论。" %}
                         {% endif %}
                     </div>
+                </div>
+                <div class="community-toolbar-actions">
+                    <div class="community-sort-tabs btn-group" role="tablist" aria-label="{% bilingual 'Sort posts' '帖子排序' %}">
+                        <a class="btn btn-outline-secondary btn-sm{% if not sort %} active{% endif %}"
+                           role="tab"
+                           href="?topic={{ active_topic.topic_id }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}">
+                            {% bilingual "Latest" "最新" %}
+                        </a>
+                        <a class="btn btn-outline-secondary btn-sm{% if sort == 'top' %} active{% endif %}"
+                           role="tab"
+                           href="?topic={{ active_topic.topic_id }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}&sort=top">
+                            {% bilingual "Top" "最热" %}
+                        </a>
+                    </div>
+                    <form class="community-search" method="get" action="">
+                        <input type="hidden" name="topic" value="{{ active_topic.topic_id }}">
+                        {% if sort %}
+                            <input type="hidden" name="sort" value="{{ sort }}">
+                        {% endif %}
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text">🔎</span>
+                            <input type="search"
+                                   name="q"
+                                   class="form-control"
+                                   value="{{ search_query }}"
+                                   placeholder="{% bilingual 'Search posts' '搜索帖子' %}"
+                                   aria-label="{% bilingual 'Search posts' '搜索帖子' %}">
+                            <button class="btn btn-outline-secondary" type="submit">{% bilingual "Search" "搜索" %}</button>
+                        </div>
+                    </form>
                 </div>
             </div>
 
@@ -169,8 +205,13 @@
                     {% endif %}
                     <div class="mb-3">
                         <label class="form-label">{% bilingual "Idea" "想法" %}</label>
-                        <textarea name="content" rows="4" class="form-control"
+                        <textarea name="content" rows="4" class="form-control d-none" data-role="content-input"
                                   placeholder="{% bilingual 'Share your strategy insight or market view…' '分享你的策略灵感或市场观察...' %}">{{ post_form.content.value|default_if_none:'' }}</textarea>
+                        <div class="community-editor">
+                            <div id="editor-container"
+                                 data-role="editor"
+                                 data-placeholder="{% bilingual 'Share your strategy insight or market view…' '分享你的策略灵感或市场观察...' %}"></div>
+                        </div>
                         {% if post_form.content.errors %}
                             <div class="invalid-feedback d-block">
                                 {% for error in post_form.content.errors %}{{ error }}{% if not forloop.last %}<br>{% endif %}{% endfor %}
@@ -201,149 +242,19 @@
             </section>
 
             <section class="community-feed" data-role="feed">
-                {% if posts %}
-                    {% for post in posts %}
-                    <article class="community-card community-post" data-post-id="{{ post.post_id }}">
-                        <header class="community-post-head">
-                            <div class="community-post-meta">
-                                <span class="community-post-avatar">
-                                    {% if post.avatar_url %}
-                                        <img src="{{ post.avatar_url }}" alt="{{ post.display_name }}" loading="lazy">
-                                    {% else %}
-                                        {{ post.display_name|first|upper }}
-                                    {% endif %}
-                                </span>
-                                <div class="community-post-info">
-                                    <div class="community-post-author">
-                                        {% if post.profile_slug %}
-                                            <a href="{% url 'trading:profile_public' post.profile_slug %}" class="community-profile-link">{{ post.display_name }}</a>
-                                        {% else %}
-                                            {{ post.display_name }}
-                                        {% endif %}
-                                        <a class="community-post-topic" href="?topic={{ post.topic_id }}">#{{ post.topic_name }}</a>
-                                    </div>
-                                    <div class="community-post-time text-muted small">
-                                        {{ post.created_at }}
-                                    </div>
-                                </div>
-                            </div>
-                        </header>
-                        <div class="community-post-body">
-                            {% if post.backtest_summary %}
-                            <div class="community-share-card is-inline">
-                                <div class="share-card-header">
-                                    <span class="badge bg-primary-subtle text-primary-emphasis">{% bilingual "Shared backtest" "回测分享" %}</span>
-                                    <span class="text-muted small">ID {{ post.backtest_summary.record_id }}</span>
-                                </div>
-                                <div class="share-card-body">
-                                    <div class="share-card-main">
-                                        <span class="share-card-ticker">{{ post.backtest_summary.ticker|default:"--" }}</span>
-                                        {% if post.backtest_summary.engine %}
-                                            <span class="share-card-engine">{{ post.backtest_summary.engine }}</span>
-                                        {% endif %}
-                                        <span class="share-card-period">{{ post.backtest_summary.start_date|default:"--" }} → {{ post.backtest_summary.end_date|default:"--" }}</span>
-                                    </div>
-                                    <div class="share-card-metrics">
-                                        <div><span>{% bilingual "Return" "收益" %}</span><strong>{{ post.backtest_summary.total_return }}</strong></div>
-                                        <div><span>{% bilingual "Sharpe" "夏普" %}</span><strong>{{ post.backtest_summary.sharpe }}</strong></div>
-                                        <div><span>{% bilingual "Max drawdown" "最大回撤" %}</span><strong>{{ post.backtest_summary.max_drawdown }}</strong></div>
-                                        <div><span>{% bilingual "Volatility" "波动率" %}</span><strong>{{ post.backtest_summary.volatility }}</strong></div>
-                                    </div>
-                                </div>
-                            </div>
-                            {% endif %}
-                            <div class="community-post-content">{{ post.content|linebreaksbr }}</div>
-                            {% if post.image_url %}
-                                <figure class="community-post-image">
-                                    <img src="{{ post.image_url }}" alt="{% bilingual 'Shared image' '分享图片' %}" loading="lazy">
-                                </figure>
-                            {% endif %}
-                        </div>
-                        <footer class="community-post-footer">
-                            <div class="community-action-group">
-                                <button type="button"
-                                        class="community-action-btn{% if post.liked %} is-active{% endif %}"
-                                        data-role="like-button"
-                                        data-liked="{{ post.liked|yesno:'1,0' }}">
-                                    <span class="action-icon">❤️</span>
-                                    <span class="action-label">{% bilingual "Like" "赞" %}</span>
-                                    <span class="action-count" data-role="like-count">{{ post.like_count }}</span>
-                                </button>
-                                <button type="button" class="community-action-btn" data-role="toggle-comments">
-                                    <span class="action-icon">💬</span>
-                                    <span class="action-label">{% bilingual "Comment" "评论" %}</span>
-                                    <span class="action-count" data-role="comment-count">{{ post.comment_count }}</span>
-                                </button>
-                            </div>
-                            {% if post.can_delete %}
-                                <div class="community-post-actions">
-                                    <form method="post"
-                                          action="{% url 'trading:community_delete' %}"
-                                          class="community-delete-form"
-                                          data-role="delete-form"
-                                          data-confirm="{% bilingual 'Are you sure you want to delete this post? This action cannot be undone.' '确定删除该帖子？该操作不可撤销。' %}">
-                                        {% csrf_token %}
-                                        <input type="hidden" name="post_id" value="{{ post.post_id }}">
-                                        <input type="hidden" name="topic" value="{{ post.topic_id }}">
-                                        <button type="submit"
-                                                class="btn btn-outline-danger btn-sm rounded-pill community-delete-btn"
-                                                data-role="delete-button"
-                                                aria-label="{% bilingual 'Delete this post' '删除这条帖子' %}">
-                                            <span class="community-delete-icon" aria-hidden="true">
-                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                                    <path d="M9 10v7m3-7v7m3-7v7M5 6h14M9.5 4h5l1 2H8.5z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                                                </svg>
-                                            </span>
-                                            <span class="visually-hidden">{% bilingual "Delete" "删除" %}</span>
-                                        </button>
-                                    </form>
-                                </div>
-                            {% endif %}
-                        </footer>
-                        <section class="community-comments d-none" data-role="comments">
-                            <div class="community-comment-create">
-                                <span class="community-post-avatar small">
-                                    {% if avatar_url %}
-                                        <img src="{{ avatar_url }}" alt="{{ display_name }}" loading="lazy">
-                                    {% else %}
-                                        {{ display_name|first|upper }}
-                                    {% endif %}
-                                </span>
-                                <div class="community-comment-form">
-                                    <textarea rows="2" class="form-control" placeholder="{% bilingual 'Share your thoughts…' '留下你的看法…' %}" data-role="comment-input"></textarea>
-                                    <div class="text-end mt-2">
-                                        <button type="button" class="btn btn-sm btn-primary" data-role="submit-comment">{% bilingual "Post comment" "发布评论" %}</button>
-                                    </div>
-                                </div>
-                            </div>
-                            <ul class="community-comment-list">
-                                {% for comment in post.comments %}
-                                <li class="community-comment-item">
-                                    <span class="community-post-avatar small">
-                                        {% if comment.avatar_url %}
-                                            <img src="{{ comment.avatar_url }}" alt="{{ comment.author }}" loading="lazy">
-                                        {% else %}
-                                            {{ comment.author|first|upper }}
-                                        {% endif %}
-                                    </span>
-                                    <div class="community-comment-body">
-                                        <div class="community-comment-meta">
-                                            <span class="community-comment-author">{{ comment.author }}</span>
-                                            <span class="community-comment-time text-muted small">{{ comment.created_at }}</span>
-                                        </div>
-                                        <p>{{ comment.content|linebreaksbr }}</p>
-                                    </div>
-                                </li>
-                                {% endfor %}
-                            </ul>
-                        </section>
-                    </article>
-                    {% endfor %}
-                {% else %}
-                    <div class="community-empty">
-                        {% bilingual "No posts yet—be the first to share!" "还没有动态，率先分享你的第一条吧！" %}
-                    </div>
-                {% endif %}
+                <div id="community-post-list">
+                    {% include "trading/includes/_post_list.html" %}
+                </div>
+                <div id="community-post-trigger"
+                     class="community-load-trigger invisible{% if not next_page_url %} d-none{% endif %}"
+                     {% if next_page_url %}
+                         hx-get="{{ next_page_url }}"
+                         hx-trigger="revealed"
+                         hx-target="#community-post-list"
+                         hx-swap="beforeend"
+                     {% endif %}
+                     aria-hidden="true"
+                     style="height: 1px;"></div>
             </section>
         </main>
     </div>
