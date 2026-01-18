@@ -12,12 +12,18 @@ import time
 from typing import Iterable
 
 import pandas as pd
+import requests
 from django.conf import settings
 
 from .cache_utils import build_cache_key, cache_memoize
 from .network import get_requests_session, resolve_retry_config, retry_call_result
 from trading.observability import record_metric
-from .alpaca_data import fetch_stock_bars_frame, fetch_stock_snapshots, resolve_alpaca_credentials
+from .alpaca_data import (
+    DEFAULT_DATA_URL,
+    fetch_stock_bars_frame,
+    fetch_stock_snapshots,
+    resolve_alpaca_credentials,
+)
 
 try:  # optional dependency
     import yfinance as yf  # type: ignore
@@ -186,6 +192,159 @@ def _resolve_alpaca_range(
     if isinstance(end_val, date) and not isinstance(end_val, datetime):
         end_val = end_val + timedelta(days=1)
     return start_val, end_val
+
+
+def fetch_most_actives(
+    *,
+    by: str = "volume",
+    limit: int = 20,
+    user_id: str | None = None,
+    timeout: int | None = None,
+    base_url: str | None = None,
+) -> list[dict[str, object]]:
+    key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+    if not key_id or not secret:
+        return []
+    if not _rate_limited():
+        return []
+
+    params: dict[str, object] = {"by": by}
+    if limit:
+        params["top"] = int(limit)
+        params["limit"] = int(limit)
+    url = f"{(base_url or DEFAULT_DATA_URL).rstrip('/')}/v1beta1/screener/stocks/most-actives"
+    headers = {
+        "APCA-API-KEY-ID": key_id,
+        "APCA-API-SECRET-KEY": secret,
+        "Accept": "application/json",
+    }
+
+    retry_config = resolve_retry_config(timeout=timeout)
+    session = get_requests_session(retry_config.timeout)
+
+    def _call():
+        return session.get(url, params=params, headers=headers, timeout=retry_config.timeout)
+
+    def _should_retry(response: requests.Response) -> bool:
+        return response.status_code in {408, 429} or response.status_code >= 500
+
+    try:
+        response = retry_call_result(
+            _call,
+            config=retry_config,
+            exceptions=(requests.RequestException,),
+            should_retry=_should_retry,
+        )
+    except Exception:
+        return []
+    if response is None or response.status_code >= 400:
+        return []
+    try:
+        payload = response.json()
+    except ValueError:
+        return []
+
+    rows: list[dict[str, object]] = []
+    items = None
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict):
+        for key in ("most_actives", "mostActives", "data", "results", "stocks"):
+            if isinstance(payload.get(key), list):
+                items = payload.get(key)
+                break
+        if items is None:
+            for key in ("most_actives_by_volume", "most_actives_by_trade_count"):
+                if isinstance(payload.get(key), list):
+                    items = payload.get(key)
+                    break
+    if not isinstance(items, list):
+        return []
+
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        symbol = (row.get("symbol") or row.get("ticker") or row.get("S") or "").strip().upper()
+        if not symbol:
+            continue
+        volume_raw = row.get("volume") or row.get("v") or row.get("trade_count") or row.get("trades")
+        price_raw = row.get("price") or row.get("last_price") or row.get("last") or row.get("close") or row.get("c")
+        change_raw = (
+            row.get("change_pct")
+            or row.get("change_percent")
+            or row.get("pct_change")
+            or row.get("percent_change")
+        )
+        volume_val = None
+        price_val = None
+        change_pct = None
+        try:
+            if volume_raw is not None:
+                volume_val = float(volume_raw)
+        except Exception:
+            volume_val = None
+        try:
+            if price_raw is not None:
+                price_val = float(price_raw)
+        except Exception:
+            price_val = None
+        try:
+            if change_raw is not None:
+                change_pct = float(change_raw)
+        except Exception:
+            change_pct = None
+        rows.append(
+            {
+                "symbol": symbol,
+                "price": price_val,
+                "change_pct_day": change_pct,
+                "change_pct_period": change_pct,
+                "volume": volume_val,
+            }
+        )
+
+    if not rows:
+        return []
+
+    missing_symbols = [item["symbol"] for item in rows if item.get("price") is None]
+    if missing_symbols:
+        snapshots = fetch_stock_snapshots(missing_symbols, feed="sip", user_id=user_id)
+        for entry in rows:
+            if entry.get("price") is not None:
+                continue
+            snapshot = snapshots.get(entry["symbol"]) if isinstance(snapshots, dict) else None
+            if not isinstance(snapshot, dict):
+                continue
+            latest_trade = snapshot.get("latestTrade") or snapshot.get("latest_trade") or {}
+            latest_quote = snapshot.get("latestQuote") or snapshot.get("latest_quote") or {}
+            daily_bar = snapshot.get("dailyBar") or snapshot.get("daily_bar") or {}
+            prev_bar = snapshot.get("prevDailyBar") or snapshot.get("prev_daily_bar") or {}
+            price = (
+                latest_trade.get("p")
+                or daily_bar.get("c")
+                or prev_bar.get("c")
+                or latest_quote.get("ap")
+                or latest_quote.get("bp")
+            )
+            if price is not None:
+                try:
+                    entry["price"] = float(price)
+                except Exception:
+                    pass
+            if entry.get("change_pct_day") is None and daily_bar.get("c") is not None and prev_bar.get("c"):
+                try:
+                    entry["change_pct_day"] = (float(daily_bar["c"]) / float(prev_bar["c"]) - 1.0) * 100.0
+                    entry["change_pct_period"] = entry["change_pct_day"]
+                except Exception:
+                    pass
+            if entry.get("volume") is None and daily_bar.get("v") is not None:
+                try:
+                    entry["volume"] = float(daily_bar["v"])
+                except Exception:
+                    pass
+
+    rows.sort(key=lambda item: item.get("volume") or 0, reverse=True)
+    return rows[:limit] if limit else rows
 
 
 def fetch(

@@ -281,6 +281,7 @@ def account(request):
 
     context = {
         "user_info": {
+            "id": user.id,
             "username": user.username,
             "display_name": display_name,
             "email": user.email or _msg("Not linked", "未绑定"),

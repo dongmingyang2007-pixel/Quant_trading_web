@@ -9,8 +9,9 @@
     .toLowerCase()
     .slice(0, 2);
 
-  const listGainers = document.querySelector('[data-role="gainers"]');
-  const listLosers = document.querySelector('[data-role="losers"]');
+  const listContainer = document.querySelector('[data-role="ranking-list"]');
+  const rankTabs = Array.prototype.slice.call(document.querySelectorAll('[data-role="rank-tab"]'));
+  const rankDesc = document.querySelector('[data-role="rank-desc"]');
   const statusText = document.querySelector('[data-role="status-text"]');
   const sourceText = document.querySelector('[data-role="source-text"]');
   const statusSection = document.querySelector('.market-status');
@@ -28,6 +29,15 @@
   const typeaheadPanel = document.querySelector('[data-role="typeahead-panel"]');
   const typeaheadList = typeaheadPanel && typeaheadPanel.querySelector('[data-role="typeahead-list"]');
   const typeaheadHint = typeaheadPanel && typeaheadPanel.querySelector('[data-role="typeahead-hint"]');
+  const detailModalEl = document.getElementById('marketDetailModal');
+  const detailTitle = detailModalEl && detailModalEl.querySelector('[data-role="detail-title"]');
+  const detailSource = detailModalEl && detailModalEl.querySelector('[data-role="detail-source"]');
+  const detailUpdated = detailModalEl && detailModalEl.querySelector('[data-role="detail-updated"]');
+  const detailStatus = detailModalEl && detailModalEl.querySelector('[data-role="detail-status"]');
+  const detailChartEl = document.getElementById('market-detail-chart');
+  const detailTimeframes = detailModalEl
+    ? Array.prototype.slice.call(detailModalEl.querySelectorAll('.detail-timeframe'))
+    : [];
   const marketSocketUrl = (() => {
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     return `${protocol}://${window.location.host}/ws/market/`;
@@ -35,6 +45,7 @@
 
   const initialBtn = document.querySelector('.market-timeframe.is-active');
   let currentTimeframe = (initialBtn && initialBtn.getAttribute('data-timeframe')) || '1mo';
+  let currentListType = 'gainers';
   let suggestionPool = [];
   let recentPool = [];
   let watchPool = [];
@@ -45,6 +56,13 @@
   let lastRequest = { query: '', options: {} };
   let marketSocket = null;
   let socketRetryTimer = null;
+  let detailModal = null;
+  let detailChart = null;
+  let detailSeries = null;
+  let detailSymbol = '';
+  let detailRange = '1d';
+  let detailRetryTimer = null;
+  let detailResizeObserver = null;
 
   const TEXT = langPrefix === 'zh'
     ? {
@@ -73,6 +91,11 @@
         typeaheadHint: '↑↓ 选择，Enter 跳转或加入自选列表',
         historyCleared: '最近检索已清空',
         historyDeleted: (symbol) => `已删除 ${symbol}`,
+        detailLoading: '正在加载K线…',
+        detailEmpty: '暂无行情数据',
+        detailError: '加载失败',
+        detailFallback: (requested, used) => `无 ${requested} 数据，已显示 ${used} 历史`,
+        volumeLabel: '成交量',
         sourcePrefix: '数据来源：',
         sourceLabels: {
           alpaca: 'Alpaca',
@@ -107,6 +130,11 @@
         typeaheadHint: 'Use ↑↓ to browse, Enter to open or add to watchlist',
         historyCleared: 'Recent searches cleared',
         historyDeleted: (symbol) => `Removed ${symbol}`,
+        detailLoading: 'Loading candles…',
+        detailEmpty: 'No data available',
+        detailError: 'Failed to load',
+        detailFallback: (requested, used) => `No ${requested} data, showing ${used} history`,
+        volumeLabel: 'Volume',
         sourcePrefix: 'Data source: ',
         sourceLabels: {
           alpaca: 'Alpaca',
@@ -185,6 +213,28 @@
     }
   }
 
+  function updateRankDescription(type) {
+    if (!rankDesc) return;
+    const descMap = {
+      gainers: rankDesc.dataset.descGainers,
+      losers: rankDesc.dataset.descLosers,
+      most_active: rankDesc.dataset.descMostActive,
+    };
+    const nextText = descMap[type] || rankDesc.dataset.descGainers || '';
+    if (nextText) {
+      rankDesc.textContent = nextText;
+    }
+  }
+
+  function setActiveListType(type) {
+    currentListType = type;
+    rankTabs.forEach((tab) => {
+      const tabType = tab.dataset.list || '';
+      tab.classList.toggle('is-active', tabType === type);
+    });
+    updateRankDescription(type);
+  }
+
   function setRetryingState(retryAfterSeconds) {
     const delaySeconds = Math.min(Math.max(parseInt(retryAfterSeconds, 10) || 3, 2), 30);
     if (statusSection) {
@@ -227,6 +277,175 @@
         applyChangeState(dayEl, changePct, card.dataset.invert === '1', true);
       }
     });
+  }
+
+  function setDetailStatus(message, isError) {
+    if (!detailStatus) return;
+    detailStatus.textContent = message || '';
+    detailStatus.hidden = !message;
+    detailStatus.classList.toggle('is-error', Boolean(isError));
+  }
+
+  function ensureDetailModal() {
+    if (!detailModalEl || typeof bootstrap === 'undefined') return null;
+    if (!detailModal) {
+      detailModal = new bootstrap.Modal(detailModalEl);
+    }
+    return detailModal;
+  }
+
+  function resizeDetailChart() {
+    if (!detailChart || !detailChartEl) return;
+    const width = detailChartEl.clientWidth || 0;
+    const height = detailChartEl.clientHeight || 0;
+    if (width && height) {
+      detailChart.applyOptions({ width, height });
+    }
+  }
+
+  function ensureDetailChart() {
+    if (!detailChartEl) return false;
+    if (detailChart && detailSeries) return true;
+    const chartLib = window.LightweightCharts;
+    if (!chartLib || typeof chartLib.createChart !== 'function') {
+      setDetailStatus(TEXT.detailError, true);
+      return false;
+    }
+    const width = detailChartEl.clientWidth || 680;
+    const height = detailChartEl.clientHeight || 360;
+    detailChart = chartLib.createChart(detailChartEl, {
+      width,
+      height,
+      layout: { background: { color: '#ffffff' }, textColor: '#0f172a' },
+      grid: { vertLines: { color: 'rgba(148, 163, 184, 0.3)' }, horzLines: { color: 'rgba(148, 163, 184, 0.3)' } },
+      rightPriceScale: { borderColor: 'rgba(148, 163, 184, 0.4)' },
+      timeScale: { borderColor: 'rgba(148, 163, 184, 0.4)' },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: true,
+      },
+      handleScale: {
+        axisPressedMouseMove: true,
+        mouseWheel: true,
+        pinch: true,
+      },
+    });
+    detailSeries = detailChart.addCandlestickSeries({
+      upColor: '#16a34a',
+      downColor: '#ef4444',
+      borderVisible: false,
+      wickUpColor: '#16a34a',
+      wickDownColor: '#ef4444',
+    });
+    if (typeof ResizeObserver !== 'undefined' && !detailResizeObserver) {
+      detailResizeObserver = new ResizeObserver(() => resizeDetailChart());
+      detailResizeObserver.observe(detailChartEl);
+    }
+    return true;
+  }
+
+  async function loadDetailData(symbol, rangeKey) {
+    if (!symbol) return;
+    if (detailRetryTimer) {
+      clearTimeout(detailRetryTimer);
+      detailRetryTimer = null;
+    }
+    if (detailChartEl) {
+      detailChartEl.classList.add('is-loading');
+    }
+    setDetailStatus(TEXT.detailLoading);
+    if (detailSource) {
+      detailSource.textContent = '';
+    }
+    if (detailUpdated) {
+      detailUpdated.textContent = '';
+    }
+
+    const endpointBase = apiUrl || '/api/market/';
+    const endpoint = endpointBase.endsWith('/') ? endpointBase : `${endpointBase}/`;
+    const params = new URLSearchParams({
+      detail: '1',
+      symbol,
+      range: rangeKey,
+    });
+    try {
+      const response = await fetch(`${endpoint}?${params.toString()}`, {
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        credentials: 'same-origin',
+      });
+      const payload = await response.json();
+      if (response.status === 429 || payload.rate_limited) {
+        const retryAfter = Math.min(Math.max(parseInt(payload.retry_after_seconds, 10) || 3, 2), 30);
+        setDetailStatus(TEXT.retrying);
+        detailRetryTimer = setTimeout(() => loadDetailData(symbol, rangeKey), retryAfter * 1000);
+        return;
+      }
+      if (!response.ok) {
+        setDetailStatus(payload.error || TEXT.detailError, true);
+        return;
+      }
+      const bars = Array.isArray(payload.bars) ? payload.bars : [];
+      if (!bars.length) {
+        setDetailStatus(TEXT.detailEmpty);
+        return;
+      }
+      if (!ensureDetailChart()) {
+        return;
+      }
+      detailSeries.setData(bars);
+      detailChart.timeScale().fitContent();
+      if (detailSource) {
+        const sourceLabel = TEXT.sourceLabels[payload.data_source] || TEXT.sourceLabels.unknown || '';
+        detailSource.textContent = sourceLabel ? `${TEXT.sourcePrefix || ''}${sourceLabel}` : '';
+      }
+      if (detailUpdated) {
+        detailUpdated.textContent = payload.generated_at ? `${TEXT.updatedLabel} ${payload.generated_at}` : '';
+      }
+      const tfLabel =
+        payload.timeframe && (langPrefix === 'zh' ? payload.timeframe.label : payload.timeframe.label_en);
+      if (detailTitle) {
+        detailTitle.textContent = tfLabel ? `${symbol} · ${tfLabel}` : symbol;
+      }
+      const requested = payload.requested_timeframe
+        ? langPrefix === 'zh'
+          ? payload.requested_timeframe.label
+          : payload.requested_timeframe.label_en
+        : '';
+      const used = tfLabel || '';
+      if (requested && used && requested !== used) {
+        setDetailStatus(TEXT.detailFallback(requested, used));
+      } else {
+        setDetailStatus('');
+      }
+    } catch (error) {
+      setDetailStatus(TEXT.detailError, true);
+    } finally {
+      if (detailChartEl) {
+        detailChartEl.classList.remove('is-loading');
+      }
+    }
+  }
+
+  function setDetailRange(rangeKey) {
+    detailRange = rangeKey;
+    detailTimeframes.forEach((btn) => {
+      btn.classList.toggle('is-active', btn.dataset.range === rangeKey);
+    });
+  }
+
+  function openDetailModal(symbol) {
+    detailSymbol = symbol;
+    const modal = ensureDetailModal();
+    if (detailTitle) {
+      detailTitle.textContent = symbol;
+    }
+    setDetailRange(detailRange);
+    if (modal) {
+      modal.show();
+    }
+    loadDetailData(symbol, detailRange);
   }
 
   function connectMarketSocket() {
@@ -298,6 +517,19 @@
     }
     const prefix = value > 0 ? '+' : '';
     return `${prefix}${value.toFixed(2)}%`;
+  }
+
+  function formatCompactNumber(value) {
+    const parsed = typeof value === 'number' ? value : Number.parseFloat(value);
+    if (!Number.isFinite(parsed)) {
+      return '--';
+    }
+    const abs = Math.abs(parsed);
+    if (abs >= 1e12) return `${(parsed / 1e12).toFixed(1)}T`;
+    if (abs >= 1e9) return `${(parsed / 1e9).toFixed(1)}B`;
+    if (abs >= 1e6) return `${(parsed / 1e6).toFixed(1)}M`;
+    if (abs >= 1e3) return `${(parsed / 1e3).toFixed(1)}K`;
+    return Math.round(parsed).toString();
   }
 
   function applyChangeState(el, value, invert, subtle) {
@@ -511,6 +743,14 @@
 
   function normalizeSymbol(value) {
     return (value || '').toString().trim().toUpperCase();
+  }
+
+  function normalizeListType(value) {
+    const text = (value || '').toString().trim().toLowerCase();
+    if (text === 'gainers' || text === 'losers' || text === 'most_active') {
+      return text;
+    }
+    return 'gainers';
   }
 
   function normalizeList(items) {
@@ -737,9 +977,11 @@
 
   async function loadData(query = '', options = {}) {
     const normalizedQuery = normalizeSymbol(query);
-    lastRequest = { query: normalizedQuery || '', options: { ...options } };
+    const activeListType = normalizeListType(options.listType || currentListType);
+    lastRequest = { query: normalizedQuery || '', options: { ...options, listType: activeListType } };
     const requestPayload = {
       timeframe: currentTimeframe,
+      list: activeListType,
     };
     if (normalizedQuery) {
       requestPayload.query = normalizedQuery;
@@ -768,8 +1010,7 @@
       statusSection.classList.remove('is-retrying');
     }
     setStatus(`${TEXT.loading} ${TEXT.timeframes[currentTimeframe] || currentTimeframe} ${TEXT.dataSuffix}`);
-    setListLoading(listGainers);
-    setListLoading(listLosers);
+    setListLoading(listContainer);
     showChipSkeleton(recentChips, 3);
     showChipSkeleton(watchlistChips, 4);
 
@@ -792,7 +1033,7 @@
           body: JSON.stringify(requestPayload),
         });
       } else {
-        const params = new URLSearchParams({ timeframe: currentTimeframe });
+        const params = new URLSearchParams({ timeframe: currentTimeframe, list: activeListType });
         if (options.limit) {
           params.set('limit', options.limit);
         }
@@ -809,10 +1050,23 @@
       if (!response.ok) {
         throw new Error(payload.error || TEXT.genericError);
       }
-      renderList(listGainers, payload.gainers || [], payload.timeframe);
-      renderList(listLosers, payload.losers || [], payload.timeframe, true);
-      if ((!payload.gainers || !payload.gainers.length) && (!payload.losers || !payload.losers.length)) {
-        renderEmpty(listGainers, TEXT.emptySymbol);
+      const responseListType = normalizeListType(payload.list_type || activeListType);
+      if (payload.list_type && responseListType !== currentListType) {
+        setActiveListType(responseListType);
+      }
+      let items = Array.isArray(payload.items) ? payload.items : [];
+      if (!items.length) {
+        if (responseListType === 'losers') {
+          items = payload.losers || [];
+        } else if (responseListType === 'most_active') {
+          items = payload.most_actives || [];
+        } else {
+          items = payload.gainers || [];
+        }
+      }
+      renderList(listContainer, items, payload.timeframe, responseListType);
+      if (!items.length) {
+        renderEmpty(listContainer, TEXT.emptySymbol);
       }
       updateSuggestionList(payload.suggestions || []);
       renderChipGroup(recentChips, payload.recent_queries || [], {
@@ -849,7 +1103,7 @@
       setStatus(statusMessage);
       setSource(payload.data_source);
     } catch (error) {
-      renderError(listGainers, error && error.message);
+      renderError(listContainer, error && error.message);
       setStatus(TEXT.statusError);
       setSource('unknown');
       hideChipSkeleton(recentChips);
@@ -857,13 +1111,15 @@
     }
   }
 
-  function renderList(container, items, timeframe, invert) {
+  function renderList(container, items, timeframe, listType) {
     if (!container) return;
     clearListState(container);
     if (!items.length) {
       renderEmpty(container, TEXT.emptyList);
       return;
     }
+    const isMostActive = listType === 'most_active';
+    const invert = listType === 'losers';
     items.forEach((item) => {
       if (!cardTemplate) return;
       const fragment = cardTemplate.content.cloneNode(true);
@@ -885,24 +1141,38 @@
         priceEl.textContent = typeof item.price === 'number' ? item.price.toFixed(2) : '--';
       }
       if (primaryLabelEl) {
-        const fallback = TEXT.timeframes[currentTimeframe] || (langPrefix === 'zh' ? '近1月' : '1M');
-        const tfLabel = timeframe ? (langPrefix === 'zh' ? timeframe.label : timeframe.label_en) : '';
-        const itemLabel = langPrefix === 'zh' ? item.period_label : item.period_label_en;
-        primaryLabelEl.textContent = itemLabel || tfLabel || fallback;
+        if (isMostActive) {
+          primaryLabelEl.textContent = item.period_label || item.period_label_en || TEXT.volumeLabel;
+        } else {
+          const fallback = TEXT.timeframes[currentTimeframe] || (langPrefix === 'zh' ? '近1月' : '1M');
+          const tfLabel = timeframe ? (langPrefix === 'zh' ? timeframe.label : timeframe.label_en) : '';
+          const itemLabel = langPrefix === 'zh' ? item.period_label : item.period_label_en;
+          primaryLabelEl.textContent = itemLabel || tfLabel || fallback;
+        }
       }
       if (primaryEl) {
-        primaryEl.textContent = formatChange(item.change_pct_period);
-        applyChangeState(primaryEl, item.change_pct_period, invert);
+        primaryEl.classList.remove('is-neutral');
+        if (isMostActive) {
+          primaryEl.textContent = formatCompactNumber(item.volume);
+          primaryEl.classList.add('is-neutral');
+        } else {
+          primaryEl.textContent = formatChange(item.change_pct_period);
+          applyChangeState(primaryEl, item.change_pct_period, invert);
+        }
       }
       if (dayEl) {
         dayEl.textContent = formatChange(item.change_pct_day);
         applyChangeState(dayEl, item.change_pct_day, invert, true);
       }
       if (windowLabel) {
-        const fallback = TEXT.timeframes[currentTimeframe] || (langPrefix === 'zh' ? '近1月' : '1M');
-        const tfWindow = timeframe ? (langPrefix === 'zh' ? timeframe.label : timeframe.label_en) : '';
-        const itemWindow = langPrefix === 'zh' ? item.period_label : item.period_label_en;
-        windowLabel.textContent = itemWindow || tfWindow || fallback;
+        if (isMostActive) {
+          windowLabel.textContent = item.period_label || item.period_label_en || TEXT.volumeLabel;
+        } else {
+          const fallback = TEXT.timeframes[currentTimeframe] || (langPrefix === 'zh' ? '近1月' : '1M');
+          const tfWindow = timeframe ? (langPrefix === 'zh' ? timeframe.label : timeframe.label_en) : '';
+          const itemWindow = langPrefix === 'zh' ? item.period_label : item.period_label_en;
+          windowLabel.textContent = itemWindow || tfWindow || fallback;
+        }
       }
       if (updatedEl) {
         const timestamps = Array.isArray(item.timestamps) ? item.timestamps : [];
@@ -920,13 +1190,71 @@
       if (card) {
         card.dataset.symbol = normalizeSymbol(item.symbol || '');
         card.dataset.invert = invert ? '1' : '0';
+        card.dataset.listType = listType || '';
       }
       container.appendChild(fragment);
     });
   }
 
+  function switchList(type) {
+    const nextType = normalizeListType(type);
+    if (nextType === currentListType) return;
+    setActiveListType(nextType);
+    loadData('', { listType: nextType });
+  }
+
+  function handleCardClick(event) {
+    if (event.target.closest('a')) {
+      return;
+    }
+    const card = event.target.closest('.market-card');
+    if (!card) return;
+    const symbol = card.dataset.symbol;
+    if (!symbol) return;
+    openDetailModal(symbol);
+  }
+
   attachChipHandler(recentChips, { allowRemove: true, onRemove: (symbol) => requestRecentAction('delete', symbol) });
   attachChipHandler(watchlistChips, { allowRemove: true, watch: true });
+
+  if (rankTabs.length) {
+    const activeTab = rankTabs.find((tab) => tab.classList.contains('is-active')) || rankTabs[0];
+    if (activeTab) {
+      setActiveListType(normalizeListType(activeTab.dataset.list));
+    }
+    rankTabs.forEach((tab) => {
+      tab.addEventListener('click', () => switchList(tab.dataset.list));
+    });
+  }
+
+  if (listContainer) {
+    listContainer.addEventListener('click', handleCardClick);
+  }
+
+  if (detailTimeframes.length) {
+    const activeRange = detailTimeframes.find((btn) => btn.classList.contains('is-active'));
+    if (activeRange && activeRange.dataset.range) {
+      detailRange = activeRange.dataset.range;
+    }
+    detailTimeframes.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const rangeKey = btn.dataset.range || '1d';
+        if (rangeKey === detailRange) return;
+        setDetailRange(rangeKey);
+        if (detailSymbol) {
+          loadDetailData(detailSymbol, rangeKey);
+        }
+      });
+    });
+  }
+
+  if (detailModalEl) {
+    detailModalEl.addEventListener('shown.bs.modal', () => resizeDetailChart());
+    detailModalEl.addEventListener('hidden.bs.modal', () => {
+      detailSymbol = '';
+      setDetailStatus('');
+    });
+  }
 
   loadData();
   connectMarketSocket();

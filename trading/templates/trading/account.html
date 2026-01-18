@@ -22,7 +22,7 @@
                 </button>
                     <div class="compact-meta">
                         <div class="compact-name">{{ user_info.display_name|default:user_info.username }}</div>
-                        <div class="compact-subtext">@{{ user_info.username }} · {% bilingual "Member since" "加入于" %} {{ user_info.date_joined|date:"Y-m-d" }}</div>
+                        <div class="compact-subtext">@{{ user_info.username }} · {% bilingual "Member since" "加入于" %} {{ user_info.date_joined|date:"Y-m-d" }} · ID : {{ user_info.id }}</div>
                     </div>
                 </div>
                 <div class="compact-actions">

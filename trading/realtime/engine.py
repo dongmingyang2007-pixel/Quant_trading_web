@@ -7,7 +7,11 @@ from typing import Any
 
 import pandas as pd
 
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+
 from ..observability import record_metric, track_latency
+from ..alpaca_data import fetch_stock_snapshots
 from .alpaca import fetch_bars_frame
 from .bars import BarsProcessor
 from .config import RealtimeConfig
@@ -72,6 +76,10 @@ class RealtimeEngine:
         self.signal_engine: SignalEngine | None = None
         self._last_stream_bar_ts: float = 0.0
         self._last_rest_fallback_ts: float = 0.0
+        self._channel_layer = get_channel_layer()
+        self._prev_close: dict[str, float] = {}
+        self._prev_close_ts: float = 0.0
+        self._last_broadcast_ts: dict[str, float] = {}
 
     def run_once(self) -> None:
         now = time.time()
@@ -124,6 +132,7 @@ class RealtimeEngine:
             universe_payload = []
         focus_entries = update_focus(universe_payload, self.config.focus)
         self.state.last_focus_ts = now
+        self._maybe_refresh_prev_close([entry.symbol for entry in focus_entries], now)
         write_state(
             "focus_summary.json",
             {
@@ -221,6 +230,68 @@ class RealtimeEngine:
         self._last_stream_bar_ts = time.time()
         if self.signal_engine:
             self.signal_engine.on_bar(bar)
+        self._broadcast_market_update(bar)
+
+    def _maybe_refresh_prev_close(self, symbols: list[str], now: float) -> None:
+        if not symbols:
+            return
+        if now - self._prev_close_ts < 300:
+            return
+        snapshots = fetch_stock_snapshots(symbols, feed=self.config.engine.feed, user_id=self.user_id)
+        if not isinstance(snapshots, dict):
+            return
+        for symbol, snapshot in snapshots.items():
+            if not isinstance(snapshot, dict):
+                continue
+            daily = snapshot.get("dailyBar") or snapshot.get("daily_bar") or {}
+            prev = snapshot.get("prevDailyBar") or snapshot.get("prev_daily_bar") or {}
+            prev_close = prev.get("c") or prev.get("close") or 0.0
+            if not prev_close:
+                prev_close = daily.get("o") or daily.get("open") or daily.get("c") or daily.get("close") or 0.0
+            try:
+                prev_close_val = float(prev_close)
+            except (TypeError, ValueError):
+                continue
+            if prev_close_val > 0:
+                self._prev_close[str(symbol).upper()] = prev_close_val
+        self._prev_close_ts = now
+
+    def _broadcast_market_update(self, bar: dict[str, Any]) -> None:
+        if not self._channel_layer or not isinstance(bar, dict):
+            return
+        symbol = str(bar.get("symbol") or "").upper()
+        if not symbol:
+            return
+        price = bar.get("close") or bar.get("mid") or bar.get("bid") or bar.get("ask")
+        try:
+            price_val = float(price)
+        except (TypeError, ValueError):
+            return
+        prev_close = self._prev_close.get(symbol)
+        if not prev_close:
+            prev_close = bar.get("open")
+        try:
+            prev_close_val = float(prev_close) if prev_close else None
+        except (TypeError, ValueError):
+            prev_close_val = None
+        change_pct = ((price_val / prev_close_val) - 1.0) * 100.0 if prev_close_val else 0.0
+        now = time.time()
+        last_ts = self._last_broadcast_ts.get(symbol, 0.0)
+        if now - last_ts < 0.5:
+            return
+        self._last_broadcast_ts[symbol] = now
+        try:
+            async_to_sync(self._channel_layer.group_send)(
+                "market_global",
+                {
+                    "type": "market_update",
+                    "symbol": symbol,
+                    "price": price_val,
+                    "change_pct": change_pct,
+                },
+            )
+        except Exception as exc:
+            record_metric("realtime.ws.broadcast_error", error=str(exc), symbol=symbol)
 
     def _maybe_log(self, now: float) -> None:
         if now - self.state.last_log_ts < self.config.engine.log_every_seconds:

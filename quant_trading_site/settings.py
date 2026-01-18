@@ -150,7 +150,10 @@ DATABASES = {
 
 CHANNEL_LAYERS = {
     "default": {
-        "BACKEND": "channels.layers.InMemoryChannelLayer",
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")],
+        },
     },
 }
 
@@ -391,7 +394,8 @@ SECURE_HSTS_PRELOAD = bool(SECURE_HSTS_SECONDS)
 CONTENT_SECURITY_POLICY = os.environ.get(
     "DJANGO_CONTENT_SECURITY_POLICY",
     "default-src 'self'; "
-    "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com; "
+    "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com 'nonce-{nonce}'; "
+    "script-src-elem 'self' https://cdn.jsdelivr.net https://unpkg.com 'nonce-{nonce}'; "
     "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
     "font-src 'self' https://fonts.gstatic.com data:; "
     "img-src 'self' data: https:; "

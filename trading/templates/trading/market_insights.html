@@ -168,26 +168,62 @@
         </span>
     </section>
 
-    <section class="market-grid">
-        <article class="market-column">
-            <header class="market-column-head">
-                <h2>{% if lang_prefix == 'zh' %}涨幅榜{% else %}Top gainers{% endif %}</h2>
-                <p class="market-column-sub">
-                    {% if lang_prefix == 'zh' %}按所选时间范围排序，展示表现最佳的股票。{% else %}Best performers within the selected window.{% endif %}
-                </p>
-            </header>
-            <div class="market-list" data-role="gainers" data-skeleton-count="3"></div>
-        </article>
-        <article class="market-column">
-            <header class="market-column-head">
-                <h2>{% if lang_prefix == 'zh' %}跌幅榜{% else %}Top decliners{% endif %}</h2>
-                <p class="market-column-sub">
-                    {% if lang_prefix == 'zh' %}关注回撤最大的标的，观察潜在反弹机会。{% else %}Track the deepest pullbacks for potential reversals.{% endif %}
-                </p>
-            </header>
-            <div class="market-list" data-role="losers" data-skeleton-count="3"></div>
-        </article>
+    <section class="market-rankings">
+        <header class="market-rankings-head">
+            <div class="market-rank-tabs" role="tablist">
+                <button type="button" class="market-rank-tab is-active" data-role="rank-tab" data-list="gainers">
+                    {% if lang_prefix == 'zh' %}涨幅榜{% else %}Gainers{% endif %}
+                </button>
+                <button type="button" class="market-rank-tab" data-role="rank-tab" data-list="losers">
+                    {% if lang_prefix == 'zh' %}跌幅榜{% else %}Losers{% endif %}
+                </button>
+                <button type="button" class="market-rank-tab" data-role="rank-tab" data-list="most_active">
+                    {% if lang_prefix == 'zh' %}活跃榜{% else %}Most Active{% endif %}
+                </button>
+            </div>
+            <p class="market-rank-desc"
+               data-role="rank-desc"
+               data-desc-gainers="{% if lang_prefix == 'zh' %}按所选时间范围排序，展示表现最佳的股票。{% else %}Best performers within the selected window.{% endif %}"
+               data-desc-losers="{% if lang_prefix == 'zh' %}关注回撤最大的标的，观察潜在反弹机会。{% else %}Track the deepest pullbacks for potential reversals.{% endif %}"
+               data-desc-most-active="{% if lang_prefix == 'zh' %}按成交量筛选市场中交易最活跃的股票。{% else %}Highest volume names across the market.{% endif %}">
+                {% if lang_prefix == 'zh' %}按所选时间范围排序，展示表现最佳的股票。{% else %}Best performers within the selected window.{% endif %}
+            </p>
+        </header>
+        <div class="market-list" data-role="ranking-list" data-skeleton-count="6"></div>
     </section>
+
+    <div class="modal fade" id="marketDetailModal" tabindex="-1" aria-labelledby="marketDetailModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-centered">
+            <div class="modal-content market-detail-modal">
+                <div class="modal-header">
+                    <div>
+                        <h5 class="modal-title" id="marketDetailModalLabel">
+                            {% if lang_prefix == 'zh' %}行情详情{% else %}Market Detail{% endif %}
+                        </h5>
+                        <p class="modal-subtitle" data-role="detail-title">
+                            {% if lang_prefix == 'zh' %}点击列表查看 K 线{% else %}Select a symbol to view candles{% endif %}
+                        </p>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{% if lang_prefix == 'zh' %}关闭{% else %}Close{% endif %}"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="market-detail-controls">
+                        <div class="market-detail-timeframes" role="group" aria-label="{% if lang_prefix == 'zh' %}详情时间范围{% else %}Detail timeframe{% endif %}">
+                            <button type="button" class="detail-timeframe is-active" data-range="1d">1D</button>
+                            <button type="button" class="detail-timeframe" data-range="1w">1W</button>
+                            <button type="button" class="detail-timeframe" data-range="1m">1M</button>
+                        </div>
+                        <div class="market-detail-meta">
+                            <span class="detail-meta-item" data-role="detail-source"></span>
+                            <span class="detail-meta-item" data-role="detail-updated"></span>
+                        </div>
+                    </div>
+                    <div class="market-detail-chart" id="market-detail-chart"></div>
+                    <div class="market-detail-status" data-role="detail-status" hidden></div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <template id="market-card-template">
         <article class="market-card">
@@ -251,5 +287,6 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="{% static 'trading/js/market_insights.js' %}"></script>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js" nonce="{{ csp_nonce }}"></script>
+<script src="{% static 'trading/js/market_insights.js' %}" nonce="{{ csp_nonce }}"></script>
 {% endblock %}

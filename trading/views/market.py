@@ -40,6 +40,15 @@ class Timeframe:
     interval: str
 
 
+@dataclass(slots=True)
+class DetailTimeframe:
+    key: str
+    label: str
+    label_en: str
+    period: str
+    interval: str
+
+
 TIMEFRAMES: dict[str, Timeframe] = {
     "1d": Timeframe("1d", _lazy("近1日"), "1D", "5d", "15m"),
     "5d": Timeframe("5d", _lazy("近5日"), "5D", "10d", "60m"),
@@ -48,6 +57,12 @@ TIMEFRAMES: dict[str, Timeframe] = {
 }
 
 DEFAULT_TIMEFRAME = TIMEFRAMES["1mo"]
+DETAIL_TIMEFRAMES: dict[str, DetailTimeframe] = {
+    "1d": DetailTimeframe("1d", _lazy("1日"), "1D", "1d", "5m"),
+    "1w": DetailTimeframe("1w", _lazy("1周"), "1W", "5d", "30m"),
+    "1m": DetailTimeframe("1m", _lazy("1月"), "1M", "1mo", "1d"),
+}
+DEFAULT_DETAIL_TIMEFRAME = DETAIL_TIMEFRAMES["1d"]
 TOP_SYMBOLS = screener.CORE_TICKERS_US[:80]
 MAX_SERIES_POINTS = 60
 WINDOW_LENGTHS = {
@@ -120,6 +135,94 @@ def _resolve_market_params(params: Mapping[str, object]) -> MarketQueryParams:
     )
 
 
+def _resolve_list_type(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"gainers", "losers", "most_active"}:
+        return text
+    return "gainers"
+
+
+def _resolve_detail_timeframe(value: object) -> DetailTimeframe:
+    text = str(value or "").strip().lower()
+    return DETAIL_TIMEFRAMES.get(text, DEFAULT_DETAIL_TIMEFRAME)
+
+
+def _extract_ohlc(frame: pd.DataFrame, symbol: str, *, limit: int = 360) -> list[dict[str, float | int]]:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return []
+    sym = symbol.upper()
+
+    def _pull_field(field: str) -> pd.Series | None:
+        columns = frame.columns
+        if isinstance(columns, pd.MultiIndex):
+            try:
+                if field in columns.get_level_values(0):
+                    series = frame.xs(field, level=0, axis=1)
+                    if sym in series.columns:
+                        return series[sym]
+            except Exception:
+                pass
+            try:
+                if field in columns.get_level_values(1):
+                    series = frame.xs(field, level=1, axis=1)
+                    if sym in series.columns:
+                        return series[sym]
+            except Exception:
+                pass
+            return None
+        if field in frame.columns:
+            return frame[field]
+        if sym in frame.columns:
+            sub = frame[sym]
+            if isinstance(sub, pd.DataFrame) and field in sub.columns:
+                return sub[field]
+        return None
+
+    open_series = _pull_field("Open")
+    high_series = _pull_field("High")
+    low_series = _pull_field("Low")
+    close_series = _pull_field("Close")
+    if open_series is None or high_series is None or low_series is None or close_series is None:
+        return []
+
+    ohlc_frame = pd.DataFrame(
+        {
+            "open": open_series,
+            "high": high_series,
+            "low": low_series,
+            "close": close_series,
+        }
+    ).dropna()
+    if ohlc_frame.empty:
+        return []
+
+    ohlc_frame = ohlc_frame.sort_index().tail(limit)
+    bars: list[dict[str, float | int]] = []
+    for ts, row in ohlc_frame.iterrows():
+        try:
+            stamp = pd.Timestamp(ts)
+            if stamp.tzinfo is None:
+                stamp = stamp.tz_localize(timezone.utc)
+            else:
+                stamp = stamp.tz_convert(timezone.utc)
+            time_val = int(stamp.timestamp())
+        except Exception:
+            continue
+        try:
+            bars.append(
+                {
+                    "time": time_val,
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"]),
+                }
+            )
+        except Exception:
+            continue
+    return bars
+
+
 @login_required
 @ensure_csrf_cookie
 def market_insights(request: HttpRequest) -> HttpResponse:
@@ -166,6 +269,10 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         params = raw.dict() if hasattr(raw, "dict") else dict(raw)
 
     resolved = _resolve_market_params(params)
+    list_type = _resolve_list_type(params.get("list") or params.get("list_type"))
+    detail_mode = str(params.get("detail") or "").strip().lower() in {"1", "true", "yes"}
+    detail_symbol = _normalize_query(params.get("symbol") or params.get("detail_symbol"))
+    detail_timeframe = _resolve_detail_timeframe(params.get("range") or params.get("detail_timeframe"))
 
     rate_state = check_rate_limit(
         cache_alias=MARKET_RATE_CACHE_ALIAS,
@@ -188,6 +295,68 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                 "request_id": request_id,
             },
             status=429,
+        )
+
+    if detail_mode:
+        if not detail_symbol:
+            return JsonResponse(
+                {"error": _("缺少股票代码。"), "request_id": request_id},
+                status=400,
+                json_dumps_params={"ensure_ascii": False},
+            )
+        fallback_map = {
+            "1d": ("1w", "1m"),
+            "1w": ("1m",),
+            "1m": (),
+        }
+        candidates = [detail_timeframe]
+        for key in fallback_map.get(detail_timeframe.key, ()):
+            candidates.append(DETAIL_TIMEFRAMES[key])
+
+        effective_timeframe = detail_timeframe
+        frame = None
+        bars: list[dict[str, float | int]] = []
+        for candidate in candidates:
+            frame = market_data.fetch(
+                [detail_symbol],
+                period=candidate.period,
+                interval=candidate.interval,
+                cache=True,
+                timeout=MARKET_REQUEST_TIMEOUT,
+                ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
+                cache_alias=getattr(settings, "MARKET_HISTORY_CACHE_ALIAS", None),
+                user_id=str(request.user.id),
+            )
+            bars = _extract_ohlc(frame, detail_symbol)
+            if bars:
+                effective_timeframe = candidate
+                break
+
+        if not bars:
+            return JsonResponse(
+                {"error": _("未能获取 %(symbol)s 的行情数据。") % {"symbol": detail_symbol}, "request_id": request_id},
+                status=404,
+                json_dumps_params={"ensure_ascii": False},
+            )
+        return JsonResponse(
+            {
+                "symbol": detail_symbol,
+                "timeframe": {
+                    "key": effective_timeframe.key,
+                    "label": effective_timeframe.label,
+                    "label_en": effective_timeframe.label_en,
+                },
+                "requested_timeframe": {
+                    "key": detail_timeframe.key,
+                    "label": detail_timeframe.label,
+                    "label_en": detail_timeframe.label_en,
+                },
+                "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+                "data_source": _infer_market_source(frame),
+                "bars": bars,
+                "request_id": request_id,
+            },
+            json_dumps_params={"ensure_ascii": False},
         )
 
     session = request.session
@@ -250,65 +419,89 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
     else:
         symbols = TOP_SYMBOLS
 
-    future = None
+    list_items: list[dict[str, object]] = []
+    active_list_type = list_type
     data_source = "unknown"
-    try:
-        with track_latency(
-            "market.insights.fetch",
-            user_id=request.user.id,
-            request_id=request_id,
-            timeframe=resolved.timeframe.key,
-            restrict=restrict_to_query,
-        ):
-            future = _MARKET_EXECUTOR.submit(
-                _fetch_history,
-                symbols,
-                resolved.timeframe,
-                user_id=str(request.user.id),
-            )
-            series_map, data_source = future.result(timeout=MARKET_REQUEST_TIMEOUT)
-    except FuturesTimeout:
-        if future:
-            future.cancel()
-        record_metric(
-            "market.insights.error",
-            request_id=request_id,
-            user_id=request.user.id,
-            error="timeout",
-        )
-        return JsonResponse(
-            {"error": _("市场数据请求超时，请稍后再试。"), "request_id": request_id},
-            status=504,
-        )
-    if not series_map:
-        record_metric(
-            "market.insights.error",
-            request_id=request_id,
-            user_id=request.user.id,
-            error="empty_series",
-        )
-        return JsonResponse(
-            {"error": _("未能获取市场数据，请稍后再试。"), "request_id": request_id},
-            status=502,
-            json_dumps_params={"ensure_ascii": False},
-        )
+    gainers: list[dict[str, object]] = []
+    losers: list[dict[str, object]] = []
 
-    ranked = _rank_symbols(series_map, resolved.timeframe, limit=resolved.limit if restrict_to_query else 20)
-    if restrict_to_query:
-        payload = [
-            entry for entry in ranked if entry["symbol"].upper() == resolved.query.upper()
-        ]
-        if not payload:
+    if restrict_to_query or list_type in {"gainers", "losers"}:
+        future = None
+        try:
+            with track_latency(
+                "market.insights.fetch",
+                user_id=request.user.id,
+                request_id=request_id,
+                timeframe=resolved.timeframe.key,
+                restrict=restrict_to_query,
+            ):
+                future = _MARKET_EXECUTOR.submit(
+                    _fetch_history,
+                    symbols,
+                    resolved.timeframe,
+                    user_id=str(request.user.id),
+                )
+                series_map, data_source = future.result(timeout=MARKET_REQUEST_TIMEOUT)
+        except FuturesTimeout:
+            if future:
+                future.cancel()
+            record_metric(
+                "market.insights.error",
+                request_id=request_id,
+                user_id=request.user.id,
+                error="timeout",
+            )
             return JsonResponse(
-                {"error": _("未找到 %(symbol)s 的有效行情数据。") % {"symbol": resolved.query}, "request_id": request_id},
-                status=404,
+                {"error": _("市场数据请求超时，请稍后再试。"), "request_id": request_id},
+                status=504,
+            )
+        if not series_map:
+            record_metric(
+                "market.insights.error",
+                request_id=request_id,
+                user_id=request.user.id,
+                error="empty_series",
+            )
+            return JsonResponse(
+                {"error": _("未能获取市场数据，请稍后再试。"), "request_id": request_id},
+                status=502,
                 json_dumps_params={"ensure_ascii": False},
             )
-        gainers: list[dict[str, object]] = payload if payload[0]["change_pct_period"] >= 0 else []
-        losers: list[dict[str, object]] = payload if payload and payload[0]["change_pct_period"] < 0 else []
+
+        ranked = _rank_symbols(series_map, resolved.timeframe, limit=resolved.limit if restrict_to_query else 20)
+        if restrict_to_query:
+            payload = [entry for entry in ranked if entry["symbol"].upper() == resolved.query.upper()]
+            if not payload:
+                return JsonResponse(
+                    {"error": _("未找到 %(symbol)s 的有效行情数据。") % {"symbol": resolved.query}, "request_id": request_id},
+                    status=404,
+                    json_dumps_params={"ensure_ascii": False},
+                )
+            gainers = payload if payload[0]["change_pct_period"] >= 0 else []
+            losers = payload if payload and payload[0]["change_pct_period"] < 0 else []
+            if gainers:
+                list_items = gainers
+                active_list_type = "gainers"
+            else:
+                list_items = losers
+                active_list_type = "losers"
+        else:
+            gainers = [entry for entry in ranked if entry["change_pct_period"] >= 0][: resolved.limit]
+            losers = [entry for entry in ranked if entry["change_pct_period"] < 0][: resolved.limit]
+            list_items = losers if list_type == "losers" else gainers
     else:
-        gainers = [entry for entry in ranked if entry["change_pct_period"] >= 0][: resolved.limit]
-        losers = [entry for entry in ranked if entry["change_pct_period"] < 0][: resolved.limit]
+        list_items = market_data.fetch_most_actives(
+            by="volume",
+            limit=resolved.limit,
+            user_id=str(request.user.id),
+            timeout=MARKET_REQUEST_TIMEOUT,
+        )
+        volume_label = _("成交量")
+        for entry in list_items:
+            if isinstance(entry, dict):
+                entry.setdefault("period_label", volume_label)
+                entry.setdefault("period_label_en", "Volume")
+        data_source = "alpaca" if list_items else "unknown"
 
     suggestions = _build_suggestions(resolved.query)
 
@@ -323,6 +516,8 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "data_source": data_source or "unknown",
         "query": resolved.query,
+        "list_type": active_list_type,
+        "items": list_items,
         "gainers": gainers,
         "losers": losers,
         "limit_clamped": resolved.limit_clamped,
@@ -337,6 +532,8 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         user_id=request.user.id,
         query=bool(resolved.query),
         timeframe=resolved.timeframe.key,
+        list_type=active_list_type,
+        items=len(list_items),
         gainers=len(gainers),
         losers=len(losers),
     )
