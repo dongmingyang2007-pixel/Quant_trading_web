@@ -3,172 +3,348 @@
 
 {% block title %}仪表盘{% endblock %}
 
+{% block extra_head %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tabulator-tables@6.2.1/dist/css/tabulator.min.css">
+{% endblock %}
+
 {% block content %}
-<div class="dashboard-page container-xl">
-    <header class="dashboard-hero dashboard-hero--compact">
-        <div class="dashboard-hero-text">
-            <p class="dashboard-kicker">Quant Studio</p>
-            <h1 class="dashboard-title">我的量化仪表盘</h1>
-            <p class="dashboard-subtitle">
-                用少量关键指标掌握当前进度，随时启动下一步行动。
-            </p>
-            <div class="dashboard-actions">
-                <a class="hero-button solid" href="{% url 'trading:backtest' %}">开始回测</a>
-                <a class="hero-button ghost" href="{% url 'trading:learning_center' %}">继续学习</a>
+<div class="terminal-dashboard" data-role="terminal-dashboard">
+    <header class="terminal-header">
+        <div class="terminal-brand">
+            <button type="button" class="terminal-icon-btn" data-action="toggle-toolbar" aria-label="切换工具栏">
+                <span class="icon-bars"></span>
+            </button>
+            <div class="brand-stack">
+                <span class="brand-title">QS Terminal</span>
+                <span class="brand-subtitle">Quant Studio Dashboard</span>
             </div>
         </div>
-        <div class="dashboard-highlight">
-            <h3>资料完成度</h3>
-            <span class="highlight-score">{{ profile_progress.score }}%</span>
-            <p class="text-muted mb-0">
-                {% if profile_progress.missing %}
-                    待补充：{{ profile_progress.missing|join:"、" }}
-                {% else %}
-                    信息完整，建议保持定期复盘。
-                {% endif %}
-            </p>
+        <div class="terminal-search">
+            <label class="search-label" for="terminal-symbol-input">符号</label>
+            <div class="search-field">
+                <input id="terminal-symbol-input" type="text" placeholder="NVDA / BTCUSDT" autocomplete="off">
+                <button class="btn btn-sm btn-primary" type="button">加载</button>
+            </div>
+        </div>
+        <div class="terminal-header-actions">
+            <span class="status-pill is-live">LIVE</span>
+            <div class="terminal-progress">
+                <span>资料完成度</span>
+                <strong>{{ profile_progress.score }}%</strong>
+            </div>
+            <a class="terminal-cta" href="{% url 'trading:backtest' %}">开始回测</a>
         </div>
     </header>
 
-    {% if summary_cards %}
-    <section class="summary-section summary-section--compact">
-        <div class="summary-grid">
-            {% for card in summary_cards %}
-                <article class="summary-card">
-                    <div class="summary-icon">{{ card.icon }}</div>
-                    <div class="summary-body">
-                        <h3>{{ card.title }}</h3>
-                        <p class="summary-value" data-countup="{{ card.value|default_if_none:'' }}">{{ card.value }}</p>
-                        <p class="summary-hint text-muted">{{ card.hint }}</p>
-                    </div>
-                </article>
-            {% endfor %}
-        </div>
-    </section>
-    {% else %}
-    <section class="summary-section summary-section--compact summary-section--loading" aria-live="polite" aria-busy="true">
-        <div class="summary-grid summary-grid--skeleton">
-            {% for _ in "123"|make_list %}
-                <article class="summary-card summary-card--skeleton" aria-hidden="true">
-                    <div class="summary-icon skeleton-block skeleton-block--icon"></div>
-                    <div class="summary-body">
-                        <span class="skeleton-line skeleton-line--title"></span>
-                        <span class="skeleton-line skeleton-line--value"></span>
-                        <span class="skeleton-line skeleton-line--text"></span>
-                    </div>
-                </article>
-            {% endfor %}
-        </div>
-    </section>
-    {% endif %}
+    <div class="terminal-body">
+        <aside class="terminal-toolbar" id="terminal-toolbar">
+            <div class="tool-stack">
+                <button class="tool-btn" type="button" title="指针">
+                    <span class="tool-icon">+</span>
+                    <span class="tool-label">指针</span>
+                </button>
+                <button class="tool-btn" type="button" title="趋势线">
+                    <span class="tool-icon">/</span>
+                    <span class="tool-label">趋势</span>
+                </button>
+                <button class="tool-btn" type="button" title="通道">
+                    <span class="tool-icon">||</span>
+                    <span class="tool-label">通道</span>
+                </button>
+                <button class="tool-btn" type="button" title="文本">
+                    <span class="tool-icon">T</span>
+                    <span class="tool-label">文本</span>
+                </button>
+                <button class="tool-btn" type="button" title="标注">
+                    <span class="tool-icon">*</span>
+                    <span class="tool-label">标注</span>
+                </button>
+                <button class="tool-btn" type="button" title="回撤">
+                    <span class="tool-icon">%</span>
+                    <span class="tool-label">回撤</span>
+                </button>
+            </div>
+            <div class="tool-stack tool-stack--bottom">
+                <button class="tool-btn" type="button" title="设置">
+                    <span class="tool-icon">S</span>
+                    <span class="tool-label">设置</span>
+                </button>
+                <button class="tool-btn" type="button" title="布局">
+                    <span class="tool-icon">L</span>
+                    <span class="tool-label">布局</span>
+                </button>
+            </div>
+        </aside>
 
-    {% if quick_actions %}
-    <section class="dashboard-card">
-        <header class="section-head">
-            <div>
-                <h2>快捷操作</h2>
-                <p class="text-muted mb-0">从这里直接进入常用功能，保持执行节奏。</p>
-            </div>
-        </header>
-        <ul class="quick-actions simple">
-            {% for item in quick_actions %}
-                <li>
-                    <a href="{{ item.href }}">
-                        <strong>{{ item.title }}</strong>
-                        <span>{{ item.description }}</span>
-                    </a>
-                </li>
-            {% endfor %}
-        </ul>
-    </section>
-    {% else %}
-    <section class="dashboard-card quick-actions-card quick-actions-card--loading" aria-live="polite" aria-busy="true">
-        <header class="section-head">
-            <div>
-                <h2>快捷操作</h2>
-                <p class="text-muted mb-0">从这里直接进入常用功能，保持执行节奏。</p>
-            </div>
-        </header>
-        <ul class="quick-actions simple quick-actions--skeleton">
-            {% for _ in "123"|make_list %}
-                <li aria-hidden="true">
-                    <span class="skeleton-line skeleton-line--title"></span>
-                    <span class="skeleton-line skeleton-line--text"></span>
-                </li>
-            {% endfor %}
-        </ul>
-    </section>
-    {% endif %}
+        <section class="terminal-workspace" id="terminal-split">
+            <div class="terminal-top" id="terminal-top">
+                <main class="terminal-main" id="terminal-main">
+                    <div class="chart-header">
+                        <div>
+                            <p class="chart-kicker">Market Pulse</p>
+                            <h2 class="chart-title">BTC/USDT</h2>
+                            <div class="chart-meta">
+                                <span class="meta-chip is-up">+1.8%</span>
+                                <span class="meta-chip">1D</span>
+                                <span class="meta-chip">SIP/Adjusted</span>
+                            </div>
+                        </div>
+                        <div class="chart-actions">
+                            <a class="chart-action" href="{% url 'trading:market_insights' %}">市场面板</a>
+                            <a class="chart-action" href="{% url 'trading:realtime_monitor' %}">实时监控</a>
+                            <a class="chart-action chart-action--primary" href="{% url 'trading:backtest' %}">回测实验室</a>
+                        </div>
+                    </div>
+                    <div class="chart-stage">
+                        <div class="chart-placeholder">
+                            <div>
+                                <p class="chart-watermark">QS CHART</p>
+                                <p class="chart-note">连接实时行情后即可呈现图表与策略叠加。</p>
+                            </div>
+                        </div>
+                    </div>
+                    {% if summary_cards %}
+                    <div class="terminal-metrics">
+                        {% for card in summary_cards %}
+                            <div class="terminal-metric">
+                                <span class="metric-icon">{{ card.icon }}</span>
+                                <div>
+                                    <p class="metric-label">{{ card.title }}</p>
+                                    <p class="metric-value summary-value" data-countup="{{ card.value|default_if_none:'' }}">{{ card.value }}</p>
+                                    <p class="metric-hint">{{ card.hint }}</p>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="terminal-metrics terminal-metrics--empty">
+                        <p class="metric-empty">暂无关键指标，建议先创建回测记录。</p>
+                    </div>
+                    {% endif %}
+                </main>
 
-    {% if module_links %}
-    <section class="dashboard-card module-board module-board--compact">
-        <header class="section-head">
-            <div>
-                <h2>常用入口</h2>
-                <p class="text-muted mb-0">分析、学习、记录三步走，持续复盘。</p>
+        <aside class="terminal-right" id="terminal-right">
+            <div class="terminal-right-icons">
+                <button type="button" class="icon-pill" title="Watchlist">WL</button>
+                <button type="button" class="icon-pill" title="News">NW</button>
+                <button type="button" class="icon-pill" title="AI">AI</button>
             </div>
-        </header>
-        <div class="module-grid">
-            {% for link in module_links %}
-                <a class="module-tile" href="{% url link.href_name %}">
-                    <span class="module-title">{{ link.title }}</span>
-                    <span class="module-desc text-muted">{{ link.description }}</span>
-                </a>
-            {% endfor %}
-        </div>
-    </section>
-    {% else %}
-    <section class="dashboard-card module-board module-board--compact module-board--loading" aria-live="polite" aria-busy="true">
-        <header class="section-head">
-            <div>
-                <h2>常用入口</h2>
-                <p class="text-muted mb-0">分析、学习、记录三步走，持续复盘。</p>
-            </div>
-        </header>
-        <div class="module-grid module-grid--skeleton">
-            {% for _ in "1234"|make_list %}
-                <div class="module-tile module-tile--skeleton" aria-hidden="true">
-                    <span class="skeleton-line skeleton-line--title"></span>
-                    <span class="skeleton-line skeleton-line--text"></span>
+
+            <section class="terminal-panel watchlist-panel">
+                <div class="panel-head">
+                    <h3>Watchlist</h3>
+                    <div class="watchlist-status" data-role="watchlist-status">
+                        <span class="status-dot is-offline"></span>
+                        <span class="status-text">离线</span>
+                    </div>
                 </div>
-            {% endfor %}
-        </div>
-    </section>
-    {% endif %}
+                <div class="watchlist-viewport" data-role="watchlist-viewport">
+                    <div class="watchlist-spacer" data-role="watchlist-spacer"></div>
+                    <div class="watchlist-items" data-role="watchlist-items"></div>
+                </div>
+            </section>
 
-    {% if usage_notes %}
-    <section class="dashboard-card usage-card">
-        <header class="section-head">
-            <div>
-                <h2>今日提示</h2>
-                <p class="text-muted mb-0">按提示完成细节，确保计划稳步推进。</p>
+            <section class="terminal-panel">
+                <div class="panel-head">
+                    <h3>快捷操作</h3>
+                    <span class="panel-meta">Action</span>
+                </div>
+                        <div class="panel-body">
+                            {% if quick_actions %}
+                            <ul class="panel-list">
+                                {% for item in quick_actions %}
+                                    <li>
+                                        <a href="{{ item.href }}">
+                                            <span class="list-title">{{ item.title }}</span>
+                                            <span class="list-meta">{{ item.description }}</span>
+                                        </a>
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                            {% else %}
+                            <p class="panel-empty">暂无快捷操作。</p>
+                            {% endif %}
+                        </div>
+                    </section>
+
+                    <section class="terminal-panel">
+                        <div class="panel-head">
+                            <h3>常用入口</h3>
+                            <span class="panel-meta">Modules</span>
+                        </div>
+                        <div class="panel-body">
+                            {% if module_links %}
+                            <div class="module-mini-grid">
+                                {% for link in module_links %}
+                                    <a class="module-mini" href="{% url link.href_name %}">
+                                        <span class="module-title">{{ link.title }}</span>
+                                        <span class="module-desc">{{ link.description }}</span>
+                                    </a>
+                                {% endfor %}
+                            </div>
+                            {% else %}
+                            <p class="panel-empty">暂无可用模块。</p>
+                            {% endif %}
+                        </div>
+                    </section>
+                </aside>
             </div>
-        </header>
-        <ul class="usage-notes-list">
-            {% for note in usage_notes %}
-                <li>{{ note }}</li>
-            {% endfor %}
-        </ul>
-    </section>
-    {% else %}
-    <section class="dashboard-card usage-card usage-card--loading" aria-live="polite" aria-busy="true">
-        <header class="section-head">
-            <div>
-                <h2>今日提示</h2>
-                <p class="text-muted mb-0">按提示完成细节，确保计划稳步推进。</p>
+
+            <div class="terminal-bottom" id="terminal-bottom">
+                <div class="terminal-bottom-head">
+                    <div class="bottom-tabs">
+                        <button class="bottom-tab is-active" type="button" data-pane-target="terminal">Terminal</button>
+                        <button class="bottom-tab" type="button" data-pane-target="screener">Screener</button>
+                        <button class="bottom-tab" type="button" data-pane-target="positions">Positions</button>
+                        <button class="bottom-tab" type="button" data-pane-target="scripts">Scripts</button>
+                    </div>
+                    <div class="bottom-actions">
+                        <span class="status-pill">Stable</span>
+                        <span class="terminal-clock">UTC</span>
+                    </div>
+                </div>
+                <div class="terminal-bottom-body">
+                    <div class="terminal-bottom-pane terminal-bottom-pane--grid is-active" data-pane="terminal">
+                        <div class="terminal-log">
+                            {% if usage_notes %}
+                                {% for note in usage_notes %}
+                                    <div class="log-item">
+                                        <span class="log-dot"></span>
+                                        <span>{{ note }}</span>
+                                    </div>
+                                {% endfor %}
+                            {% else %}
+                                <div class="log-item">
+                                    <span class="log-dot"></span>
+                                    <span>暂无终端日志，保持当前节奏。</span>
+                                </div>
+                            {% endif %}
+                        </div>
+                        <div class="terminal-queue">
+                            <div class="queue-card">
+                                <p class="queue-title">策略队列</p>
+                                <p class="queue-value">3</p>
+                                <p class="queue-meta">待执行回测</p>
+                            </div>
+                            <div class="queue-card">
+                                <p class="queue-title">风险告警</p>
+                                <p class="queue-value">0</p>
+                                <p class="queue-meta">过去 24h</p>
+                            </div>
+                            <div class="queue-card">
+                                <p class="queue-title">自选观察</p>
+                                <p class="queue-value">12</p>
+                                <p class="queue-meta">Watchlist</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="terminal-bottom-pane terminal-bottom-pane--stack" data-pane="screener">
+                        <div class="screener-toolbar">
+                            <div class="screener-search">
+                                <label for="screener-search-input">搜索</label>
+                                <input id="screener-search-input" type="text" placeholder="代码 / 名称">
+                            </div>
+                            <div class="screener-filters">
+                                <label for="screener-volume-select">成交量</label>
+                                <select id="screener-volume-select">
+                                    <option value="">全部</option>
+                                    <option value="500000">≥ 50万</option>
+                                    <option value="1000000">≥ 100万</option>
+                                    <option value="5000000">≥ 500万</option>
+                                </select>
+                            </div>
+                            <div class="screener-meta">
+                                <span>支持筛选 / 拖拽列 / 服务器分页</span>
+                            </div>
+                        </div>
+                        <div id="screener-grid" class="screener-grid"></div>
+                    </div>
+                    <div class="terminal-bottom-pane terminal-bottom-pane--stack" data-pane="positions">
+                        <div class="terminal-empty-state">
+                            <p class="terminal-empty-title">Positions</p>
+                            <p class="terminal-empty-text">暂无持仓数据，连接交易账户后自动展示。</p>
+                        </div>
+                    </div>
+                    <div class="terminal-bottom-pane terminal-bottom-pane--stack" data-pane="scripts">
+                        <div class="terminal-empty-state">
+                            <p class="terminal-empty-title">Scripts</p>
+                            <p class="terminal-empty-text">脚本控制台准备中，可在此运行策略。</p>
+                        </div>
+                    </div>
+                </div>
             </div>
-        </header>
-        <ul class="usage-notes-list usage-notes-list--skeleton">
-            {% for _ in "1234"|make_list %}
-                <li class="skeleton-line skeleton-line--text" aria-hidden="true"></li>
-            {% endfor %}
-        </ul>
-    </section>
-    {% endif %}
+        </section>
+    </div>
 </div>
 {% endblock %}
 
 {% block extra_scripts %}
 {{ block.super }}
-<script src="{% static 'trading/js/dashboard_micro.js' %}?v={{ STATIC_VERSION|default:'1' }}" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/split.js@1.6.5/dist/split.min.js" nonce="{{ csp_nonce }}"></script>
+<script src="https://cdn.jsdelivr.net/npm/tabulator-tables@6.2.1/dist/js/tabulator.min.js" nonce="{{ csp_nonce }}"></script>
+<script nonce="{{ csp_nonce }}">
+    (() => {
+        const dashboard = document.querySelector('.terminal-dashboard');
+        const toolbarToggle = document.querySelector('[data-action="toggle-toolbar"]');
+        let verticalSplit = null;
+        let horizontalSplit = null;
+
+        const destroySplits = () => {
+            if (horizontalSplit) {
+                horizontalSplit.destroy(true, true);
+                horizontalSplit = null;
+            }
+            if (verticalSplit) {
+                verticalSplit.destroy(true, true);
+                verticalSplit = null;
+            }
+        };
+
+        const initSplits = () => {
+            if (window.innerWidth < 992 || typeof Split === 'undefined') {
+                destroySplits();
+                return;
+            }
+            if (!verticalSplit) {
+                verticalSplit = Split(['#terminal-top', '#terminal-bottom'], {
+                    direction: 'vertical',
+                    sizes: [72, 28],
+                    minSize: [360, 180],
+                    gutterSize: 10,
+                    gutterAlign: 'center',
+                });
+            }
+            if (!horizontalSplit) {
+                horizontalSplit = Split(['#terminal-main', '#terminal-right'], {
+                    sizes: [74, 26],
+                    minSize: [480, 240],
+                    gutterSize: 10,
+                    gutterAlign: 'center',
+                });
+            }
+        };
+
+        if (toolbarToggle && dashboard) {
+            toolbarToggle.addEventListener('click', () => {
+                dashboard.classList.toggle('is-toolbar-collapsed');
+            });
+        }
+
+        window.addEventListener('resize', () => {
+            if (window.innerWidth < 992) {
+                destroySplits();
+            } else {
+                initSplits();
+            }
+        });
+
+        initSplits();
+    })();
+</script>
+<script src="{% static 'trading/js/watchlist_realtime.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
+<script src="{% static 'trading/js/dashboard_screener.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
+<script src="{% static 'trading/js/dashboard_micro.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
 {% endblock %}

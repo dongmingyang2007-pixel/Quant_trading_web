@@ -213,12 +213,42 @@
                             <button type="button" class="detail-timeframe" data-range="1w">1W</button>
                             <button type="button" class="detail-timeframe" data-range="1m">1M</button>
                         </div>
+                        <div class="market-detail-indicators">
+                            <div class="indicator-group">
+                                <label for="detail-overlay-select">{% if lang_prefix == 'zh' %}叠加{% else %}Overlay{% endif %}</label>
+                                <select id="detail-overlay-select">
+                                    <option value="none">{% if lang_prefix == 'zh' %}无{% else %}None{% endif %}</option>
+                                    <option value="sma">SMA 20</option>
+                                    <option value="ema">EMA 20</option>
+                                    <option value="bbands">Bollinger 20</option>
+                                </select>
+                            </div>
+                            <div class="indicator-group">
+                                <label for="detail-indicator-select">{% if lang_prefix == 'zh' %}指标{% else %}Indicator{% endif %}</label>
+                                <select id="detail-indicator-select">
+                                    <option value="none">{% if lang_prefix == 'zh' %}无{% else %}None{% endif %}</option>
+                                    <option value="rsi">RSI</option>
+                                    <option value="macd">MACD</option>
+                                </select>
+                            </div>
+                            <div class="indicator-group indicator-group--draw">
+                                <span class="indicator-label">{% if lang_prefix == 'zh' %}绘制{% else %}Draw{% endif %}</span>
+                                <div class="draw-actions">
+                                    <button type="button" class="draw-btn" data-draw="line">Line</button>
+                                    <button type="button" class="draw-btn" data-draw="rect">Rect</button>
+                                    <button type="button" class="draw-btn" data-draw="clear">{% if lang_prefix == 'zh' %}清空{% else %}Clear{% endif %}</button>
+                                </div>
+                            </div>
+                        </div>
                         <div class="market-detail-meta">
                             <span class="detail-meta-item" data-role="detail-source"></span>
                             <span class="detail-meta-item" data-role="detail-updated"></span>
                         </div>
                     </div>
-                    <div class="market-detail-chart" id="market-detail-chart"></div>
+                    <div class="market-detail-chart-stack">
+                        <div class="market-detail-chart" id="market-detail-chart"></div>
+                        <div class="market-detail-indicator" id="market-detail-indicator" hidden></div>
+                    </div>
                     <div class="market-detail-status" data-role="detail-status" hidden></div>
                 </div>
             </div>
@@ -288,5 +318,6 @@
 
 {% block extra_scripts %}
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js" nonce="{{ csp_nonce }}"></script>
+<script src="https://cdn.jsdelivr.net/npm/technicalindicators@3.1.0/dist/browser/technicalindicators.min.js" nonce="{{ csp_nonce }}"></script>
 <script src="{% static 'trading/js/market_insights.js' %}" nonce="{{ csp_nonce }}"></script>
 {% endblock %}

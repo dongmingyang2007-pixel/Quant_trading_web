@@ -147,6 +147,113 @@ def _resolve_detail_timeframe(value: object) -> DetailTimeframe:
     return DETAIL_TIMEFRAMES.get(text, DEFAULT_DETAIL_TIMEFRAME)
 
 
+def _parse_json_list(value: object) -> list[dict[str, object]]:
+    if isinstance(value, list):
+        return [entry for entry in value if isinstance(entry, dict)]
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        if isinstance(parsed, list):
+            return [entry for entry in parsed if isinstance(entry, dict)]
+    return []
+
+
+def _coerce_number(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_screener_filters(rows: list[dict[str, object]], filters: list[dict[str, object]]) -> list[dict[str, object]]:
+    if not filters:
+        return rows
+    allowed_fields = {"ticker", "name", "price", "change_pct", "volume", "sector", "industry", "currency"}
+    filtered: list[dict[str, object]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        matches = True
+        for flt in filters:
+            field = str(flt.get("field") or "").strip()
+            if field not in allowed_fields:
+                continue
+            op = str(flt.get("type") or flt.get("operator") or "like").strip().lower()
+            target = flt.get("value")
+            value = row.get(field)
+
+            if op in {"like", "contains"}:
+                hay = str(value or "").lower()
+                needle = str(target or "").lower()
+                if needle and needle not in hay:
+                    matches = False
+                    break
+                continue
+
+            if op in {"=", "==", "eq"}:
+                if str(value).lower() != str(target).lower():
+                    matches = False
+                    break
+                continue
+
+            if op in {"!=", "neq"}:
+                if str(value).lower() == str(target).lower():
+                    matches = False
+                    break
+                continue
+
+            left = _coerce_number(value)
+            right = _coerce_number(target)
+            if left is None or right is None:
+                matches = False
+                break
+            if op in {">", "gt"} and not (left > right):
+                matches = False
+                break
+            if op in {"<", "lt"} and not (left < right):
+                matches = False
+                break
+            if op in {">=", "gte"} and not (left >= right):
+                matches = False
+                break
+            if op in {"<=", "lte"} and not (left <= right):
+                matches = False
+                break
+        if matches:
+            filtered.append(row)
+    return filtered
+
+
+def _apply_screener_sort(rows: list[dict[str, object]], sorters: list[dict[str, object]]) -> list[dict[str, object]]:
+    if not sorters:
+        return rows
+    allowed_fields = {"ticker", "name", "price", "change_pct", "volume", "sector", "industry", "currency"}
+    sorters = [s for s in sorters if str(s.get("field") or "") in allowed_fields]
+    if not sorters:
+        return rows
+
+    def sort_key(item: dict[str, object]) -> tuple:
+        key_parts: list[object] = []
+        for sorter in sorters:
+            field = str(sorter.get("field") or "")
+            value = item.get(field)
+            numeric = _coerce_number(value)
+            key_parts.append(numeric if numeric is not None else str(value or "").lower())
+        return tuple(key_parts)
+
+    reverse = str(sorters[0].get("dir") or "asc").lower() == "desc"
+    return sorted(rows, key=sort_key, reverse=reverse)
+
+
 def _extract_ohlc(frame: pd.DataFrame, symbol: str, *, limit: int = 360) -> list[dict[str, float | int]]:
     if not isinstance(frame, pd.DataFrame) or frame.empty:
         return []
@@ -221,6 +328,42 @@ def _extract_ohlc(frame: pd.DataFrame, symbol: str, *, limit: int = 360) -> list
         except Exception:
             continue
     return bars
+
+
+def _extract_close_series(frame: pd.DataFrame, *, limit: int = 20) -> list[float]:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return []
+    series = None
+    if isinstance(frame.columns, pd.MultiIndex):
+        for field in ("Close", "close", "Adj Close", "adj_close", "c"):
+            if field in frame.columns.get_level_values(0):
+                subset = frame.xs(field, level=0, axis=1)
+                if isinstance(subset, pd.DataFrame) and not subset.empty:
+                    series = subset.iloc[:, 0]
+                else:
+                    series = subset
+                break
+    else:
+        for field in ("Close", "close", "Adj Close", "adj_close", "c"):
+            if field in frame.columns:
+                series = frame[field]
+                break
+    if series is None:
+        return []
+    try:
+        series = series.dropna().tail(limit)
+    except Exception:
+        return []
+    values: list[float] = []
+    for value in series:
+        try:
+            num = float(value)
+        except Exception:
+            continue
+        if pd.isna(num):
+            continue
+        values.append(num)
+    return values
 
 
 @login_required
@@ -538,6 +681,123 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         losers=len(losers),
     )
     return JsonResponse(response, json_dumps_params={"ensure_ascii": False})
+
+
+@login_required
+@require_http_methods(["GET"])
+def market_watchlist_snapshot(request: HttpRequest) -> JsonResponse:
+    user_id = str(request.user.id)
+    profile, _created = UserProfile.objects.get_or_create(user=request.user)
+    watchlist = list(profile.market_watchlist or [])
+    if not watchlist:
+        watchlist = list(request.session.get("market_watchlist", []))
+    normalized: list[str] = []
+    for item in watchlist:
+        symbol = _normalize_query(str(item))
+        if symbol and symbol not in normalized:
+            normalized.append(symbol)
+    watchlist = normalized[:120]
+    if not watchlist:
+        return JsonResponse({"items": [], "count": 0}, json_dumps_params={"ensure_ascii": False})
+
+    interval = str(request.GET.get("interval") or "1d").lower()
+    try:
+        limit = int(request.GET.get("limit") or 20)
+    except (TypeError, ValueError):
+        limit = 20
+    limit = max(8, min(60, limit))
+
+    frames = market_data.fetch_recent_window(watchlist, interval=interval, limit=limit, user_id=user_id)
+    items: list[dict[str, object]] = []
+    for symbol in watchlist:
+        frame = frames.get(symbol)
+        series = _extract_close_series(frame, limit=limit) if isinstance(frame, pd.DataFrame) else []
+        price = series[-1] if series else None
+        change_pct = None
+        if len(series) >= 2 and series[-2] not in (0, None):
+            try:
+                change_pct = (series[-1] / series[-2] - 1.0) * 100.0
+            except Exception:
+                change_pct = None
+        items.append(
+            {
+                "symbol": symbol,
+                "price": price,
+                "change_pct": change_pct,
+                "series": series[-limit:],
+            }
+        )
+    return JsonResponse(
+        {"items": items, "count": len(items), "interval": interval, "limit": limit},
+        json_dumps_params={"ensure_ascii": False},
+    )
+
+
+@login_required
+@require_http_methods(["GET"])
+def market_screener_data(request: HttpRequest) -> JsonResponse:
+    request_id = ensure_request_id(request)
+    params = request.GET
+    try:
+        page = int(params.get("page") or 1)
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        size = int(params.get("size") or 25)
+    except (TypeError, ValueError):
+        size = 25
+
+    page = max(1, page)
+    size = max(10, min(100, size))
+    search_text = str(params.get("search") or params.get("query") or "").strip()
+    search_lower = search_text.lower()
+
+    filters = _parse_json_list(params.get("filters"))
+    sorters = _parse_json_list(params.get("sorters"))
+
+    min_volume = _coerce_number(params.get("min_volume"))
+    if min_volume is not None:
+        filters.append({"field": "volume", "type": ">=", "value": min_volume})
+
+    base = screener.fetch_page(offset=0, size=5000, user_id=str(request.user.id))
+    rows = base.get("rows", [])
+    if not isinstance(rows, list):
+        rows = []
+
+    if search_lower:
+        rows = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and (
+                search_lower in str(row.get("ticker") or "").lower()
+                or search_lower in str(row.get("name") or "").lower()
+            )
+        ]
+
+    rows = _apply_screener_filters(rows, filters)
+    rows = _apply_screener_sort(rows, sorters)
+
+    total = len(rows)
+    last_page = max(1, (total + size - 1) // size)
+    if page > last_page:
+        page = last_page
+    start = (page - 1) * size
+    end = start + size
+    page_rows = rows[start:end]
+
+    return JsonResponse(
+        {
+            "data": page_rows,
+            "page": page,
+            "size": size,
+            "total": total,
+            "last_page": last_page,
+            "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            "request_id": request_id,
+        },
+        json_dumps_params={"ensure_ascii": False},
+    )
 
 
 def _download_history(

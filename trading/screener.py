@@ -177,11 +177,18 @@ def _fetch_quote_snapshot(symbols: Sequence[str], *, user_id: str | None = None)
                     change_pct = (float(daily_bar["c"]) / float(prev_bar["c"]) - 1.0) * 100.0
                 except Exception:
                     change_pct = None
+            volume = (
+                daily_bar.get("v")
+                or daily_bar.get("volume")
+                or prev_bar.get("v")
+                or prev_bar.get("volume")
+            )
             return {
                 "symbol": symbol,
                 "shortName": symbol,
                 "regularMarketPrice": float(price),
                 "regularMarketChangePercent": float(change_pct) if change_pct is not None else None,
+                "regularMarketVolume": int(volume) if volume is not None else None,
                 "currency": "USD",
                 "_ts": time.time(),
             }
@@ -266,11 +273,18 @@ def _fetch_quote_snapshot(symbols: Sequence[str], *, user_id: str | None = None)
                                 fast.get("regularMarketChangePercent")
                                 or info.get("regularMarketChangePercent")
                             )
+                            volume = (
+                                fast.get("regularMarketVolume")
+                                or info.get("regularMarketVolume")
+                                or fast.get("volume")
+                                or info.get("volume")
+                            )
                             return {
                                 "symbol": symbol,
                                 "shortName": fast.get("shortName") or info.get("shortName") or symbol,
                                 "regularMarketPrice": float(price),
                                 "regularMarketChangePercent": float(change_pct) if change_pct is not None else 0.0,
+                                "regularMarketVolume": int(volume) if volume is not None else None,
                                 "_ts": time.time(),
                             }
 
@@ -333,6 +347,11 @@ def fetch_page(
             quote.get("regularMarketChangePercent")
             or quote.get("postMarketChangePercent")
         )
+        volume = (
+            quote.get("regularMarketVolume")
+            or quote.get("volume")
+            or quote.get("averageDailyVolume3Month")
+        )
         # change_pct in yahoo is already in percent, e.g. 1.23 means 1.23%
         rows.append(
             {
@@ -340,6 +359,7 @@ def fetch_page(
                 "name": quote.get("shortName") or quote.get("longName") or sym,
                 "price": float(price) if price is not None else None,
                 "change_pct": float(change_pct) if change_pct is not None else None,
+                "volume": int(volume) if volume is not None else None,
                 "sector": quote.get("sector") or "--",
                 "industry": quote.get("industry") or "--",
                 "currency": quote.get("currency") or "USD",

@@ -28,6 +28,58 @@ python manage.py runserver
 python manage.py createsuperuser
 ```
 
+## 满血版本地启动（WebSocket / Redis / 实时引擎）
+> 适用于需要 Market Insights WebSocket、实时引擎与队列能力的完整体验。
+
+1) 安装完整依赖（包含 channels-redis）：
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+2) 配置 `.env`（位置：项目根目录，与 `app_bundle/` 同级）：
+```bash
+DJANGO_DEBUG=1
+DJANGO_SECRET_KEY=dev-local-change-me
+DJANGO_ALLOWED_HOSTS=127.0.0.1,localhost
+DJANGO_CSRF_TRUSTED_ORIGINS=http://127.0.0.1:8000,http://localhost:8000
+
+REDIS_URL=redis://127.0.0.1:6379/0
+CELERY_BROKER_URL=redis://127.0.0.1:6379/0
+CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/0
+```
+
+3) 启动 Redis（新终端）：
+```bash
+redis-server
+```
+
+4) 迁移数据库：
+```bash
+cd app_bundle
+python manage.py migrate
+```
+
+5) 用 ASGI 启动服务（支持 WebSocket）：
+```bash
+python3 -m daphne -b 127.0.0.1 -p 8000 quant_trading_site.asgi:application
+```
+
+6) 可选：启动 Celery（新终端）：
+```bash
+celery -A quant_trading_site worker -l info -Q backtests,training,rl,paper_trading
+celery -A quant_trading_site beat -l info
+```
+
+7) 可选：启动实时引擎（新终端）：
+```bash
+python manage.py realtime_run --user-id <你的用户ID>
+python manage.py realtime_refresh_assets --user-id <你的用户ID>
+```
+
+8) 打开页面 `http://127.0.0.1:8000/`，在「账户中心 → 设置 → API 凭证」填入 Alpaca Key。
+
 ## 依赖分层（core / optional）
 默认使用完整依赖：
 ```bash
