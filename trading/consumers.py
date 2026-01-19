@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -25,4 +26,10 @@ class MarketDataConsumer(AsyncWebsocketConsumer):
         await sync_to_async(unsubscribe)()
 
     async def market_update(self, event: dict) -> None:
-        await self.send(text_data=json.dumps(event))
+        payload = event.get("payload") if isinstance(event, dict) else None
+        if not isinstance(payload, dict):
+            payload = dict(event or {})
+        payload.pop("type", None)
+        if "server_ts" not in payload:
+            payload["server_ts"] = time.time()
+        await self.send(text_data=json.dumps(payload))

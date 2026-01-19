@@ -11,6 +11,7 @@
 {% with lang_prefix=lang_prefix|default:request.LANGUAGE_CODE|default:'zh-hans'|lower|slice:":2" %}
 <link rel="stylesheet" href="{% static 'trading/css/market_insights.css' %}">
 <meta name="market-api" content="{% url 'trading:market_insights_data' %}">
+<meta name="market-assets" content="{% url 'trading:market_assets_data' %}">
 <meta name="market-lang" content="{{ lang_prefix }}">
 <meta name="backtest-base" content="{% url 'trading:backtest' %}">
 <meta name="csrf-token" content="{{ csrf_token }}">
@@ -20,21 +21,20 @@
 {% block content %}
 {% with lang_prefix=lang_prefix|default:request.LANGUAGE_CODE|default:'zh-hans'|lower|slice:":2" %}
 <div class="market-page container-xl">
-    <header class="market-hero">
-        <div class="market-hero-main">
-            <div>
-                <p class="market-kicker">{% if lang_prefix == 'zh' %}市场情报{% else %}Market Intelligence{% endif %}</p>
-                <h1 class="market-title">{% if lang_prefix == 'zh' %}股市信息{% else %}Market Insights{% endif %}</h1>
-                <p class="market-subtitle">
-                    {% if lang_prefix == 'zh' %}
-                        快速浏览近 5 日、1 月或 6 月的涨跌趋势，按需搜索关注的股票，辅助你捕捉市场脉动。
-                    {% else %}
-                        Scan 5-day, 1-month, or 6-month moves, search any ticker, and stay on top of momentum shifts.
-                    {% endif %}
-                </p>
-            </div>
-            <div class="market-actions">
-                <div class="market-search-wrap">
+    <header class="market-topbar">
+        <div class="market-topbar-left">
+            <p class="market-kicker">{% if lang_prefix == 'zh' %}市场情报{% else %}Market Intelligence{% endif %}</p>
+            <h1 class="market-title">{% if lang_prefix == 'zh' %}股市信息{% else %}Market Insights{% endif %}</h1>
+            <p class="market-subtitle">
+                {% if lang_prefix == 'zh' %}
+                    快速浏览近 5 日、1 月或 6 月的涨跌趋势，按需搜索关注的股票，辅助你捕捉市场脉动。
+                {% else %}
+                    Scan 5-day, 1-month, or 6-month moves, search any ticker, and stay on top of momentum shifts.
+                {% endif %}
+            </p>
+        </div>
+        <div class="market-topbar-right">
+            <div class="market-search-wrap">
                 <form id="market-search-form" class="market-search">
                     {% csrf_token %}
                     <input type="text" name="query" id="market-search-input" placeholder="{% if lang_prefix == 'zh' %}搜索股票代码（例如 NVDA）{% else %}Search ticker (e.g. NVDA){% endif %}" autocomplete="off">
@@ -45,215 +45,421 @@
                     <div class="typeahead-hint text-muted small" data-role="typeahead-hint">
                         {% if lang_prefix == 'zh' %}
                             选择热门/最近/自选股票快速跳转
-                            {% else %}
-                                Pick from trending, recent, or watchlist tickers
-                            {% endif %}
-                        </div>
+                        {% else %}
+                            Pick from trending, recent, or watchlist tickers
+                        {% endif %}
                     </div>
                 </div>
+            </div>
+            <div class="market-topbar-actions">
                 <button type="button" id="market-watch-add" class="btn btn-outline-light market-watch-btn">
                     {% if lang_prefix == 'zh' %}加入关注列表{% else %}Add to watchlist{% endif %}
                 </button>
                 <a class="btn btn-outline-light tradingview-link" href="https://www.tradingview.com/screener/" target="_blank" rel="noopener">
                     {% if lang_prefix == 'zh' %}打开 TradingView 筛选器{% else %}Open TradingView screener{% endif %}
                 </a>
-                <div class="market-timeframe-row">
-                    <div class="market-timeframes" role="group" aria-label="{% if lang_prefix == 'zh' %}时间范围选择{% else %}Timeframe selector{% endif %}">
-                        {% for tf in timeframes.values %}
-                        <button type="button"
-                                class="market-timeframe{% if tf.key == default_timeframe.key %} is-active{% endif %}"
-                                data-timeframe="{{ tf.key }}">
-                            {% if lang_prefix == 'zh' %}{{ tf.label }}{% else %}{{ tf.label_en }}{% endif %}
-                        </button>
-                        {% endfor %}
-                    </div>
-                    <span class="market-data-indicator"
-                          title="{% if lang_prefix == 'zh' %}SIP 全量行情 + 拆股复权{% else %}SIP full feed + split-adjusted{% endif %}">
-                        {% if lang_prefix == 'zh' %}数据：SIP/复权{% else %}Data: SIP/Adjusted{% endif %}
-                    </span>
-                </div>
             </div>
         </div>
-        <div class="hero-cards">
-            <div class="memory-card" id="market-chip-modules">
-        <div class="memory-card__glass"></div>
-        <div class="memory-card__shell">
-            <div class="memory-card__header">
-                <div class="memory-card__title">
-                    <span class="memory-card__badge" aria-hidden="true">↺</span>
-                    <div>
-                        <p class="memory-eyebrow">{% if lang_prefix == 'zh' %}最近检索{% else %}Recent searches{% endif %}</p>
-                        <h3>{% if lang_prefix == 'zh' %}历史记录{% else %}Pick up where you left off{% endif %}</h3>
-                        <p>
-                            {% if lang_prefix == 'zh' %}
-                                快速回到你刚刚浏览的标的。
-                            {% else %}
-                                Jump back to the tickers you just reviewed—tap any tag to reload it instantly.
-                            {% endif %}
-                        </p>
-                    </div>
-                </div>
-                <div class="memory-card__meta">
-                    <span class="memory-count" data-role="recent-count">0</span>
-                </div>
+        <div class="market-timeframe-row">
+            <div class="market-timeframes" role="group" aria-label="{% if lang_prefix == 'zh' %}时间范围选择{% else %}Timeframe selector{% endif %}">
+                {% for tf in timeframes.values %}
+                <button type="button"
+                        class="market-timeframe{% if tf.key == default_timeframe.key %} is-active{% endif %}"
+                        data-timeframe="{{ tf.key }}">
+                    {% if lang_prefix == 'zh' %}{{ tf.label }}{% else %}{{ tf.label_en }}{% endif %}
+                </button>
+                {% endfor %}
             </div>
-            <div class="memory-card__body">
-                <div class="memory-chip-flow" data-role="recent-chips" data-loading="true">
-                    {% for _ in "123"|make_list %}
-                    <span class="skeleton-chip" aria-hidden="true"></span>
-                    {% endfor %}
-                </div>
-                <div class="memory-card__footer">
-                    {% if lang_prefix == 'zh' %}
-                        自动保留最近 6 条检索记录。
-                    {% else %}
-                        Up to six searches are saved.
-                    {% endif %}
-                </div>
-            </div>
-        </div>
-            </div>
-
-            <div class="memory-card memory-card--favorites" id="watchlist-panel">
-                <div class="memory-card__glass"></div>
-                <div class="memory-card__shell">
-                    <div class="memory-card__header">
-                        <div class="memory-card__title">
-                            <span class="memory-card__badge" aria-hidden="true">★</span>
-                            <div>
-                                <p class="memory-eyebrow">{% if lang_prefix == 'zh' %}我的收藏{% else %}My favorites{% endif %}</p>
-                                <h3>{% if lang_prefix == 'zh' %}收藏列表{% else %}Curated watchlist{% endif %}</h3>
-                                <p>
-                                    {% if lang_prefix == 'zh' %}
-                                        收藏你最关心的标的。
-                                    {% else %}
-                                        Pin the names you care.
-                                    {% endif %}
-                                </p>
-                            </div>
-                        </div>
-                        <div class="memory-card__meta">
-                            <span class="memory-count memory-count--favorites" data-role="watch-count">0</span>
-                        </div>
-                    </div>
-                    <div class="memory-card__body">
-                        <div class="memory-chip-flow favorites-chip-flow" data-role="watchlist-chips" data-loading="true">
-                            {% for _ in "1234"|make_list %}
-                            <span class="skeleton-chip" aria-hidden="true"></span>
-                            {% endfor %}
-                        </div>
-                        <div class="memory-card__footer">
-                            {% if lang_prefix == 'zh' %}
-                                使用“加入关注列表”按钮即可把当前标的收藏在此，支持最多 10 条。
-                            {% else %}
-                                Use “Add to watchlist” above to store up to ten tickers here.
-                            {% endif %}
-                        </div>
-                    </div>
-                </div>
-            </div>
+            <span class="market-data-indicator"
+                  title="{% if lang_prefix == 'zh' %}SIP 全量行情 + 拆股复权{% else %}SIP full feed + split-adjusted{% endif %}">
+                {% if lang_prefix == 'zh' %}数据：SIP/复权{% else %}Data: SIP/Adjusted{% endif %}
+            </span>
         </div>
     </header>
 
-    <section class="market-status" aria-live="polite">
-        <span data-role="status-text" data-lang="{{ lang_prefix }}">
-            {% if lang_prefix == 'zh' %}
-                正在加载 {{ default_timeframe.label }} 数据…
-            {% else %}
-                Loading {{ default_timeframe.label_en }} data…
-            {% endif %}
-        </span>
-        <span class="market-source" data-role="source-text">
-            {% if lang_prefix == 'zh' %}数据来源：—{% else %}Data source: —{% endif %}
-        </span>
-    </section>
+    <section class="market-flow">
+        <section class="market-view is-active" data-view="list">
+            <section class="market-status" aria-live="polite">
+                <span data-role="status-text" data-lang="{{ lang_prefix }}">
+                    {% if lang_prefix == 'zh' %}
+                        正在加载 {{ default_timeframe.label }} 数据…
+                    {% else %}
+                        Loading {{ default_timeframe.label_en }} data…
+                    {% endif %}
+                </span>
+                <span class="market-source" data-role="source-text">
+                    {% if lang_prefix == 'zh' %}数据来源：—{% else %}Data source: —{% endif %}
+                </span>
+            </section>
 
-    <section class="market-rankings">
-        <header class="market-rankings-head">
-            <div class="market-rank-tabs" role="tablist">
-                <button type="button" class="market-rank-tab is-active" data-role="rank-tab" data-list="gainers">
-                    {% if lang_prefix == 'zh' %}涨幅榜{% else %}Gainers{% endif %}
-                </button>
-                <button type="button" class="market-rank-tab" data-role="rank-tab" data-list="losers">
-                    {% if lang_prefix == 'zh' %}跌幅榜{% else %}Losers{% endif %}
-                </button>
-                <button type="button" class="market-rank-tab" data-role="rank-tab" data-list="most_active">
-                    {% if lang_prefix == 'zh' %}活跃榜{% else %}Most Active{% endif %}
-                </button>
-            </div>
-            <p class="market-rank-desc"
-               data-role="rank-desc"
-               data-desc-gainers="{% if lang_prefix == 'zh' %}按所选时间范围排序，展示表现最佳的股票。{% else %}Best performers within the selected window.{% endif %}"
-               data-desc-losers="{% if lang_prefix == 'zh' %}关注回撤最大的标的，观察潜在反弹机会。{% else %}Track the deepest pullbacks for potential reversals.{% endif %}"
-               data-desc-most-active="{% if lang_prefix == 'zh' %}按成交量筛选市场中交易最活跃的股票。{% else %}Highest volume names across the market.{% endif %}">
-                {% if lang_prefix == 'zh' %}按所选时间范围排序，展示表现最佳的股票。{% else %}Best performers within the selected window.{% endif %}
-            </p>
-        </header>
-        <div class="market-list" data-role="ranking-list" data-skeleton-count="6"></div>
-    </section>
-
-    <div class="modal fade" id="marketDetailModal" tabindex="-1" aria-labelledby="marketDetailModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-xl modal-dialog-centered">
-            <div class="modal-content market-detail-modal">
-                <div class="modal-header">
-                    <div>
-                        <h5 class="modal-title" id="marketDetailModalLabel">
-                            {% if lang_prefix == 'zh' %}行情详情{% else %}Market Detail{% endif %}
-                        </h5>
-                        <p class="modal-subtitle" data-role="detail-title">
-                            {% if lang_prefix == 'zh' %}点击列表查看 K 线{% else %}Select a symbol to view candles{% endif %}
-                        </p>
+            <div class="market-list-layout">
+                <div class="market-list-main">
+                    <section class="market-rankings" data-role="rankings-section">
+                        <header class="market-rankings-head">
+                            <div class="market-rank-tabs" role="tablist">
+                        <button type="button" class="market-rank-tab is-active" data-role="rank-tab" data-list="gainers">
+                            {% if lang_prefix == 'zh' %}涨幅榜{% else %}Gainers{% endif %}
+                        </button>
+                        <button type="button" class="market-rank-tab" data-role="rank-tab" data-list="losers">
+                            {% if lang_prefix == 'zh' %}跌幅榜{% else %}Losers{% endif %}
+                        </button>
+                        <button type="button" class="market-rank-tab" data-role="rank-tab" data-list="most_active">
+                            {% if lang_prefix == 'zh' %}活跃榜{% else %}Most Active{% endif %}
+                        </button>
+                        <button type="button" class="market-rank-tab" data-role="rank-tab" data-list="all">
+                            {% if lang_prefix == 'zh' %}全部股票{% else %}All Stocks{% endif %}
+                        </button>
                     </div>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{% if lang_prefix == 'zh' %}关闭{% else %}Close{% endif %}"></button>
+                    <p class="market-rank-desc"
+                       data-role="rank-desc"
+                       data-desc-gainers="{% if lang_prefix == 'zh' %}按所选时间范围排序，展示表现最佳的股票。{% else %}Best performers within the selected window.{% endif %}"
+                       data-desc-losers="{% if lang_prefix == 'zh' %}关注回撤最大的标的，观察潜在反弹机会。{% else %}Track the deepest pullbacks for potential reversals.{% endif %}"
+                       data-desc-most-active="{% if lang_prefix == 'zh' %}按成交量筛选市场中交易最活跃的股票。{% else %}Highest volume names across the market.{% endif %}"
+                       data-desc-all="{% if lang_prefix == 'zh' %}按字母表浏览全部可交易股票。{% else %}Browse tradable stocks alphabetically.{% endif %}">
+                        {% if lang_prefix == 'zh' %}按所选时间范围排序，展示表现最佳的股票。{% else %}Best performers within the selected window.{% endif %}
+                    </p>
+                </header>
+                <div class="market-list">
+                    <div class="all-stocks-table-wrap ranking-table-wrap">
+                        <table class="all-stocks-table ranking-table">
+                            <thead>
+                                <tr>
+                                    <th>{% if lang_prefix == 'zh' %}代码{% else %}Symbol{% endif %}</th>
+                                    <th>{% if lang_prefix == 'zh' %}名称{% else %}Name{% endif %}</th>
+                                    <th>{% if lang_prefix == 'zh' %}交易所{% else %}Exchange{% endif %}</th>
+                                    <th>{% if lang_prefix == 'zh' %}最新{% else %}Last{% endif %}</th>
+                                    <th data-role="ranking-change-header">
+                                        {% if lang_prefix == 'zh' %}涨跌幅{% else %}Chg%{% endif %}
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody data-role="ranking-list">
+                                <tr>
+                                    <td colspan="5">{% if lang_prefix == 'zh' %}加载中…{% else %}Loading…{% endif %}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
-                <div class="modal-body">
-                    <div class="market-detail-controls">
-                        <div class="market-detail-timeframes" role="group" aria-label="{% if lang_prefix == 'zh' %}详情时间范围{% else %}Detail timeframe{% endif %}">
-                            <button type="button" class="detail-timeframe is-active" data-range="1d">1D</button>
-                            <button type="button" class="detail-timeframe" data-range="1w">1W</button>
-                            <button type="button" class="detail-timeframe" data-range="1m">1M</button>
-                        </div>
-                        <div class="market-detail-indicators">
-                            <div class="indicator-group">
-                                <label for="detail-overlay-select">{% if lang_prefix == 'zh' %}叠加{% else %}Overlay{% endif %}</label>
-                                <select id="detail-overlay-select">
-                                    <option value="none">{% if lang_prefix == 'zh' %}无{% else %}None{% endif %}</option>
-                                    <option value="sma">SMA 20</option>
-                                    <option value="ema">EMA 20</option>
-                                    <option value="bbands">Bollinger 20</option>
-                                </select>
+            </section>
+
+            <section class="market-all-stocks" data-role="all-stocks" hidden>
+                <header class="all-stocks-head">
+                    <div class="all-stocks-letters" data-role="all-stocks-letters">
+                        <button type="button" class="all-letter is-active" data-letter="all">
+                            {% if lang_prefix == 'zh' %}全部{% else %}All{% endif %}
+                        </button>
+                        {% for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"|make_list %}
+                        <button type="button" class="all-letter" data-letter="{{ letter }}">{{ letter }}</button>
+                        {% endfor %}
+                    </div>
+                    <div class="all-stocks-meta">
+                        <span data-role="all-stocks-count"></span>
+                        <button type="button" class="all-stocks-back" data-role="all-stocks-back">
+                            {% if lang_prefix == 'zh' %}返回榜单{% else %}Back to Rankings{% endif %}
+                        </button>
+                    </div>
+                </header>
+                <div class="all-stocks-table-wrap">
+                    <table class="all-stocks-table">
+                        <thead>
+                            <tr>
+                                <th>{% if lang_prefix == 'zh' %}代码{% else %}Symbol{% endif %}</th>
+                                <th>{% if lang_prefix == 'zh' %}名称{% else %}Name{% endif %}</th>
+                                <th>{% if lang_prefix == 'zh' %}交易所{% else %}Exchange{% endif %}</th>
+                                <th>{% if lang_prefix == 'zh' %}最新{% else %}Last{% endif %}</th>
+                                <th>{% if lang_prefix == 'zh' %}涨跌幅{% else %}Chg%{% endif %}</th>
+                            </tr>
+                        </thead>
+                        <tbody data-role="all-stocks-body">
+                            <tr>
+                                <td colspan="5">{% if lang_prefix == 'zh' %}加载中…{% else %}Loading…{% endif %}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="all-stocks-pagination" data-role="all-stocks-pagination"></div>
+            </section>
+        </div>
+                <aside class="market-list-side">
+                    <div class="memory-card" id="market-chip-modules">
+                        <div class="memory-card__glass"></div>
+                        <div class="memory-card__shell">
+                            <div class="memory-card__header">
+                                <div class="memory-card__title">
+                                    <span class="memory-card__badge" aria-hidden="true">↺</span>
+                                    <div>
+                                        <p class="memory-eyebrow">{% if lang_prefix == 'zh' %}最近检索{% else %}Recent searches{% endif %}</p>
+                                        <h3>{% if lang_prefix == 'zh' %}历史记录{% else %}Pick up where you left off{% endif %}</h3>
+                                        <p>
+                                            {% if lang_prefix == 'zh' %}
+                                                快速回到你刚刚浏览的标的。
+                                            {% else %}
+                                                Jump back to the tickers you just reviewed—tap any tag to reload it instantly.
+                                            {% endif %}
+                                        </p>
+                                    </div>
+                                </div>
+                                <div class="memory-card__meta">
+                                    <span class="memory-count" data-role="recent-count">0</span>
+                                </div>
                             </div>
-                            <div class="indicator-group">
-                                <label for="detail-indicator-select">{% if lang_prefix == 'zh' %}指标{% else %}Indicator{% endif %}</label>
-                                <select id="detail-indicator-select">
-                                    <option value="none">{% if lang_prefix == 'zh' %}无{% else %}None{% endif %}</option>
-                                    <option value="rsi">RSI</option>
-                                    <option value="macd">MACD</option>
-                                </select>
-                            </div>
-                            <div class="indicator-group indicator-group--draw">
-                                <span class="indicator-label">{% if lang_prefix == 'zh' %}绘制{% else %}Draw{% endif %}</span>
-                                <div class="draw-actions">
-                                    <button type="button" class="draw-btn" data-draw="line">Line</button>
-                                    <button type="button" class="draw-btn" data-draw="rect">Rect</button>
-                                    <button type="button" class="draw-btn" data-draw="clear">{% if lang_prefix == 'zh' %}清空{% else %}Clear{% endif %}</button>
+                            <div class="memory-card__body">
+                                <div class="memory-chip-flow" data-role="recent-chips" data-loading="true">
+                                    {% for _ in "123"|make_list %}
+                                    <span class="skeleton-chip" aria-hidden="true"></span>
+                                    {% endfor %}
+                                </div>
+                                <div class="memory-card__footer">
+                                    {% if lang_prefix == 'zh' %}
+                                        自动保留最近 6 条检索记录。
+                                    {% else %}
+                                        Up to six searches are saved.
+                                    {% endif %}
                                 </div>
                             </div>
                         </div>
-                        <div class="market-detail-meta">
-                            <span class="detail-meta-item" data-role="detail-source"></span>
-                            <span class="detail-meta-item" data-role="detail-updated"></span>
+                    </div>
+
+                    <div class="memory-card memory-card--favorites" id="watchlist-panel">
+                        <div class="memory-card__glass"></div>
+                        <div class="memory-card__shell">
+                            <div class="memory-card__header">
+                                <div class="memory-card__title">
+                                    <span class="memory-card__badge" aria-hidden="true">★</span>
+                                    <div>
+                                        <p class="memory-eyebrow">{% if lang_prefix == 'zh' %}我的收藏{% else %}My favorites{% endif %}</p>
+                                        <h3>{% if lang_prefix == 'zh' %}收藏列表{% else %}Curated watchlist{% endif %}</h3>
+                                        <p>
+                                            {% if lang_prefix == 'zh' %}
+                                                收藏你最关心的标的。
+                                            {% else %}
+                                                Pin the names you care.
+                                            {% endif %}
+                                        </p>
+                                    </div>
+                                </div>
+                                <div class="memory-card__meta">
+                                    <span class="memory-count memory-count--favorites" data-role="watch-count">0</span>
+                                </div>
+                            </div>
+                            <div class="memory-card__body">
+                                <div class="memory-chip-flow favorites-chip-flow" data-role="watchlist-chips" data-loading="true">
+                                    {% for _ in "1234"|make_list %}
+                                    <span class="skeleton-chip" aria-hidden="true"></span>
+                                    {% endfor %}
+                                </div>
+                                <div class="memory-card__footer">
+                                    {% if lang_prefix == 'zh' %}
+                                        使用“加入关注列表”按钮即可把当前标的收藏在此，支持最多 10 条。
+                                    {% else %}
+                                        Use “Add to watchlist” above to store up to ten tickers here.
+                                    {% endif %}
+                                </div>
+                            </div>
                         </div>
                     </div>
-                    <div class="market-detail-chart-stack">
-                        <div class="market-detail-chart" id="market-detail-chart"></div>
-                        <div class="market-detail-indicator" id="market-detail-indicator" hidden></div>
+                </aside>
+            </div>
+        </section>
+
+        <section class="market-view" data-view="detail">
+            <header class="market-view-head">
+                <button type="button" class="market-view-back" data-view-back="list">
+                    {% if lang_prefix == 'zh' %}返回列表{% else %}Back to list{% endif %}
+                </button>
+                <div class="market-view-actions">
+                    <button type="button" class="btn btn-primary market-view-chart" data-view-chart>
+                        {% if lang_prefix == 'zh' %}查看图表{% else %}View chart{% endif %}
+                    </button>
+                </div>
+            </header>
+            <section class="market-detail-hero">
+                <div class="detail-identity">
+                    <p class="detail-symbol" data-role="detail-symbol">—</p>
+                    <h2 class="detail-name" data-role="detail-name">—</h2>
+                    <div class="detail-price-row">
+                        <span class="detail-price" data-role="detail-price">--</span>
+                        <span class="detail-change" data-role="detail-change">--</span>
                     </div>
-                    <div class="market-detail-status" data-role="detail-status" hidden></div>
+                    <p class="detail-meta" data-role="detail-meta"></p>
+                </div>
+            </section>
+            <div class="market-detail-grid">
+                <div class="market-panel-card">
+                    <div class="market-panel-head">
+                        <h3>{% if lang_prefix == 'zh' %}公司概览{% else %}Company Profile{% endif %}</h3>
+                        <span class="market-panel-badge">{% if lang_prefix == 'zh' %}基础面{% else %}Profile{% endif %}</span>
+                    </div>
+                    <p class="market-panel-text" data-role="profile-summary">
+                        {% if lang_prefix == 'zh' %}
+                            选择列表中的股票即可查看公司摘要、估值与指标快照。
+                        {% else %}
+                            Select a symbol to see fundamentals, valuation, and snapshot metrics.
+                        {% endif %}
+                    </p>
+                    <ul class="market-panel-list" data-role="profile-metrics"></ul>
+                </div>
+                <div class="market-panel-card">
+                    <div class="market-panel-head">
+                        <h3>{% if lang_prefix == 'zh' %}AI 摘要{% else %}AI Summary{% endif %}</h3>
+                        <span class="market-panel-badge">AI</span>
+                    </div>
+                    <p class="market-panel-text" data-role="ai-summary">
+                        {% if lang_prefix == 'zh' %}
+                            聚合研报与行情信号，生成可执行的摘要观点。
+                        {% else %}
+                            Condense research notes and signals into an actionable brief.
+                        {% endif %}
+                    </p>
+                </div>
+                <div class="market-panel-card">
+                    <div class="market-panel-head">
+                        <h3>{% if lang_prefix == 'zh' %}新闻流{% else %}Newsflow{% endif %}</h3>
+                        <span class="market-panel-badge">{% if lang_prefix == 'zh' %}资讯{% else %}News{% endif %}</span>
+                    </div>
+                    <ul class="market-panel-list market-panel-news" data-role="news-list">
+                        <li>{% if lang_prefix == 'zh' %}暂无相关新闻{% else %}No related headlines yet.{% endif %}</li>
+                    </ul>
+                </div>
+                <div class="market-panel-card">
+                    <div class="market-panel-head">
+                        <h3>{% if lang_prefix == 'zh' %}订单簿深度{% else %}Order Book{% endif %}</h3>
+                        <span class="market-panel-badge">{% if lang_prefix == 'zh' %}深度{% else %}Depth{% endif %}</span>
+                    </div>
+                    <p class="market-panel-text">
+                        {% if lang_prefix == 'zh' %}
+                            未来可在此呈现买卖盘分布与流动性梯度。
+                        {% else %}
+                            Future slot for depth-of-market and liquidity ladders.
+                        {% endif %}
+                    </p>
                 </div>
             </div>
-        </div>
-    </div>
+        </section>
+
+        <section class="market-view" data-view="chart">
+            <header class="market-view-head">
+                <button type="button" class="market-view-back" data-view-back="detail">
+                    {% if lang_prefix == 'zh' %}返回详情{% else %}Back to detail{% endif %}
+                </button>
+                <div class="market-view-actions">
+                    <button type="button" class="btn btn-outline-secondary market-view-back" data-view-back="list">
+                        {% if lang_prefix == 'zh' %}返回列表{% else %}Back to list{% endif %}
+                    </button>
+                </div>
+            </header>
+            <section class="market-detail-board" data-role="market-detail">
+                <header class="market-detail-head">
+                    <div>
+                        <p class="market-detail-kicker">{% if lang_prefix == 'zh' %}行情焦点{% else %}Market Focus{% endif %}</p>
+                        <h2 class="market-detail-title" data-role="detail-title">
+                            {% if lang_prefix == 'zh' %}请选择标的{% else %}Select a symbol{% endif %}
+                        </h2>
+                        <p class="market-detail-subtitle" data-role="detail-subtitle">
+                            {% if lang_prefix == 'zh' %}点击榜单卡片即可在此展示图表与指标。{% else %}Click a card to render the chart and indicators here.{% endif %}
+                        </p>
+                    </div>
+                    <div class="market-detail-meta">
+                        <span class="detail-meta-item" data-role="detail-source"></span>
+                        <span class="detail-meta-item" data-role="detail-updated"></span>
+                    </div>
+                </header>
+                <div class="market-detail-controls">
+                    <div class="market-detail-timeframes" data-role="detail-timeframe-wrap">
+                        <button type="button" class="detail-timeframe-trigger" data-role="detail-timeframe-trigger">
+                            <span data-role="detail-timeframe-current">1D</span>
+                            <span class="detail-timeframe-caret">▾</span>
+                        </button>
+                        <div class="detail-timeframe-menu" data-role="detail-timeframe-menu" hidden>
+                            <div class="detail-timeframe-group">
+                                <p class="detail-timeframe-label">{% if lang_prefix == 'zh' %}逐笔{% else %}Ticks{% endif %}</p>
+                                <div class="detail-timeframe-items">
+                                    <button type="button" class="detail-timeframe" data-range="1t">1 tick</button>
+                                    <button type="button" class="detail-timeframe is-disabled" data-range="10t" disabled>10 ticks</button>
+                                    <button type="button" class="detail-timeframe is-disabled" data-range="100t" disabled>100 ticks</button>
+                                    <button type="button" class="detail-timeframe is-disabled" data-range="1000t" disabled>1000 ticks</button>
+                                </div>
+                            </div>
+                            <div class="detail-timeframe-group">
+                                <p class="detail-timeframe-label">{% if lang_prefix == 'zh' %}秒{% else %}Seconds{% endif %}</p>
+                                <div class="detail-timeframe-items">
+                                    <button type="button" class="detail-timeframe" data-range="1s">1s</button>
+                                    <button type="button" class="detail-timeframe" data-range="5s">5s</button>
+                                    <button type="button" class="detail-timeframe" data-range="10s">10s</button>
+                                    <button type="button" class="detail-timeframe" data-range="15s">15s</button>
+                                    <button type="button" class="detail-timeframe" data-range="30s">30s</button>
+                                    <button type="button" class="detail-timeframe" data-range="45s">45s</button>
+                                </div>
+                            </div>
+                            <div class="detail-timeframe-group">
+                                <p class="detail-timeframe-label">{% if lang_prefix == 'zh' %}分钟{% else %}Minutes{% endif %}</p>
+                                <div class="detail-timeframe-items">
+                                    <button type="button" class="detail-timeframe" data-range="1m">1m</button>
+                                    <button type="button" class="detail-timeframe" data-range="2m">2m</button>
+                                    <button type="button" class="detail-timeframe" data-range="3m">3m</button>
+                                    <button type="button" class="detail-timeframe" data-range="5m">5m</button>
+                                    <button type="button" class="detail-timeframe" data-range="10m">10m</button>
+                                    <button type="button" class="detail-timeframe" data-range="15m">15m</button>
+                                    <button type="button" class="detail-timeframe" data-range="30m">30m</button>
+                                    <button type="button" class="detail-timeframe" data-range="45m">45m</button>
+                                </div>
+                            </div>
+                            <div class="detail-timeframe-group">
+                                <p class="detail-timeframe-label">{% if lang_prefix == 'zh' %}小时{% else %}Hours{% endif %}</p>
+                                <div class="detail-timeframe-items">
+                                    <button type="button" class="detail-timeframe" data-range="1h">1H</button>
+                                    <button type="button" class="detail-timeframe" data-range="2h">2H</button>
+                                    <button type="button" class="detail-timeframe" data-range="4h">4H</button>
+                                </div>
+                            </div>
+                            <div class="detail-timeframe-group">
+                                <p class="detail-timeframe-label">{% if lang_prefix == 'zh' %}天{% else %}Days{% endif %}</p>
+                                <div class="detail-timeframe-items">
+                                    <button type="button" class="detail-timeframe is-active" data-range="1d">1D</button>
+                                    <button type="button" class="detail-timeframe" data-range="5d">5D</button>
+                                    <button type="button" class="detail-timeframe" data-range="1mo">1M</button>
+                                    <button type="button" class="detail-timeframe" data-range="6mo">6M</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="market-detail-indicators">
+                        <div class="indicator-group">
+                            <label for="detail-overlay-select">{% if lang_prefix == 'zh' %}叠加{% else %}Overlay{% endif %}</label>
+                            <select id="detail-overlay-select">
+                                <option value="none">{% if lang_prefix == 'zh' %}无{% else %}None{% endif %}</option>
+                                <option value="sma">SMA 20</option>
+                                <option value="ema">EMA 20</option>
+                                <option value="bbands">Bollinger 20</option>
+                            </select>
+                        </div>
+                        <div class="indicator-group">
+                            <label for="detail-indicator-select">{% if lang_prefix == 'zh' %}指标{% else %}Indicator{% endif %}</label>
+                            <select id="detail-indicator-select">
+                                <option value="none">{% if lang_prefix == 'zh' %}无{% else %}None{% endif %}</option>
+                                <option value="rsi">RSI</option>
+                                <option value="macd">MACD</option>
+                            </select>
+                        </div>
+                        <div class="indicator-group indicator-group--draw">
+                            <span class="indicator-label">{% if lang_prefix == 'zh' %}绘制{% else %}Draw{% endif %}</span>
+                            <div class="draw-actions">
+                                <button type="button" class="draw-btn" data-draw="line">Line</button>
+                                <button type="button" class="draw-btn" data-draw="rect">Rect</button>
+                                <button type="button" class="draw-btn" data-draw="clear">{% if lang_prefix == 'zh' %}清空{% else %}Clear{% endif %}</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="market-detail-chart-stack">
+                    <div class="market-detail-chart" id="market-detail-chart"></div>
+                    <div class="market-detail-indicator" id="market-detail-indicator" hidden></div>
+                </div>
+                <div class="market-detail-status" data-role="detail-status" hidden></div>
+            </section>
+        </section>
+    </section>
 
     <template id="market-card-template">
         <article class="market-card">
@@ -318,6 +524,6 @@
 
 {% block extra_scripts %}
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js" nonce="{{ csp_nonce }}"></script>
-<script src="https://cdn.jsdelivr.net/npm/technicalindicators@3.1.0/dist/browser/technicalindicators.min.js" nonce="{{ csp_nonce }}"></script>
+<script src="https://cdn.jsdelivr.net/npm/technicalindicators@3.1.0/dist/browser.es6.js" nonce="{{ csp_nonce }}"></script>
 <script src="{% static 'trading/js/market_insights.js' %}" nonce="{{ csp_nonce }}"></script>
 {% endblock %}

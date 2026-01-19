@@ -49,6 +49,7 @@ urlpatterns = [
     path("api/rl/task/", views.enqueue_rl_task, name="enqueue_rl_task"),
     path("api/rl/task/<str:task_id>/", views.rl_task_status, name="rl_task_status"),
     path("api/market/", views.market_insights_data, name="market_insights_data"),
+    path("api/market/assets/", views.market_assets_data, name="market_assets_data"),
     path("api/market/screener/", views.market_screener_data, name="market_screener_data"),
     path("api/market/watchlist/", views.market_watchlist_snapshot, name="market_watchlist_snapshot"),
     path("api/screen/analyze/", views.screen_analyzer_api, name="screen_analyzer_api"),

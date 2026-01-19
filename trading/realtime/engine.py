@@ -277,7 +277,7 @@ class RealtimeEngine:
         change_pct = ((price_val / prev_close_val) - 1.0) * 100.0 if prev_close_val else 0.0
         now = time.time()
         last_ts = self._last_broadcast_ts.get(symbol, 0.0)
-        if now - last_ts < 0.5:
+        if now - last_ts < 0.1:
             return
         self._last_broadcast_ts[symbol] = now
         try:
@@ -288,6 +288,8 @@ class RealtimeEngine:
                     "symbol": symbol,
                     "price": price_val,
                     "change_pct": change_pct,
+                    "server_ts": now,
+                    "source": "engine",
                 },
             )
         except Exception as exc:

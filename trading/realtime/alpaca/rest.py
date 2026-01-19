@@ -10,6 +10,7 @@ from ...alpaca_data import fetch_stock_bars_frame, fetch_stock_snapshots, resolv
 from ...network import get_requests_session, resolve_retry_config, retry_call_result
 
 DEFAULT_TRADING_URL = os.environ.get("ALPACA_TRADING_REST_URL", "https://paper-api.alpaca.markets").rstrip("/")
+LIVE_TRADING_URL = "https://api.alpaca.markets"
 
 
 def fetch_snapshots(
@@ -53,7 +54,6 @@ def fetch_assets(
     key_id, secret = resolve_alpaca_credentials(user_id=user_id)
     if not key_id or not secret:
         return []
-    url = f"{(base_url or DEFAULT_TRADING_URL).rstrip('/')}/v2/assets"
     params: dict[str, Any] = {}
     if status:
         params["status"] = status
@@ -67,34 +67,47 @@ def fetch_assets(
     config = resolve_retry_config(timeout=timeout)
     session = get_requests_session(config.timeout)
 
-    def _call():
-        return session.get(url, params=params, headers=headers, timeout=config.timeout)
-
     def _should_retry(response):
         try:
             return response.status_code >= 500
         except Exception:
             return False
 
-    try:
-        response = retry_call_result(
-            _call,
-            config=config,
-            exceptions=(requests.RequestException,),
-            should_retry=_should_retry,
-        )
-    except Exception:
-        return []
-    if response.status_code >= 400:
-        return []
-    try:
-        payload = response.json()
-    except ValueError:
-        return []
-    if isinstance(payload, list):
-        return payload
-    if isinstance(payload, dict):
-        assets = payload.get("assets")
-        if isinstance(assets, list):
-            return assets
+    base_candidates: list[str] = []
+    if base_url:
+        base_candidates.append(base_url)
+    else:
+        base_candidates.append(DEFAULT_TRADING_URL)
+        if DEFAULT_TRADING_URL.rstrip("/") != LIVE_TRADING_URL:
+            base_candidates.append(LIVE_TRADING_URL)
+
+    for base in base_candidates:
+        url = f"{base.rstrip('/')}/v2/assets"
+
+        def _call():
+            return session.get(url, params=params, headers=headers, timeout=config.timeout)
+
+        try:
+            response = retry_call_result(
+                _call,
+                config=config,
+                exceptions=(requests.RequestException,),
+                should_retry=_should_retry,
+            )
+        except Exception:
+            continue
+        if response.status_code >= 400:
+            if response.status_code in {401, 403, 404} and base != base_candidates[-1]:
+                continue
+            return []
+        try:
+            payload = response.json()
+        except ValueError:
+            continue
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict):
+            assets = payload.get("assets")
+            if isinstance(assets, list):
+                return assets
     return []

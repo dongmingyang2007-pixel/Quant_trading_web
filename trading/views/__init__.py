@@ -37,7 +37,13 @@ from .account import (
     remove_gallery,
 )
 from .auth import activate, resend_activation, signup
-from .market import market_insights, market_insights_data, market_watchlist_snapshot, market_screener_data
+from .market import (
+    market_assets_data,
+    market_insights,
+    market_insights_data,
+    market_watchlist_snapshot,
+    market_screener_data,
+)
 from .community import (
     community,
     community_notifications,
@@ -96,6 +102,7 @@ __all__ = [
     "remove_gallery",
     "market_insights",
     "market_insights_data",
+    "market_assets_data",
     "market_watchlist_snapshot",
     "market_screener_data",
     "community",

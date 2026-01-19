@@ -7,3 +7,6 @@ class TradingConfig(AppConfig):
 
     def ready(self) -> None:
         from . import signals  # noqa: F401
+        from .realtime.autostart import start_realtime_engine
+
+        start_realtime_engine()

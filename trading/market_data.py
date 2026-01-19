@@ -211,7 +211,6 @@ def fetch_most_actives(
     params: dict[str, object] = {"by": by}
     if limit:
         params["top"] = int(limit)
-        params["limit"] = int(limit)
     url = f"{(base_url or DEFAULT_DATA_URL).rstrip('/')}/v1beta1/screener/stocks/most-actives"
     headers = {
         "APCA-API-KEY-ID": key_id,
@@ -345,6 +344,144 @@ def fetch_most_actives(
 
     rows.sort(key=lambda item: item.get("volume") or 0, reverse=True)
     return rows[:limit] if limit else rows
+
+
+def _normalize_mover_rows(items: list[dict[str, object]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        symbol = (row.get("symbol") or row.get("ticker") or row.get("S") or "").strip().upper()
+        if not symbol:
+            continue
+        price_raw = row.get("price") or row.get("last_price") or row.get("last") or row.get("close") or row.get("c")
+        change_raw = (
+            row.get("change_pct")
+            or row.get("change_percent")
+            or row.get("pct_change")
+            or row.get("percent_change")
+            or row.get("change")
+        )
+        volume_raw = row.get("volume") or row.get("v") or row.get("trade_count") or row.get("trades")
+        price_val = None
+        change_pct = None
+        volume_val = None
+        try:
+            if price_raw is not None:
+                price_val = float(price_raw)
+        except Exception:
+            price_val = None
+        try:
+            if change_raw is not None:
+                change_pct = float(change_raw)
+        except Exception:
+            change_pct = None
+        try:
+            if volume_raw is not None:
+                volume_val = float(volume_raw)
+        except Exception:
+            volume_val = None
+        rows.append(
+            {
+                "symbol": symbol,
+                "price": price_val,
+                "change_pct_day": change_pct,
+                "change_pct_period": change_pct,
+                "volume": volume_val,
+            }
+        )
+    return rows
+
+
+def fetch_market_movers(
+    *,
+    limit: int = 20,
+    user_id: str | None = None,
+    timeout: int | None = None,
+    base_url: str | None = None,
+) -> dict[str, list[dict[str, object]]]:
+    key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+    if not key_id or not secret:
+        return {}
+    if not _rate_limited():
+        return {}
+
+    params: dict[str, object] = {}
+    if limit:
+        params["top"] = int(limit)
+    headers = {
+        "APCA-API-KEY-ID": key_id,
+        "APCA-API-SECRET-KEY": secret,
+        "Accept": "application/json",
+    }
+    retry_config = resolve_retry_config(timeout=timeout)
+    session = get_requests_session(retry_config.timeout)
+
+    def _should_retry(response: requests.Response) -> bool:
+        return response.status_code in {408, 429} or response.status_code >= 500
+
+    candidates = [
+        "v1beta1/screener/stocks/movers",
+        "v1beta1/screener/stocks/market-movers",
+        "v1beta1/screener/stocks/market_movers",
+        "v1beta1/screener/stocks/top-movers",
+    ]
+    for path in candidates:
+        url = f"{(base_url or DEFAULT_DATA_URL).rstrip('/')}/{path}"
+
+        def _call():
+            return session.get(url, params=params, headers=headers, timeout=retry_config.timeout)
+
+        try:
+            response = retry_call_result(
+                _call,
+                config=retry_config,
+                exceptions=(requests.RequestException,),
+                should_retry=_should_retry,
+            )
+        except Exception:
+            continue
+        if response is None or response.status_code >= 400:
+            if response is not None and response.status_code in {404}:
+                continue
+            return {}
+        try:
+            payload = response.json()
+        except ValueError:
+            continue
+
+        gainers: list[dict[str, object]] = []
+        losers: list[dict[str, object]] = []
+        if isinstance(payload, dict):
+            for key in ("gainers", "top_gainers", "topGainers", "gainers_data"):
+                if isinstance(payload.get(key), list):
+                    gainers = _normalize_mover_rows(payload.get(key))
+                    break
+            for key in ("losers", "top_losers", "topLosers", "losers_data"):
+                if isinstance(payload.get(key), list):
+                    losers = _normalize_mover_rows(payload.get(key))
+                    break
+            if not gainers and not losers:
+                for key in ("market_movers", "marketMovers", "data", "results", "stocks"):
+                    if isinstance(payload.get(key), list):
+                        rows = _normalize_mover_rows(payload.get(key))
+                        gainers = [row for row in rows if (row.get("change_pct_day") or 0) >= 0]
+                        losers = [row for row in rows if (row.get("change_pct_day") or 0) < 0]
+                        break
+        elif isinstance(payload, list):
+            rows = _normalize_mover_rows(payload)
+            gainers = [row for row in rows if (row.get("change_pct_day") or 0) >= 0]
+            losers = [row for row in rows if (row.get("change_pct_day") or 0) < 0]
+
+        gainers.sort(key=lambda item: item.get("change_pct_day") or 0, reverse=True)
+        losers.sort(key=lambda item: item.get("change_pct_day") or 0)
+        if gainers or losers:
+            return {
+                "gainers": gainers[:limit] if limit else gainers,
+                "losers": losers[:limit] if limit else losers,
+            }
+
+    return {}
 
 
 def fetch(
