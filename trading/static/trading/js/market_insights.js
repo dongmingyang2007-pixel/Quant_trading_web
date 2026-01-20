@@ -119,6 +119,7 @@
         loading: '正在加载',
         dataSuffix: '数据…',
         updated: '数据已更新',
+        closedFallback: '闭市，已展示上一交易日榜单',
         justNow: '刚刚',
         retrying: '请求过快，正在重试',
         emptySymbol: '暂无可展示的标的。',
@@ -179,6 +180,7 @@
         loading: 'Loading',
         dataSuffix: 'data…',
         updated: 'Data refreshed',
+        closedFallback: 'Market closed, showing previous session movers',
         justNow: 'just now',
         retrying: 'Rate limited, retrying',
         emptySymbol: 'No symbols to display.',
@@ -992,7 +994,15 @@
       if (priceCell && Number.isFinite(price)) {
         priceCell.textContent = price.toFixed(2);
       }
-      if (changeCell && Number.isFinite(changePct) && currentListType !== 'most_active') {
+      if (!changeCell || !Number.isFinite(changePct)) return;
+      const isAllStocksRow = Boolean(row.closest('[data-role="all-stocks-body"]'));
+      const isRankingRow = Boolean(row.closest('[data-role="ranking-list"]'));
+      if (isAllStocksRow) {
+        changeCell.textContent = formatChange(changePct);
+        applyChangeState(changeCell, changePct);
+        return;
+      }
+      if (isRankingRow && currentListType !== 'most_active' && currentTimeframe === '1d') {
         changeCell.textContent = formatChange(changePct);
         applyChangeState(changeCell, changePct, currentListType === 'losers');
       }
@@ -1251,7 +1261,10 @@
     }
     metrics.forEach((metric) => {
       const item = document.createElement('li');
-      item.innerHTML = `${metric.label}: <strong>${metric.value}</strong>`;
+      item.appendChild(document.createTextNode(`${metric.label}: `));
+      const strong = document.createElement('strong');
+      strong.textContent = metric.value;
+      item.appendChild(strong);
       profileMetrics.appendChild(item);
     });
   }
@@ -1988,12 +2001,13 @@
       return;
     }
     options.forEach((option, index) => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'typeahead-option';
-      button.dataset.symbol = option.symbol;
-      button.dataset.index = String(index);
-      button.setAttribute('data-role', 'typeahead-option');
+      const entry = document.createElement('div');
+      entry.className = 'typeahead-option';
+      entry.dataset.symbol = option.symbol;
+      entry.dataset.index = String(index);
+      entry.setAttribute('data-role', 'typeahead-option');
+      entry.setAttribute('role', 'button');
+      entry.tabIndex = -1;
 
       const symbolSpan = document.createElement('span');
       symbolSpan.className = 'option-symbol';
@@ -2020,9 +2034,9 @@
         meta.appendChild(watchWrap);
       }
 
-      button.appendChild(symbolSpan);
-      button.appendChild(meta);
-      typeaheadList.appendChild(button);
+      entry.appendChild(symbolSpan);
+      entry.appendChild(meta);
+      typeaheadList.appendChild(entry);
     });
     setTypeaheadVisibility(true);
   }
@@ -2055,7 +2069,7 @@
       '1h': 3600,
       '2h': 7200,
       '4h': 14400,
-      '1d': 300,
+      '1d': 60,
       '5d': 1800,
       '1mo': 86400,
       '6mo': 86400,
@@ -2313,6 +2327,16 @@
       let statusMessage = `${TEXT.timeframes[tfKey] || tfLabel || ''} ${TEXT.updated}（${
         payload.generated_at || TEXT.justNow
       }）`;
+      const rankingTimeframe = payload.ranking_timeframe;
+      if (
+        rankingTimeframe &&
+        rankingTimeframe.key &&
+        tfKey &&
+        rankingTimeframe.key !== tfKey &&
+        TEXT.closedFallback
+      ) {
+        statusMessage += ` · ${TEXT.closedFallback}`;
+      }
       const normalizedSymbol = normalizedQuery || '';
       const actionSymbol = (options.recentTarget || '').toUpperCase();
       if (options.watchAction === 'add' && normalizedSymbol) {

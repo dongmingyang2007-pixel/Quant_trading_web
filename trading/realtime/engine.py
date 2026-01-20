@@ -17,6 +17,8 @@ from .bars import BarsProcessor
 from .config import RealtimeConfig
 from .focus import update_focus
 from .signals import SignalEngine
+from .stream_registry import acquire_stream, release_stream
+from .subscriptions import read_subscription_state
 from .storage import append_ndjson, write_state
 from .universe import build_universe
 
@@ -80,10 +82,15 @@ class RealtimeEngine:
         self._prev_close: dict[str, float] = {}
         self._prev_close_ts: float = 0.0
         self._last_broadcast_ts: dict[str, float] = {}
+        self._focus_symbols: list[str] = []
+        self._extra_symbols: list[str] = []
+        self._extra_symbols_ts: float = 0.0
+        self._stream_symbols: list[str] = []
 
     def run_once(self) -> None:
         now = time.time()
         self._maybe_refresh_universe(now)
+        self._refresh_extra_symbols(now)
         self._maybe_refresh_focus(now, force=True)
         self._maybe_fetch_bars(now, force=True)
 
@@ -92,10 +99,41 @@ class RealtimeEngine:
         while True:
             now = time.time()
             self._maybe_refresh_universe(now)
+            self._refresh_extra_symbols(now)
             self._maybe_refresh_focus(now)
             self._maybe_fetch_bars(now)
             self._maybe_log(now)
             time.sleep(1.0)
+
+    def _resolve_stream_symbols(self) -> list[str]:
+        combined: list[str] = []
+        seen: set[str] = set()
+        for raw in self._extra_symbols + self._focus_symbols:
+            symbol = str(raw or "").upper()
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            combined.append(symbol)
+        return combined
+
+    def _apply_stream_symbols(self) -> None:
+        if not self.config.engine.stream_enabled or not self.stream_client:
+            return
+        symbols = self._resolve_stream_symbols()
+        if symbols == self._stream_symbols:
+            return
+        self._stream_symbols = symbols
+        if symbols:
+            self.stream_client.set_symbols(symbols)
+
+    def _refresh_extra_symbols(self, now: float) -> None:
+        symbols, updated_at = read_subscription_state()
+        if updated_at <= self._extra_symbols_ts:
+            return
+        self._extra_symbols_ts = updated_at
+        self._extra_symbols = symbols
+        self._maybe_refresh_prev_close(self._resolve_stream_symbols(), now)
+        self._apply_stream_symbols()
 
     def _maybe_refresh_universe(self, now: float) -> None:
         if now - self.state.last_universe_ts < self.config.engine.universe_refresh_seconds:
@@ -132,7 +170,8 @@ class RealtimeEngine:
             universe_payload = []
         focus_entries = update_focus(universe_payload, self.config.focus)
         self.state.last_focus_ts = now
-        self._maybe_refresh_prev_close([entry.symbol for entry in focus_entries], now)
+        self._focus_symbols = [entry.symbol for entry in focus_entries]
+        self._maybe_refresh_prev_close(self._resolve_stream_symbols(), now)
         write_state(
             "focus_summary.json",
             {
@@ -143,8 +182,7 @@ class RealtimeEngine:
         )
         if self.config.engine.stream_enabled:
             self._ensure_stream()
-            if self.stream_client:
-                self.stream_client.set_symbols([entry.symbol for entry in focus_entries])
+            self._apply_stream_symbols()
 
     def _maybe_fetch_bars(self, now: float, *, force: bool = False) -> None:
         if self.config.engine.stream_enabled and self.stream_client:
@@ -192,6 +230,9 @@ class RealtimeEngine:
         if AlpacaStreamClient is None:
             record_metric("realtime.stream.disabled", reason="missing_dependency")
             return
+        if not acquire_stream("engine"):
+            record_metric("realtime.stream.locked", owner="engine")
+            return
         self.signal_engine = SignalEngine(self.config.signals)
         self.bars_processor = BarsProcessor(
             bar_interval_seconds=self.config.engine.bar_interval_seconds,
@@ -213,6 +254,7 @@ class RealtimeEngine:
         if client.start():
             self.stream_client = client
         else:
+            release_stream("engine")
             record_metric("realtime.stream.disabled", reason="credentials_missing")
 
     def _handle_stream_status(self, status: str, detail: str) -> None:

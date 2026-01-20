@@ -20,6 +20,7 @@ from .network import get_requests_session, resolve_retry_config, retry_call_resu
 from trading.observability import record_metric
 from .alpaca_data import (
     DEFAULT_DATA_URL,
+    DEFAULT_FEED,
     fetch_stock_bars_frame,
     fetch_stock_snapshots,
     resolve_alpaca_credentials,
@@ -144,6 +145,17 @@ def _resolve_alpaca_timeframe(interval: str | None) -> str:
     if not interval:
         return "1Day"
     return _ALPACA_INTERVAL_MAP.get(interval.lower().strip(), "1Day")
+
+
+def _feed_candidates(preferred: str | None = None) -> list[str]:
+    primary = (preferred or DEFAULT_FEED or "").strip().lower()
+    candidates: list[str] = []
+    if primary:
+        candidates.append(primary)
+    for fallback in ("sip", "iex"):
+        if fallback not in candidates:
+            candidates.append(fallback)
+    return candidates
 
 
 def _period_to_timedelta(period: str | None) -> timedelta | None:
@@ -307,7 +319,7 @@ def fetch_most_actives(
 
     missing_symbols = [item["symbol"] for item in rows if item.get("price") is None]
     if missing_symbols:
-        snapshots = fetch_stock_snapshots(missing_symbols, feed="sip", user_id=user_id)
+        snapshots = fetch_stock_snapshots(missing_symbols, feed=DEFAULT_FEED, user_id=user_id)
         for entry in rows:
             if entry.get("price") is not None:
                 continue
@@ -568,21 +580,22 @@ def fetch(
         )
         key_id, secret = resolve_alpaca_credentials(user_id=user_id)
         if key_id and secret:
-            try:
-                frame = fetch_stock_bars_frame(
-                    unique,
-                    start=alpaca_start,
-                    end=alpaca_end,
-                    timeframe=timeframe,
-                    feed="sip",
-                    adjustment="split",
-                    user_id=user_id,
-                    timeout=alpaca_timeout,
-                )
+            for feed in _feed_candidates(DEFAULT_FEED):
+                try:
+                    frame = fetch_stock_bars_frame(
+                        unique,
+                        start=alpaca_start,
+                        end=alpaca_end,
+                        timeframe=timeframe,
+                        feed=feed,
+                        adjustment="split",
+                        user_id=user_id,
+                        timeout=alpaca_timeout,
+                    )
+                except Exception:
+                    continue
                 if isinstance(frame, pd.DataFrame) and not frame.empty:
                     return frame
-            except Exception:
-                pass
         if yf is None or not _rate_limited():
             return pd.DataFrame()
 
@@ -679,17 +692,21 @@ def fetch_recent_window(
     key_id, secret = resolve_alpaca_credentials(user_id=user_id)
     if key_id and secret:
         timeframe = _resolve_alpaca_timeframe(interval)
-        try:
-            data = fetch_stock_bars_frame(
-                unique_symbols,
-                timeframe=timeframe,
-                limit=limit,
-                feed="sip",
-                adjustment="split",
-                user_id=user_id,
-            )
-        except Exception:
-            data = pd.DataFrame()
+        data = pd.DataFrame()
+        for feed in _feed_candidates(DEFAULT_FEED):
+            try:
+                data = fetch_stock_bars_frame(
+                    unique_symbols,
+                    timeframe=timeframe,
+                    limit=limit,
+                    feed=feed,
+                    adjustment="split",
+                    user_id=user_id,
+                )
+            except Exception:
+                data = pd.DataFrame()
+            if isinstance(data, pd.DataFrame) and not data.empty:
+                break
         if isinstance(data, pd.DataFrame) and not data.empty:
             result: dict[str, pd.DataFrame] = {}
             if isinstance(data.columns, pd.MultiIndex):

@@ -8,6 +8,8 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
 from .config import load_realtime_config
+from .stream_registry import acquire_stream, release_stream
+from .subscriptions import update_subscription_state
 from .universe import build_universe
 from .alpaca.stream import AlpacaStreamClient
 from ..alpaca_data import fetch_stock_snapshots
@@ -94,6 +96,9 @@ def _ensure_stream(user_id: str | None) -> None:
     now = time.time()
     symbols, feed = _resolve_stream_symbols(user_id)
     if _CLIENT is None:
+        if not acquire_stream("market_stream"):
+            record_metric("market.ws.stream_locked")
+            return
         _USER_ID = user_id
         _CLIENT = AlpacaStreamClient(
             user_id=user_id,
@@ -107,6 +112,7 @@ def _ensure_stream(user_id: str | None) -> None:
         )
         if not _CLIENT.start():
             record_metric("market.ws.stream_failed")
+            release_stream("market_stream")
             _CLIENT = None
             return
     if symbols:
@@ -128,12 +134,10 @@ def request_symbol(symbol: str | None, *, user_id: str | None = None) -> None:
     sym = str(symbol).upper()
     if not sym:
         return
+    updated = update_subscription_state([sym], replace=False)
     with _LOCK:
-        if sym in _EXTRA_SYMBOLS:
-            _EXTRA_SYMBOLS.remove(sym)
-        _EXTRA_SYMBOLS.insert(0, sym)
-        if len(_EXTRA_SYMBOLS) > EXTRA_SYMBOLS_MAX:
-            del _EXTRA_SYMBOLS[EXTRA_SYMBOLS_MAX:]
+        _EXTRA_SYMBOLS.clear()
+        _EXTRA_SYMBOLS.extend(updated)
         _ensure_stream(user_id or _USER_ID)
 
 
@@ -152,9 +156,10 @@ def request_symbols(symbols: list[str] | None, *, user_id: str | None = None) ->
             break
     if not cleaned:
         return
+    updated = update_subscription_state(cleaned, replace=True)
     with _LOCK:
         _EXTRA_SYMBOLS.clear()
-        _EXTRA_SYMBOLS.extend(cleaned)
+        _EXTRA_SYMBOLS.extend(updated)
         _ensure_stream(user_id or _USER_ID)
 
 
@@ -165,6 +170,7 @@ def unsubscribe() -> None:
         if _REF_COUNT == 0 and _CLIENT:
             _CLIENT.stop()
             _CLIENT = None
+            release_stream("market_stream")
             _LAST_SEND_TS.clear()
             _PREV_CLOSE.clear()
             _EXTRA_SYMBOLS.clear()

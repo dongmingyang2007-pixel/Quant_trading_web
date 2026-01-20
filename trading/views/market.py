@@ -7,6 +7,9 @@ from datetime import datetime, timezone
 import time
 from typing import Iterable, Mapping
 import re
+from zoneinfo import ZoneInfo
+
+import requests
 
 import pandas as pd
 from django.conf import settings
@@ -22,9 +25,10 @@ from .. import screener
 from ..cache_utils import build_cache_key, cache_memoize
 from .. import market_data
 from ..observability import ensure_request_id, record_metric, track_latency
+from ..network import get_requests_session, resolve_retry_config, retry_call_result
 from ..rate_limit import check_rate_limit, rate_limit_key
 from ..models import UserProfile
-from ..alpaca_data import resolve_alpaca_credentials, fetch_news, fetch_stock_snapshots
+from ..alpaca_data import DEFAULT_FEED, resolve_alpaca_credentials, fetch_news, fetch_stock_snapshots
 from ..realtime.alpaca import fetch_assets as fetch_alpaca_assets
 from ..realtime.market_stream import request_symbol as request_market_symbol, request_symbols as request_market_symbols
 from ..realtime.storage import read_state, write_state
@@ -81,6 +85,15 @@ DETAIL_TIMEFRAMES: dict[str, DetailTimeframe] = {
     "6mo": DetailTimeframe("6mo", _lazy("6月"), "6M", "6mo", "1d", None, 400),
 }
 DEFAULT_DETAIL_TIMEFRAME = DETAIL_TIMEFRAMES["1d"]
+
+
+def _setting_int(name: str, default: int) -> int:
+    try:
+        return int(getattr(settings, name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 TOP_SYMBOLS = screener.CORE_TICKERS_US[:80]
 MAX_SERIES_POINTS = 60
 WINDOW_LENGTHS = {
@@ -99,9 +112,20 @@ MARKET_PROFILE_CACHE_TTL = max(120, getattr(settings, "MARKET_PROFILE_CACHE_TTL"
 MARKET_NEWS_CACHE_TTL = max(120, getattr(settings, "MARKET_NEWS_CACHE_TTL", 300))
 MARKET_ASSETS_CACHE_TTL = max(300, getattr(settings, "MARKET_ASSETS_CACHE_TTL", 6 * 3600))
 MARKET_RANKINGS_CACHE_TTL = max(30, getattr(settings, "MARKET_RANKINGS_CACHE_TTL", 55))
+MARKET_UNIVERSE_RANKINGS_CACHE_TTL = max(120, _setting_int("MARKET_UNIVERSE_RANKINGS_CACHE_TTL", 900))
+MARKET_UNIVERSE_CHUNK_SIZE = max(50, min(400, _setting_int("MARKET_UNIVERSE_CHUNK_SIZE", 200)))
+MARKET_UNIVERSE_MAX_SYMBOLS = max(0, _setting_int("MARKET_UNIVERSE_MAX_SYMBOLS", 0))
 MARKET_ASSETS_PAGE_DEFAULT = max(20, getattr(settings, "MARKET_ASSETS_PAGE_DEFAULT", 50))
 MARKET_ASSETS_PAGE_MAX = max(50, getattr(settings, "MARKET_ASSETS_PAGE_MAX", 200))
 _MARKET_EXECUTOR = ThreadPoolExecutor(max_workers=MARKET_MAX_WORKERS)
+MARKET_CLOCK_CACHE_TTL = max(15, getattr(settings, "MARKET_CLOCK_CACHE_TTL", 60))
+MARKET_CLOCK_TIMEOUT = max(2, getattr(settings, "MARKET_CLOCK_TIMEOUT_SECONDS", 5))
+ALPACA_TRADING_REST_URL = getattr(settings, "ALPACA_TRADING_REST_URL", "https://paper-api.alpaca.markets").rstrip("/")
+LIVE_TRADING_URL = "https://api.alpaca.markets"
+try:
+    _MARKET_TZ = ZoneInfo("America/New_York")
+except Exception:
+    _MARKET_TZ = timezone.utc
 
 
 @dataclass(slots=True)
@@ -157,6 +181,71 @@ def _resolve_market_params(params: Mapping[str, object]) -> MarketQueryParams:
         limit=limit,
         limit_clamped=limit_clamped,
     )
+
+
+def _fetch_market_clock(user_id: str | None) -> bool | None:
+    key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+    if not key_id or not secret:
+        return None
+    headers = {
+        "APCA-API-KEY-ID": key_id,
+        "APCA-API-SECRET-KEY": secret,
+        "Accept": "application/json",
+    }
+    config = resolve_retry_config(timeout=MARKET_CLOCK_TIMEOUT)
+    session = get_requests_session(config.timeout)
+
+    def _should_retry(response: requests.Response) -> bool:
+        return response.status_code in {408, 429} or response.status_code >= 500
+
+    bases = [ALPACA_TRADING_REST_URL]
+    if ALPACA_TRADING_REST_URL.rstrip("/") != LIVE_TRADING_URL:
+        bases.append(LIVE_TRADING_URL)
+
+    for base in bases:
+        url = f"{base.rstrip('/')}/v2/clock"
+
+        def _call():
+            return session.get(url, headers=headers, timeout=config.timeout)
+
+        try:
+            response = retry_call_result(
+                _call,
+                config=config,
+                exceptions=(requests.RequestException,),
+                should_retry=_should_retry,
+            )
+        except Exception:
+            continue
+        if response is None or response.status_code >= 400:
+            if response is not None and response.status_code in {401, 403, 404} and base != bases[-1]:
+                continue
+            return None
+        try:
+            payload = response.json()
+        except ValueError:
+            continue
+        if isinstance(payload, dict) and isinstance(payload.get("is_open"), bool):
+            return bool(payload.get("is_open"))
+    return None
+
+
+def _is_market_open(user_id: str | None) -> bool:
+    cache_key = build_cache_key("market-clock")
+
+    def _builder():
+        return _fetch_market_clock(user_id)
+
+    is_open = cache_memoize(cache_key, _builder, MARKET_CLOCK_CACHE_TTL)
+    if isinstance(is_open, bool):
+        return is_open
+
+    now = datetime.now(_MARKET_TZ)
+    if now.weekday() >= 5:
+        return False
+    open_time = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    close_time = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    return open_time <= now < close_time
 
 
 def _resolve_list_type(value: object) -> str:
@@ -325,7 +414,7 @@ def _build_snapshot_rankings(user_id: str | None) -> list[dict[str, object]]:
         symbols = [asset["symbol"] for asset in assets if asset.get("symbol")]
         if not symbols:
             return None
-        snapshots = fetch_stock_snapshots(symbols, feed="sip", user_id=user_id, timeout=MARKET_REQUEST_TIMEOUT)
+        snapshots = fetch_stock_snapshots(symbols, feed=DEFAULT_FEED, user_id=user_id, timeout=MARKET_REQUEST_TIMEOUT)
         if not isinstance(snapshots, dict) or not snapshots:
             return None
         rows: list[dict[str, object]] = []
@@ -402,6 +491,140 @@ def _load_universe_ranked() -> list[dict[str, object]]:
             }
         )
     return rows
+
+
+def _resolve_universe_rankings(user_id: str | None) -> tuple[list[dict[str, object]], str]:
+    rankings = _build_snapshot_rankings(user_id)
+    if rankings:
+        return rankings, "alpaca"
+    rankings = _load_universe_ranked()
+    if rankings:
+        return rankings, "cache"
+    return [], "unknown"
+
+
+def _extract_change_value(entry: dict[str, object]) -> float | None:
+    value = _coerce_number(entry.get("change_pct_period"))
+    if value is None:
+        value = _coerce_number(entry.get("change_pct_day"))
+    return value
+
+
+def _split_rankings(
+    rows: list[dict[str, object]],
+    limit: int,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    ranked: list[tuple[float, dict[str, object]]] = []
+    for entry in rows:
+        if not isinstance(entry, dict):
+            continue
+        change_value = _extract_change_value(entry)
+        if change_value is None:
+            continue
+        ranked.append((change_value, entry))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    gainers = [row for change, row in ranked if change >= 0][:limit]
+    losers = [row for change, row in sorted(ranked, key=lambda item: item[0]) if change < 0][:limit]
+    return gainers, losers
+
+
+def _rank_symbols_light(
+    series_map: dict[str, pd.Series],
+    timeframe: Timeframe,
+) -> list[dict[str, object]]:
+    ranked: list[dict[str, object]] = []
+    for sym, series in series_map.items():
+        window = _slice_series(series, timeframe)
+        if len(window) < 2:
+            continue
+        try:
+            start_price = float(window.iloc[0])
+            end_price = float(window.iloc[-1])
+            prev_price = float(window.iloc[-2])
+        except Exception:
+            continue
+        if not start_price or not prev_price:
+            continue
+        period_change = ((end_price / start_price) - 1.0) * 100.0
+        day_change = ((end_price / prev_price) - 1.0) * 100.0
+        ranked.append(
+            {
+                "symbol": sym,
+                "price": round(end_price, 2),
+                "change_pct_period": round(period_change, 2),
+                "change_pct_day": round(day_change, 2),
+                "period_label": timeframe.label,
+                "period_label_en": timeframe.label_en,
+            }
+        )
+    ranked.sort(key=lambda item: item.get("change_pct_period") or 0, reverse=True)
+    return ranked
+
+
+def _iter_chunks(items: list[str], size: int) -> Iterable[list[str]]:
+    if size <= 0:
+        yield items
+        return
+    for idx in range(0, len(items), size):
+        chunk = items[idx : idx + size]
+        if chunk:
+            yield chunk
+
+
+def _fetch_history_chunked(
+    symbols: list[str],
+    timeframe: Timeframe,
+    *,
+    user_id: str | None,
+) -> tuple[dict[str, pd.Series], str]:
+    series_map: dict[str, pd.Series] = {}
+    source = "unknown"
+    for chunk in _iter_chunks(symbols, MARKET_UNIVERSE_CHUNK_SIZE):
+        history, chunk_source = _download_history(chunk, timeframe, user_id=user_id)
+        if history:
+            series_map.update(history)
+        if chunk_source and chunk_source != "unknown":
+            source = chunk_source
+    return series_map, source
+
+
+def _resolve_universe_timeframe_rankings(
+    timeframe: Timeframe,
+    *,
+    user_id: str | None,
+) -> tuple[list[dict[str, object]], str]:
+    if timeframe.key == "1d":
+        rows, source = _resolve_universe_rankings(user_id)
+        for entry in rows:
+            if isinstance(entry, dict):
+                entry.setdefault("period_label", timeframe.label)
+                entry.setdefault("period_label_en", timeframe.label_en)
+        return rows, source
+    cache_key = build_cache_key("market-universe-timeframe", timeframe.key, user_id or "anon")
+
+    def _load():
+        assets = _normalize_assets(_load_assets_master(user_id))
+        if not assets:
+            return {"rows": [], "source": "unknown"}
+        symbols = [asset["symbol"] for asset in assets if asset.get("symbol")]
+        if not symbols:
+            return {"rows": [], "source": "unknown"}
+        if MARKET_UNIVERSE_MAX_SYMBOLS and len(symbols) > MARKET_UNIVERSE_MAX_SYMBOLS:
+            symbols = symbols[:MARKET_UNIVERSE_MAX_SYMBOLS]
+        series_map, source = _fetch_history_chunked(symbols, timeframe, user_id=user_id)
+        if not series_map:
+            return {"rows": [], "source": source or "unknown"}
+        rows = _rank_symbols_light(series_map, timeframe)
+        return {"rows": rows, "source": source or "unknown"}
+
+    payload = cache_memoize(cache_key, _load, MARKET_UNIVERSE_RANKINGS_CACHE_TTL)
+    if isinstance(payload, dict):
+        rows = payload.get("rows")
+        source = payload.get("source")
+        return rows if isinstance(rows, list) else [], source if isinstance(source, str) else "unknown"
+    if isinstance(payload, list):
+        return payload, "unknown"
+    return [], "unknown"
 
 
 def _filter_assets(
@@ -618,6 +841,33 @@ def _fetch_symbol_news(symbol: str, *, user_id: str | None = None, limit: int = 
 
     result = cache_memoize(cache_key, _download, MARKET_NEWS_CACHE_TTL)
     return result if isinstance(result, list) else []
+
+
+def _build_ai_summary(
+    profile_payload: dict[str, object],
+    news_payload: list[dict[str, str]],
+    *,
+    lang_prefix: str,
+) -> str:
+    summary = ""
+    if isinstance(news_payload, list) and news_payload:
+        first = news_payload[0] if isinstance(news_payload[0], dict) else {}
+        title = str(first.get("title") or "").strip()
+        source = str(first.get("source") or "").strip()
+        if title:
+            if lang_prefix == "zh":
+                summary = f"{source} 最新消息：{title}" if source else f"最新消息：{title}"
+            else:
+                summary = f"Latest headline{f' from {source}' if source else ''}: {title}"
+    if not summary and isinstance(profile_payload, dict):
+        raw_summary = str(profile_payload.get("summary") or "").strip()
+        if raw_summary:
+            summary = raw_summary
+    if not summary:
+        summary = "暂无可用的 AI 摘要。" if lang_prefix == "zh" else "No AI summary available yet."
+    if len(summary) > 160:
+        summary = summary[:160].rstrip() + "..."
+    return summary
 
 
 def _extract_ohlc(frame: pd.DataFrame, symbol: str, *, limit: int = 360) -> list[dict[str, float | int]]:
@@ -903,7 +1153,7 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
             )
         snapshots = fetch_stock_snapshots(
             [detail_symbol],
-            feed="sip",
+            feed=DEFAULT_FEED,
             user_id=str(request.user.id),
             timeout=MARKET_REQUEST_TIMEOUT,
         )
@@ -1034,6 +1284,8 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
 
         profile_payload = _fetch_company_profile(detail_symbol, user_id=str(request.user.id))
         news_payload = _fetch_symbol_news(detail_symbol, user_id=str(request.user.id))
+        lang_prefix = (getattr(request, "LANGUAGE_CODE", "") or request.COOKIES.get("django_language", "zh-hans")).lower()[:2]
+        ai_summary = _build_ai_summary(profile_payload, news_payload, lang_prefix=lang_prefix)
         return JsonResponse(
             {
                 "symbol": detail_symbol,
@@ -1052,6 +1304,7 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                 "bars": bars,
                 "profile": profile_payload,
                 "news": news_payload,
+                "ai_summary": ai_summary,
                 "request_id": request_id,
             },
             json_dumps_params={"ensure_ascii": False},
@@ -1121,6 +1374,11 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
     gainers: list[dict[str, object]] = []
     losers: list[dict[str, object]] = []
     most_actives: list[dict[str, object]] = []
+    ranking_timeframe: Timeframe | None = None
+    universe_rankings: list[dict[str, object]] | None = None
+    universe_source = "unknown"
+    timeframe_rankings: list[dict[str, object]] | None = None
+    timeframe_source = "unknown"
 
     if restrict_to_query:
         future = None
@@ -1187,30 +1445,112 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
             losers = [entry for entry in ranked if entry["change_pct_period"] < 0][: resolved.limit]
             list_items = losers if list_type == "losers" else gainers
     else:
+        user_id = str(request.user.id) if request.user.is_authenticated else None
+        used_timeframe_rankings = False
         if list_type in {"gainers", "losers"}:
-            movers = market_data.fetch_market_movers(
-                limit=resolved.limit,
-                user_id=str(request.user.id),
-                timeout=MARKET_REQUEST_TIMEOUT,
+            if timeframe_rankings is None:
+                timeframe_rankings, timeframe_source = _resolve_universe_timeframe_rankings(
+                    resolved.timeframe,
+                    user_id=user_id,
+                )
+            if timeframe_rankings:
+                gainers, losers = _split_rankings(timeframe_rankings, resolved.limit)
+                if gainers or losers:
+                    list_items = losers if list_type == "losers" else gainers
+                    data_source = timeframe_source or data_source
+                    ranking_timeframe = resolved.timeframe
+                    used_timeframe_rankings = True
+
+        if not used_timeframe_rankings:
+            if list_type in {"gainers", "losers"}:
+                movers = market_data.fetch_market_movers(
+                    limit=resolved.limit,
+                    user_id=str(request.user.id),
+                    timeout=MARKET_REQUEST_TIMEOUT,
+                )
+                gainers = movers.get("gainers", []) if movers else []
+                losers = movers.get("losers", []) if movers else []
+                list_items = losers if list_type == "losers" else gainers
+                data_source = "alpaca" if list_items else "unknown"
+            else:
+                list_items = market_data.fetch_most_actives(
+                    by="volume",
+                    limit=resolved.limit,
+                    user_id=str(request.user.id),
+                    timeout=MARKET_REQUEST_TIMEOUT,
+                )
+                most_actives = list_items
+                volume_label = _("成交量")
+                for entry in list_items:
+                    if isinstance(entry, dict):
+                        entry.setdefault("period_label", volume_label)
+                        entry.setdefault("period_label_en", "Volume")
+                data_source = "alpaca" if list_items else "unknown"
+
+    if list_type in {"gainers", "losers"} and not list_items:
+        user_id = str(request.user.id) if request.user.is_authenticated else None
+        if timeframe_rankings is None:
+            timeframe_rankings, timeframe_source = _resolve_universe_timeframe_rankings(
+                resolved.timeframe,
+                user_id=user_id,
             )
-            gainers = movers.get("gainers", []) if movers else []
-            losers = movers.get("losers", []) if movers else []
-            list_items = losers if list_type == "losers" else gainers
-            data_source = "alpaca" if list_items else "unknown"
-        else:
-            list_items = market_data.fetch_most_actives(
-                by="volume",
-                limit=resolved.limit,
+        if timeframe_rankings:
+            gainers, losers = _split_rankings(timeframe_rankings, resolved.limit)
+            if gainers or losers:
+                list_items = losers if list_type == "losers" else gainers
+                data_source = timeframe_source or data_source
+                if ranking_timeframe is None:
+                    ranking_timeframe = resolved.timeframe
+
+        if not list_items:
+            if universe_rankings is None:
+                universe_rankings, universe_source = _resolve_universe_rankings(user_id)
+            if universe_rankings:
+                gainers, losers = _split_rankings(universe_rankings, resolved.limit)
+                if gainers or losers:
+                    list_items = losers if list_type == "losers" else gainers
+                    data_source = universe_source or data_source
+                    if ranking_timeframe is None:
+                        ranking_timeframe = TIMEFRAMES["1d"]
+
+        if not list_items:
+            series_map, fallback_source = _fetch_history(
+                TOP_SYMBOLS,
+                resolved.timeframe,
                 user_id=str(request.user.id),
-                timeout=MARKET_REQUEST_TIMEOUT,
             )
-            most_actives = list_items
+            ranked = _rank_symbols(series_map, resolved.timeframe, limit=resolved.limit)
+            if ranked:
+                gainers = [entry for entry in ranked if entry["change_pct_period"] >= 0][: resolved.limit]
+                losers = [entry for entry in ranked if entry["change_pct_period"] < 0][: resolved.limit]
+                list_items = losers if list_type == "losers" else gainers
+                data_source = fallback_source or data_source
+                if ranking_timeframe is None:
+                    ranking_timeframe = resolved.timeframe
+
+    if list_type == "most_active" and not list_items:
+        if universe_rankings is None:
+            universe_rankings, universe_source = _resolve_universe_rankings(
+                str(request.user.id) if request.user.is_authenticated else None
+            )
+        if universe_rankings:
+            ranked_by_volume: list[tuple[float, dict[str, object]]] = []
+            for entry in universe_rankings:
+                if not isinstance(entry, dict):
+                    continue
+                volume_value = _coerce_number(entry.get("volume"))
+                if volume_value is None:
+                    continue
+                ranked_by_volume.append((volume_value, entry))
+            ranked_by_volume.sort(key=lambda item: item[0], reverse=True)
+            most_actives = [row for _volume, row in ranked_by_volume][: resolved.limit]
+            list_items = most_actives
             volume_label = _("成交量")
             for entry in list_items:
                 if isinstance(entry, dict):
                     entry.setdefault("period_label", volume_label)
                     entry.setdefault("period_label_en", "Volume")
-            data_source = "alpaca" if list_items else "unknown"
+            data_source = universe_source or data_source
 
     suggestions = _build_suggestions(resolved.query)
 
@@ -1231,6 +1571,15 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
             "label_en": resolved.timeframe.label_en,
             "clamped": resolved.timeframe_clamped,
         },
+        "ranking_timeframe": (
+            {
+                "key": ranking_timeframe.key,
+                "label": ranking_timeframe.label,
+                "label_en": ranking_timeframe.label_en,
+            }
+            if ranking_timeframe
+            else None
+        ),
         # Use timezone.utc for Python 3.13 compatibility (datetime.UTC removed)
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "data_source": data_source or "unknown",
@@ -1292,7 +1641,7 @@ def market_assets_data(request: HttpRequest) -> JsonResponse:
 
     symbols = [asset["symbol"] for asset in page_assets if asset.get("symbol")]
     snapshots = (
-        fetch_stock_snapshots(symbols, feed="sip", user_id=user_id, timeout=MARKET_REQUEST_TIMEOUT)
+        fetch_stock_snapshots(symbols, feed=DEFAULT_FEED, user_id=user_id, timeout=MARKET_REQUEST_TIMEOUT)
         if symbols
         else {}
     )
