@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import time
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 import re
 from zoneinfo import ZoneInfo
 
@@ -22,7 +22,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from django.utils.translation import gettext as _, gettext_lazy as _lazy
 
 from .. import screener
-from ..cache_utils import build_cache_key, cache_memoize
+from ..cache_utils import build_cache_key, cache_get_object, cache_set_object, cache_memoize
 from .. import market_data
 from ..observability import ensure_request_id, record_metric, track_latency
 from ..network import get_requests_session, resolve_retry_config, retry_call_result
@@ -31,12 +31,8 @@ from ..models import UserProfile
 from ..alpaca_data import DEFAULT_FEED, resolve_alpaca_credentials, fetch_news, fetch_stock_snapshots
 from ..realtime.alpaca import fetch_assets as fetch_alpaca_assets
 from ..realtime.market_stream import request_symbol as request_market_symbol, request_symbols as request_market_symbols
-from ..realtime.storage import read_state, write_state
-
-try:
-    import yfinance as yf  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
-    yf = None  # type: ignore
+from ..realtime.lock import InstanceLock
+from ..realtime.storage import read_state, write_state, resolve_state_dir
 
 
 @dataclass(slots=True)
@@ -60,7 +56,7 @@ class DetailTimeframe:
 
 
 TIMEFRAMES: dict[str, Timeframe] = {
-    "1d": Timeframe("1d", _lazy("近1日"), "1D", "5d", "15m"),
+    "1d": Timeframe("1d", _lazy("实时榜"), "Realtime", "5d", "15m"),
     "5d": Timeframe("5d", _lazy("近5日"), "5D", "10d", "60m"),
     "1mo": Timeframe("1mo", _lazy("近1月"), "1M", "2mo", "1d"),
     "6mo": Timeframe("6mo", _lazy("近6月"), "6M", "1y", "1d"),
@@ -94,6 +90,32 @@ def _setting_int(name: str, default: int) -> int:
         return default
 
 
+def _setting_float(name: str, default: float) -> float:
+    try:
+        return float(getattr(settings, name, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _setting_bool(name: str, default: bool) -> bool:
+    value = getattr(settings, name, default)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _setting_list(value: object, default: list[str]) -> list[str]:
+    if value is None:
+        return list(default)
+    if isinstance(value, str):
+        items = [item.strip() for item in value.split(",") if item.strip()]
+        return items or list(default)
+    if isinstance(value, (list, tuple, set)):
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return items or list(default)
+    return list(default)
+
+
 TOP_SYMBOLS = screener.CORE_TICKERS_US[:80]
 MAX_SERIES_POINTS = 60
 WINDOW_LENGTHS = {
@@ -112,11 +134,52 @@ MARKET_PROFILE_CACHE_TTL = max(120, getattr(settings, "MARKET_PROFILE_CACHE_TTL"
 MARKET_NEWS_CACHE_TTL = max(120, getattr(settings, "MARKET_NEWS_CACHE_TTL", 300))
 MARKET_ASSETS_CACHE_TTL = max(300, getattr(settings, "MARKET_ASSETS_CACHE_TTL", 6 * 3600))
 MARKET_RANKINGS_CACHE_TTL = max(30, getattr(settings, "MARKET_RANKINGS_CACHE_TTL", 55))
+MARKET_RANKINGS_MIN_PRICE = max(0.0, _setting_float("MARKET_RANKINGS_MIN_PRICE", 1.0))
+MARKET_RANKINGS_MIN_VOLUME = max(0, _setting_int("MARKET_RANKINGS_MIN_VOLUME", 50_000))
+MARKET_RANKINGS_MIN_DOLLAR_VOLUME = max(0.0, _setting_float("MARKET_RANKINGS_MIN_DOLLAR_VOLUME", 2_000_000.0))
+MARKET_RANKINGS_EXCLUDE_KEYWORDS = _setting_list(
+    getattr(settings, "MARKET_RANKINGS_EXCLUDE_KEYWORDS", None),
+    ["warrant", "warrants", "right", "rights", "unit", "units", "preferred", "depositary", "note", "notes"],
+)
+MARKET_RANKINGS_EXCLUDE_SUFFIXES = _setting_list(
+    getattr(settings, "MARKET_RANKINGS_EXCLUDE_SUFFIXES", None),
+    [".W", ".WS", ".WT", ".U", ".R", ".RT"],
+)
+MARKET_RANKINGS_EXCLUDE_EXCHANGES = set(
+    item.upper()
+    for item in _setting_list(getattr(settings, "MARKET_RANKINGS_EXCLUDE_EXCHANGES", None), ["OTC"])
+)
 MARKET_UNIVERSE_RANKINGS_CACHE_TTL = max(120, _setting_int("MARKET_UNIVERSE_RANKINGS_CACHE_TTL", 900))
 MARKET_UNIVERSE_CHUNK_SIZE = max(50, min(400, _setting_int("MARKET_UNIVERSE_CHUNK_SIZE", 200)))
 MARKET_UNIVERSE_MAX_SYMBOLS = max(0, _setting_int("MARKET_UNIVERSE_MAX_SYMBOLS", 0))
+MARKET_UNIVERSE_CHUNK_WORKERS = max(1, min(8, _setting_int("MARKET_UNIVERSE_CHUNK_WORKERS", 4)))
 MARKET_ASSETS_PAGE_DEFAULT = max(20, getattr(settings, "MARKET_ASSETS_PAGE_DEFAULT", 50))
 MARKET_ASSETS_PAGE_MAX = max(50, getattr(settings, "MARKET_ASSETS_PAGE_MAX", 200))
+MARKET_RANKINGS_REFRESH_SECONDS = max(60, _setting_int("MARKET_RANKINGS_REFRESH_SECONDS", 300))
+MARKET_RANKINGS_REFRESH_MARGIN_SECONDS = max(0, _setting_int("MARKET_RANKINGS_REFRESH_MARGIN_SECONDS", 5))
+MARKET_RANKINGS_SNAPSHOT_CHUNK_SIZE = max(1, min(200, _setting_int("MARKET_RANKINGS_SNAPSHOT_CHUNK_SIZE", 200)))
+MARKET_RANKINGS_SNAPSHOT_TTL = max(60, _setting_int("MARKET_RANKINGS_SNAPSHOT_TTL", MARKET_RANKINGS_REFRESH_SECONDS))
+MARKET_RANKINGS_BACKGROUND_ONLY = _setting_bool("MARKET_RANKINGS_BACKGROUND_ONLY", True)
+MARKET_RANKINGS_DISABLE_FILTERS = _setting_bool("MARKET_RANKINGS_DISABLE_FILTERS", True)
+MARKET_RANKINGS_ALLOW_STALE_SNAPSHOTS = _setting_bool("MARKET_RANKINGS_ALLOW_STALE_SNAPSHOTS", True)
+MARKET_RANKINGS_TIMEFRAME_KEYS = [
+    key
+    for key in _setting_list(
+        getattr(settings, "MARKET_RANKINGS_TIMEFRAME_KEYS", None),
+        [key for key in TIMEFRAMES if key != "1d"],
+    )
+    if key in TIMEFRAMES and key != "1d"
+]
+MARKET_RANKINGS_TIMEFRAME_SNAPSHOT_TTL = max(
+    60,
+    _setting_int("MARKET_RANKINGS_TIMEFRAME_SNAPSHOT_TTL", MARKET_RANKINGS_REFRESH_SECONDS),
+)
+MARKET_RANKINGS_DAILY_WINDOW_5D = max(2, _setting_int("MARKET_RANKINGS_DAILY_WINDOW_5D", 6))
+MARKET_RANKINGS_DAILY_WINDOW_1MO = max(2, _setting_int("MARKET_RANKINGS_DAILY_WINDOW_1MO", 30))
+MARKET_RANKINGS_DAILY_WINDOW_6MO = max(2, _setting_int("MARKET_RANKINGS_DAILY_WINDOW_6MO", 130))
+SNAPSHOT_RANKINGS_STATE = "market_rankings_snapshot.json"
+SNAPSHOT_RANKINGS_PROGRESS_STATE = "market_rankings_snapshot_progress.json"
+SNAPSHOT_RANKINGS_LOCK = "market_rankings_snapshot.pid"
 _MARKET_EXECUTOR = ThreadPoolExecutor(max_workers=MARKET_MAX_WORKERS)
 MARKET_CLOCK_CACHE_TTL = max(15, getattr(settings, "MARKET_CLOCK_CACHE_TTL", 60))
 MARKET_CLOCK_TIMEOUT = max(2, getattr(settings, "MARKET_CLOCK_TIMEOUT_SECONDS", 5))
@@ -181,6 +244,14 @@ def _resolve_market_params(params: Mapping[str, object]) -> MarketQueryParams:
         limit=limit,
         limit_clamped=limit_clamped,
     )
+
+
+def _parse_offset(value: object) -> int:
+    try:
+        offset = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+    return max(0, offset)
 
 
 def _fetch_market_clock(user_id: str | None) -> bool | None:
@@ -250,7 +321,12 @@ def _is_market_open(user_id: str | None) -> bool:
 
 def _resolve_list_type(value: object) -> str:
     text = str(value or "").strip().lower()
-    if text in {"gainers", "losers", "most_active"}:
+    if text in {
+        "gainers",
+        "losers",
+        "most_active",
+        "top_turnover",
+    }:
         return text
     return "gainers"
 
@@ -363,6 +439,51 @@ def _normalize_assets(assets: list[dict[str, object]]) -> list[dict[str, str]]:
     return cleaned
 
 
+def _is_excluded_symbol(symbol: str) -> bool:
+    if MARKET_RANKINGS_DISABLE_FILTERS:
+        return False
+    upper = symbol.upper()
+    for suffix in MARKET_RANKINGS_EXCLUDE_SUFFIXES:
+        if not suffix:
+            continue
+        if upper.endswith(str(suffix).upper()):
+            return True
+    return False
+
+
+def _is_excluded_name(name: str) -> bool:
+    if MARKET_RANKINGS_DISABLE_FILTERS:
+        return False
+    lowered = name.lower()
+    for keyword in MARKET_RANKINGS_EXCLUDE_KEYWORDS:
+        if keyword and keyword in lowered:
+            return True
+    return False
+
+
+def _is_rankable_asset(asset: dict[str, str]) -> bool:
+    symbol = str(asset.get("symbol") or "").upper()
+    if not symbol:
+        return False
+    if MARKET_RANKINGS_DISABLE_FILTERS:
+        return True
+    if _is_excluded_symbol(symbol):
+        return False
+    exchange = str(asset.get("exchange") or "").upper()
+    if exchange and exchange in MARKET_RANKINGS_EXCLUDE_EXCHANGES:
+        return False
+    name = str(asset.get("name") or "")
+    if name and _is_excluded_name(name):
+        return False
+    return True
+
+
+def _filter_rankable_assets(assets: list[dict[str, str]]) -> list[dict[str, str]]:
+    if MARKET_RANKINGS_DISABLE_FILTERS:
+        return [asset for asset in assets if asset.get("symbol")]
+    return [asset for asset in assets if _is_rankable_asset(asset)]
+
+
 def _build_asset_meta_map(
     *,
     user_id: str | None,
@@ -404,11 +525,143 @@ def _attach_asset_meta(
     return items
 
 
+def _filter_by_meta(
+    items: list[dict[str, object]],
+    *,
+    meta_map: dict[str, dict[str, str]],
+) -> list[dict[str, object]]:
+    if not items:
+        return items
+    filtered: list[dict[str, object]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        meta = meta_map.get(symbol)
+        if meta and not _is_rankable_asset(meta):
+            continue
+        filtered.append(item)
+    return filtered
+
+
+def _snapshot_refresh_payload_summary(payload: dict[str, object]) -> dict[str, object]:
+    summary_keys = (
+        "status",
+        "generated_at",
+        "generated_ts",
+        "total_symbols",
+        "chunk_size",
+        "api_calls",
+        "api_calls_per_minute",
+        "duration_seconds",
+        "source",
+    )
+    summary: dict[str, object] = {}
+    for key in summary_keys:
+        if key in payload:
+            summary[key] = payload.get(key)
+    return summary
+
+
+def _snapshot_timeframe_state_name(timeframe_key: str) -> str:
+    return f"market_rankings_snapshot_{timeframe_key}.json"
+
+
+def _snapshot_timeframe_payload_summary(payload: dict[str, object]) -> dict[str, object]:
+    summary = _snapshot_refresh_payload_summary(payload)
+    if "timeframe" in payload:
+        summary["timeframe"] = payload.get("timeframe")
+    return summary
+
+
+def _load_timeframe_snapshot_rows(timeframe_key: str) -> list[dict[str, object]] | None:
+    payload = read_state(_snapshot_timeframe_state_name(timeframe_key), default={})
+    if not isinstance(payload, dict) or not payload:
+        return None
+    if payload.get("status") != "complete":
+        return None
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        return None
+    if not rows:
+        return None
+    ts = payload.get("generated_ts")
+    if isinstance(ts, (int, float)):
+        if time.time() - float(ts) > MARKET_RANKINGS_TIMEFRAME_SNAPSHOT_TTL:
+            return rows if MARKET_RANKINGS_ALLOW_STALE_SNAPSHOTS else None
+    else:
+        return None
+    return rows
+
+
+def _load_snapshot_rankings_latest_rows() -> list[dict[str, object]] | None:
+    payload = read_state(SNAPSHOT_RANKINGS_STATE, default={})
+    if not isinstance(payload, dict) or not payload:
+        return None
+    if payload.get("status") != "complete":
+        return None
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        return None
+    if not rows:
+        return None
+    ts = payload.get("generated_ts")
+    if isinstance(ts, (int, float)):
+        if time.time() - float(ts) > MARKET_RANKINGS_SNAPSHOT_TTL:
+            return rows if MARKET_RANKINGS_ALLOW_STALE_SNAPSHOTS else None
+    else:
+        return None
+    return rows
+
+
+def _snapshot_refresh_meta() -> dict[str, object] | None:
+    latest = read_state(SNAPSHOT_RANKINGS_STATE, default={})
+    progress = read_state(SNAPSHOT_RANKINGS_PROGRESS_STATE, default={})
+    meta: dict[str, object] = {}
+    if isinstance(latest, dict) and latest:
+        meta["latest"] = _snapshot_refresh_payload_summary(latest)
+    if isinstance(progress, dict) and progress:
+        progress_keys = (
+            "status",
+            "started_at",
+            "started_ts",
+            "total_symbols",
+            "chunk_size",
+            "total_chunks",
+            "chunks_completed",
+            "api_calls",
+            "elapsed_seconds",
+            "target_seconds",
+        )
+        if progress.get("status") == "running":
+            meta["progress"] = {key: progress.get(key) for key in progress_keys if key in progress}
+        elif progress.get("status") == "error":
+            error_payload = {key: progress.get(key) for key in progress_keys if key in progress}
+            if "error" in progress:
+                error_payload["error"] = progress.get("error")
+            meta["error"] = error_payload
+    timeframe_meta: dict[str, dict[str, object]] = {}
+    for key in MARKET_RANKINGS_TIMEFRAME_KEYS:
+        payload = read_state(_snapshot_timeframe_state_name(key), default={})
+        if isinstance(payload, dict) and payload:
+            timeframe_meta[key] = _snapshot_timeframe_payload_summary(payload)
+    if timeframe_meta:
+        meta["timeframes"] = timeframe_meta
+    return meta or None
+
+
 def _build_snapshot_rankings(user_id: str | None) -> list[dict[str, object]]:
+    cached_rows = _load_snapshot_rankings_latest_rows()
+    if cached_rows is not None:
+        return cached_rows
+    if MARKET_RANKINGS_BACKGROUND_ONLY:
+        return []
     cache_key = build_cache_key("market-rankings-snapshots", user_id or "anon")
 
     def _load() -> list[dict[str, object]] | None:
-        assets = _normalize_assets(_load_assets_master(user_id))
+        assets = _filter_rankable_assets(_normalize_assets(_load_assets_master(user_id)))
         if not assets:
             return None
         symbols = [asset["symbol"] for asset in assets if asset.get("symbol")]
@@ -446,6 +699,35 @@ def _build_snapshot_rankings(user_id: str | None) -> list[dict[str, object]]:
             except Exception:
                 continue
             volume = _coerce_number((daily_bar or {}).get("v") or (minute_bar or {}).get("v"))
+            dollar_volume = None
+            if volume is not None:
+                dollar_volume = last_price * volume
+            open_price = _coerce_number((daily_bar or {}).get("o"))
+            high_price = _coerce_number((daily_bar or {}).get("h"))
+            low_price = _coerce_number((daily_bar or {}).get("l"))
+            prev_volume = _coerce_number((prev_bar or {}).get("v"))
+            gap_pct = None
+            range_pct = None
+            volume_ratio = None
+            if prev_close not in (None, 0):
+                if open_price is not None:
+                    gap_pct = (open_price / prev_close - 1.0) * 100.0
+                if high_price is not None and low_price is not None:
+                    range_pct = ((high_price - low_price) / prev_close) * 100.0
+            if volume is not None and prev_volume not in (None, 0):
+                volume_ratio = volume / prev_volume
+
+            if not MARKET_RANKINGS_DISABLE_FILTERS:
+                if MARKET_RANKINGS_MIN_PRICE and last_price < MARKET_RANKINGS_MIN_PRICE:
+                    continue
+                if volume is not None and MARKET_RANKINGS_MIN_VOLUME and volume < MARKET_RANKINGS_MIN_VOLUME:
+                    continue
+                if (
+                    dollar_volume is not None
+                    and MARKET_RANKINGS_MIN_DOLLAR_VOLUME
+                    and dollar_volume < MARKET_RANKINGS_MIN_DOLLAR_VOLUME
+                ):
+                    continue
 
             rows.append(
                 {
@@ -456,12 +738,242 @@ def _build_snapshot_rankings(user_id: str | None) -> list[dict[str, object]]:
                     "change_pct_day": change_pct,
                     "change_pct_period": change_pct,
                     "volume": volume,
+                    "dollar_volume": dollar_volume,
+                    "gap_pct": gap_pct,
+                    "range_pct": range_pct,
+                    "volume_ratio": volume_ratio,
                 }
             )
         return rows or None
 
     result = cache_memoize(cache_key, _load, MARKET_RANKINGS_CACHE_TTL)
     return result if isinstance(result, list) else []
+
+
+def refresh_snapshot_rankings(*, user_id: str | None = None) -> dict[str, object]:
+    lock = InstanceLock(resolve_state_dir() / SNAPSHOT_RANKINGS_LOCK)
+    if not lock.acquire():
+        return {"status": "locked"}
+    started_ts = time.time()
+    started_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    progress_payload = {
+        "status": "running",
+        "started_at": started_at,
+        "started_ts": started_ts,
+    }
+    write_state(SNAPSHOT_RANKINGS_PROGRESS_STATE, progress_payload)
+
+    try:
+        key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+        if not (key_id and secret):
+            error_payload = {
+                "status": "error",
+                "started_at": started_at,
+                "started_ts": started_ts,
+                "error": "missing_credentials",
+            }
+            write_state(SNAPSHOT_RANKINGS_PROGRESS_STATE, error_payload)
+            return error_payload
+
+        assets = _filter_rankable_assets(_normalize_assets(_load_assets_master(user_id)))
+        asset_map = {asset.get("symbol"): asset for asset in assets if asset.get("symbol")}
+        symbols = list(asset_map.keys())
+        total_symbols = len(symbols)
+        chunk_size = min(200, max(1, MARKET_RANKINGS_SNAPSHOT_CHUNK_SIZE))
+        chunks = list(_iter_chunks(symbols, chunk_size))
+        timeframes = [TIMEFRAMES[key] for key in MARKET_RANKINGS_TIMEFRAME_KEYS if key in TIMEFRAMES]
+        timeframe_batches = 1 if timeframes else 0
+        total_chunks = len(chunks) * (1 + timeframe_batches)
+        rows: list[dict[str, object]] = []
+        api_calls = 0
+        completed_chunks = 0
+
+        target_seconds = float(MARKET_RANKINGS_REFRESH_SECONDS - MARKET_RANKINGS_REFRESH_MARGIN_SECONDS)
+        if total_chunks <= 0:
+            target_seconds = 0.0
+        else:
+            target_seconds = max(0.0, target_seconds)
+
+        def _update_progress() -> None:
+            elapsed = time.time() - started_ts
+            progress_payload = {
+                "status": "running",
+                "started_at": started_at,
+                "started_ts": started_ts,
+                "total_symbols": total_symbols,
+                "chunk_size": chunk_size,
+                "total_chunks": total_chunks,
+                "chunks_completed": completed_chunks,
+                "api_calls": api_calls,
+                "elapsed_seconds": round(elapsed, 2),
+                "target_seconds": target_seconds,
+            }
+            write_state(SNAPSHOT_RANKINGS_PROGRESS_STATE, progress_payload)
+
+            if total_chunks > 0 and target_seconds > 0 and completed_chunks < total_chunks:
+                target_elapsed = target_seconds * completed_chunks / total_chunks
+                sleep_for = target_elapsed - elapsed
+                if sleep_for > 0:
+                    time.sleep(sleep_for)
+
+        for chunk in chunks:
+            snapshots = fetch_stock_snapshots(
+                chunk,
+                feed=DEFAULT_FEED,
+                user_id=user_id,
+                timeout=MARKET_REQUEST_TIMEOUT,
+            )
+            api_calls += 1
+            if isinstance(snapshots, dict):
+                for symbol in chunk:
+                    asset = asset_map.get(symbol)
+                    if not asset:
+                        continue
+                    snapshot = snapshots.get(symbol)
+                    if not isinstance(snapshot, dict):
+                        continue
+                    latest_trade = snapshot.get("latestTrade") or snapshot.get("latest_trade") or {}
+                    latest_quote = snapshot.get("latestQuote") or snapshot.get("latest_quote") or {}
+                    daily_bar = snapshot.get("dailyBar") or snapshot.get("daily_bar") or {}
+                    minute_bar = snapshot.get("minuteBar") or snapshot.get("minute_bar") or {}
+                    prev_bar = snapshot.get("prevDailyBar") or snapshot.get("prev_daily_bar") or {}
+
+                    last_price = _coerce_number(
+                        (latest_trade or {}).get("p")
+                        or (minute_bar or {}).get("c")
+                        or (daily_bar or {}).get("c")
+                        or (latest_quote or {}).get("ap")
+                        or (latest_quote or {}).get("bp")
+                    )
+                    prev_close = _coerce_number((prev_bar or {}).get("c"))
+                    if last_price is None or prev_close in (None, 0):
+                        continue
+                    try:
+                        change_pct = (last_price / prev_close - 1.0) * 100.0
+                    except Exception:
+                        continue
+                    volume = _coerce_number((daily_bar or {}).get("v") or (minute_bar or {}).get("v"))
+                    dollar_volume = None
+                    if volume is not None:
+                        dollar_volume = last_price * volume
+                    open_price = _coerce_number((daily_bar or {}).get("o"))
+                    high_price = _coerce_number((daily_bar or {}).get("h"))
+                    low_price = _coerce_number((daily_bar or {}).get("l"))
+                    prev_volume = _coerce_number((prev_bar or {}).get("v"))
+                    gap_pct = None
+                    range_pct = None
+                    volume_ratio = None
+                    if prev_close not in (None, 0):
+                        if open_price is not None:
+                            gap_pct = (open_price / prev_close - 1.0) * 100.0
+                        if high_price is not None and low_price is not None:
+                            range_pct = ((high_price - low_price) / prev_close) * 100.0
+                    if volume is not None and prev_volume not in (None, 0):
+                        volume_ratio = volume / prev_volume
+
+                    if not MARKET_RANKINGS_DISABLE_FILTERS:
+                        if MARKET_RANKINGS_MIN_PRICE and last_price < MARKET_RANKINGS_MIN_PRICE:
+                            continue
+                        if volume is not None and MARKET_RANKINGS_MIN_VOLUME and volume < MARKET_RANKINGS_MIN_VOLUME:
+                            continue
+                        if (
+                            dollar_volume is not None
+                            and MARKET_RANKINGS_MIN_DOLLAR_VOLUME
+                            and dollar_volume < MARKET_RANKINGS_MIN_DOLLAR_VOLUME
+                        ):
+                            continue
+
+                    rows.append(
+                        {
+                        "symbol": symbol,
+                        "name": asset.get("name") or "",
+                        "exchange": asset.get("exchange") or "",
+                        "price": last_price,
+                        "change_pct_day": change_pct,
+                        "change_pct_period": change_pct,
+                        "volume": volume,
+                        "dollar_volume": dollar_volume,
+                        "gap_pct": gap_pct,
+                        "range_pct": range_pct,
+                        "volume_ratio": volume_ratio,
+                        }
+                    )
+
+            completed_chunks += 1
+            _update_progress()
+
+        if timeframes:
+            timeframe_rows_map: dict[str, list[dict[str, object]]] = {tf.key: [] for tf in timeframes}
+            timeframe_started = time.time()
+            timeframe_error: str | None = None
+            timeframe_api_calls = 0
+            max_timeframe = max(timeframes, key=lambda item: _daily_window_length(item) or 0)
+            daily_timeframe = _resolve_daily_timeframe(max_timeframe)
+            try:
+                for chunk in chunks:
+                    series_map, _source = _download_history(chunk, daily_timeframe, user_id=user_id)
+                    api_calls += 1
+                    timeframe_api_calls += 1
+                    if series_map:
+                        for timeframe in timeframes:
+                            timeframe_rows_map[timeframe.key].extend(_rank_symbols_daily(series_map, timeframe))
+                    completed_chunks += 1
+                    _update_progress()
+            except Exception as exc:
+                timeframe_error = str(exc)
+
+            duration = time.time() - timeframe_started
+            for timeframe in timeframes:
+                timeframe_rows = timeframe_rows_map.get(timeframe.key, [])
+                if timeframe_rows:
+                    timeframe_rows.sort(key=lambda item: item.get("change_pct_period") or 0, reverse=True)
+                timeframe_payload: dict[str, object] = {
+                    "status": "error" if timeframe_error else "complete",
+                    "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+                    "generated_ts": time.time(),
+                    "source": "alpaca",
+                    "timeframe": timeframe.key,
+                    "total_symbols": total_symbols,
+                    "chunk_size": chunk_size,
+                    "api_calls": timeframe_api_calls,
+                    "duration_seconds": round(duration, 2),
+                    "rows": timeframe_rows,
+                }
+                if timeframe_error:
+                    timeframe_payload["error"] = timeframe_error
+                write_state(_snapshot_timeframe_state_name(timeframe.key), timeframe_payload)
+
+        duration_seconds = time.time() - started_ts
+        api_calls_per_minute = None
+        if duration_seconds > 0:
+            api_calls_per_minute = api_calls / (duration_seconds / 60.0)
+
+        payload = {
+            "status": "complete",
+            "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            "generated_ts": time.time(),
+            "source": "alpaca",
+            "total_symbols": total_symbols,
+            "chunk_size": chunk_size,
+            "api_calls": api_calls,
+            "api_calls_per_minute": api_calls_per_minute,
+            "duration_seconds": round(duration_seconds, 2),
+            "rows": rows,
+        }
+        write_state(SNAPSHOT_RANKINGS_STATE, payload)
+        write_state(SNAPSHOT_RANKINGS_PROGRESS_STATE, _snapshot_refresh_payload_summary(payload))
+        return payload
+    except Exception as exc:
+        error_payload = {
+            "status": "error",
+            "started_at": started_at,
+            "started_ts": started_ts,
+            "error": str(exc),
+        }
+        write_state(SNAPSHOT_RANKINGS_PROGRESS_STATE, error_payload)
+        return error_payload
+    finally:
+        lock.release()
 
 
 def _load_universe_ranked() -> list[dict[str, object]]:
@@ -479,6 +991,7 @@ def _load_universe_ranked() -> list[dict[str, object]]:
         price = _coerce_number(entry.get("price"))
         change_pct = _coerce_number(entry.get("change_pct"))
         volume = _coerce_number(entry.get("volume"))
+        dollar_volume = _coerce_number(entry.get("dollar_volume"))
         if price is None:
             continue
         rows.append(
@@ -488,6 +1001,7 @@ def _load_universe_ranked() -> list[dict[str, object]]:
                 "change_pct_day": change_pct,
                 "change_pct_period": change_pct,
                 "volume": volume,
+                "dollar_volume": dollar_volume,
             }
         )
     return rows
@@ -499,7 +1013,23 @@ def _resolve_universe_rankings(user_id: str | None) -> tuple[list[dict[str, obje
         return rankings, "alpaca"
     rankings = _load_universe_ranked()
     if rankings:
-        return rankings, "cache"
+        symbols = {item.get("symbol") for item in rankings if isinstance(item, dict)}
+        meta_map = _build_asset_meta_map(user_id=user_id, symbols={sym for sym in symbols if isinstance(sym, str)})
+        filtered: list[dict[str, object]] = []
+        for entry in rankings:
+            if not isinstance(entry, dict):
+                continue
+            symbol = str(entry.get("symbol") or "").upper()
+            if not symbol or _is_excluded_symbol(symbol):
+                continue
+            meta = meta_map.get(symbol)
+            if meta and not _is_rankable_asset(meta):
+                continue
+            if not _passes_rank_filters(entry):
+                continue
+            filtered.append(entry)
+        if filtered:
+            return filtered, "cache"
     return [], "unknown"
 
 
@@ -510,6 +1040,27 @@ def _extract_change_value(entry: dict[str, object]) -> float | None:
     return value
 
 
+def _passes_rank_filters(entry: dict[str, object]) -> bool:
+    if MARKET_RANKINGS_DISABLE_FILTERS:
+        return True
+    symbol = str(entry.get("symbol") or "").upper()
+    if symbol and _is_excluded_symbol(symbol):
+        return False
+    price = _coerce_number(entry.get("price"))
+    if price is not None and MARKET_RANKINGS_MIN_PRICE and price < MARKET_RANKINGS_MIN_PRICE:
+        return False
+    volume = _coerce_number(entry.get("volume"))
+    dollar_volume = _coerce_number(entry.get("dollar_volume"))
+    if dollar_volume is None and price is not None and volume is not None:
+        dollar_volume = price * volume
+        entry["dollar_volume"] = dollar_volume
+    if volume is not None and MARKET_RANKINGS_MIN_VOLUME and volume < MARKET_RANKINGS_MIN_VOLUME:
+        return False
+    if dollar_volume is not None and MARKET_RANKINGS_MIN_DOLLAR_VOLUME and dollar_volume < MARKET_RANKINGS_MIN_DOLLAR_VOLUME:
+        return False
+    return True
+
+
 def _split_rankings(
     rows: list[dict[str, object]],
     limit: int,
@@ -517,6 +1068,8 @@ def _split_rankings(
     ranked: list[tuple[float, dict[str, object]]] = []
     for entry in rows:
         if not isinstance(entry, dict):
+            continue
+        if not _passes_rank_filters(entry):
             continue
         change_value = _extract_change_value(entry)
         if change_value is None:
@@ -528,10 +1081,49 @@ def _split_rankings(
     return gainers, losers
 
 
+def _sort_rows_by_metric(
+    rows: list[dict[str, object]],
+    metric_key: str,
+    *,
+    reverse: bool = True,
+    predicate: Callable[[float], bool] | None = None,
+) -> list[dict[str, object]]:
+    ranked: list[tuple[float, dict[str, object]]] = []
+    for entry in rows:
+        if not isinstance(entry, dict):
+            continue
+        value = _coerce_number(entry.get(metric_key))
+        if value is None:
+            continue
+        if predicate and not predicate(value):
+            continue
+        ranked.append((value, entry))
+    ranked.sort(key=lambda item: item[0], reverse=reverse)
+    return [row for _value, row in ranked]
+
+
+def _paginate_items(
+    items: list[dict[str, object]],
+    *,
+    offset: int,
+    limit: int,
+) -> tuple[list[dict[str, object]], int, int | None]:
+    total = len(items)
+    if total == 0:
+        return [], 0, None
+    safe_offset = min(max(offset, 0), total)
+    safe_limit = max(1, limit)
+    end = min(safe_offset + safe_limit, total)
+    page_items = items[safe_offset:end]
+    next_offset = end if end < total else None
+    return page_items, total, next_offset
+
+
 def _rank_symbols_light(
     series_map: dict[str, pd.Series],
     timeframe: Timeframe,
 ) -> list[dict[str, object]]:
+    label = str(timeframe.label)
     ranked: list[dict[str, object]] = []
     for sym, series in series_map.items():
         window = _slice_series(series, timeframe)
@@ -553,7 +1145,70 @@ def _rank_symbols_light(
                 "price": round(end_price, 2),
                 "change_pct_period": round(period_change, 2),
                 "change_pct_day": round(day_change, 2),
-                "period_label": timeframe.label,
+                "period_label": label,
+                "period_label_en": timeframe.label_en,
+            }
+        )
+    ranked.sort(key=lambda item: item.get("change_pct_period") or 0, reverse=True)
+    return ranked
+
+
+def _resolve_daily_timeframe(timeframe: Timeframe) -> Timeframe:
+    if timeframe.interval == "1d":
+        return timeframe
+    return Timeframe(
+        timeframe.key,
+        timeframe.label,
+        timeframe.label_en,
+        timeframe.period,
+        "1d",
+    )
+
+
+def _daily_window_length(timeframe: Timeframe) -> int | None:
+    if timeframe.key == "5d":
+        return MARKET_RANKINGS_DAILY_WINDOW_5D
+    if timeframe.key == "1mo":
+        return MARKET_RANKINGS_DAILY_WINDOW_1MO
+    if timeframe.key == "6mo":
+        return MARKET_RANKINGS_DAILY_WINDOW_6MO
+    return None
+
+
+def _rank_symbols_daily(
+    series_map: dict[str, pd.Series],
+    timeframe: Timeframe,
+) -> list[dict[str, object]]:
+    label = str(timeframe.label)
+    ranked: list[dict[str, object]] = []
+    window_len = _daily_window_length(timeframe)
+    for sym, series in series_map.items():
+        window = series.dropna()
+        if window.empty:
+            continue
+        if window_len:
+            window = window.tail(window_len)
+        else:
+            window = _slice_series(window, timeframe)
+        if len(window) < 2:
+            continue
+        try:
+            start_price = float(window.iloc[0])
+            end_price = float(window.iloc[-1])
+            prev_price = float(window.iloc[-2])
+        except Exception:
+            continue
+        if not start_price or not prev_price:
+            continue
+        period_change = ((end_price / start_price) - 1.0) * 100.0
+        day_change = ((end_price / prev_price) - 1.0) * 100.0
+        ranked.append(
+            {
+                "symbol": sym,
+                "price": round(end_price, 2),
+                "change_pct_period": round(period_change, 2),
+                "change_pct_day": round(day_change, 2),
+                "period_label": label,
                 "period_label_en": timeframe.label_en,
             }
         )
@@ -579,12 +1234,28 @@ def _fetch_history_chunked(
 ) -> tuple[dict[str, pd.Series], str]:
     series_map: dict[str, pd.Series] = {}
     source = "unknown"
-    for chunk in _iter_chunks(symbols, MARKET_UNIVERSE_CHUNK_SIZE):
-        history, chunk_source = _download_history(chunk, timeframe, user_id=user_id)
-        if history:
-            series_map.update(history)
-        if chunk_source and chunk_source != "unknown":
-            source = chunk_source
+    chunks = list(_iter_chunks(symbols, MARKET_UNIVERSE_CHUNK_SIZE))
+    if not chunks:
+        return {}, "unknown"
+    if MARKET_UNIVERSE_CHUNK_WORKERS <= 1 or len(chunks) == 1:
+        for chunk in chunks:
+            history, chunk_source = _download_history(chunk, timeframe, user_id=user_id)
+            if history:
+                series_map.update(history)
+            if chunk_source and chunk_source != "unknown":
+                source = chunk_source
+        return series_map, source
+    with ThreadPoolExecutor(max_workers=MARKET_UNIVERSE_CHUNK_WORKERS) as executor:
+        futures = [executor.submit(_download_history, chunk, timeframe, user_id=user_id) for chunk in chunks]
+        for future in futures:
+            try:
+                history, chunk_source = future.result()
+            except Exception:
+                continue
+            if history:
+                series_map.update(history)
+            if chunk_source and chunk_source != "unknown":
+                source = chunk_source
     return series_map, source
 
 
@@ -600,10 +1271,10 @@ def _resolve_universe_timeframe_rankings(
                 entry.setdefault("period_label", timeframe.label)
                 entry.setdefault("period_label_en", timeframe.label_en)
         return rows, source
-    cache_key = build_cache_key("market-universe-timeframe", timeframe.key, user_id or "anon")
+    cache_key = build_cache_key("market-universe-timeframe", "alpaca", timeframe.key, user_id or "anon")
 
     def _load():
-        assets = _normalize_assets(_load_assets_master(user_id))
+        assets = _filter_rankable_assets(_normalize_assets(_load_assets_master(user_id)))
         if not assets:
             return {"rows": [], "source": "unknown"}
         symbols = [asset["symbol"] for asset in assets if asset.get("symbol")]
@@ -754,30 +1425,18 @@ def _format_percent(value: object) -> str | None:
 def _fetch_company_profile(symbol: str, *, user_id: str | None = None) -> dict[str, object]:
     if not symbol:
         return {}
-    if yf is None:
-        return {}
-
-    cache_key = build_cache_key("market-profile", symbol.upper())
+    cache_key = build_cache_key("market-profile", "alpaca", symbol.upper())
 
     def _download() -> dict[str, object]:
-        try:
-            ticker = yf.Ticker(symbol)
-            info = ticker.info or {}
-        except Exception:
-            info = {}
-        if not info:
+        meta_map = _build_asset_meta_map(user_id=user_id, symbols={symbol.upper()})
+        meta = meta_map.get(symbol.upper())
+        if not meta:
             return {}
+        name = meta.get("name") or symbol
         return {
-            "name": info.get("longName") or info.get("shortName") or symbol,
-            "summary": info.get("longBusinessSummary") or "",
-            "sector": info.get("sector") or "",
-            "industry": info.get("industry") or "",
-            "market_cap": _format_compact_number(info.get("marketCap")),
-            "pe": _coerce_number(info.get("trailingPE") or info.get("forwardPE")),
-            "pb": _coerce_number(info.get("priceToBook")),
-            "beta": _coerce_number(info.get("beta")),
-            "employees": info.get("fullTimeEmployees"),
-            "dividend_yield": _format_percent(info.get("dividendYield")),
+            "name": name,
+            "shortName": name,
+            "exchange": meta.get("exchange") or "",
         }
 
     result = cache_memoize(cache_key, _download, MARKET_PROFILE_CACHE_TTL)
@@ -805,11 +1464,18 @@ def _normalize_news_items(items: list[dict[str, object]]) -> list[dict[str, str]
     for entry in items:
         if not isinstance(entry, dict):
             continue
-        title = entry.get("headline") or entry.get("title") or entry.get("summary") or ""
+        title = entry.get("headline") or entry.get("title") or entry.get("summary") or entry.get("content") or ""
         url = entry.get("url") or entry.get("link") or entry.get("article_url") or ""
         source = entry.get("source") or entry.get("publisher") or entry.get("author") or ""
-        raw_time = entry.get("created_at") or entry.get("createdAt") or entry.get("time") or entry.get("published_at")
-        snippet = entry.get("summary") or entry.get("description") or ""
+        raw_time = (
+            entry.get("created_at")
+            or entry.get("createdAt")
+            or entry.get("time")
+            or entry.get("published_at")
+            or entry.get("published")
+            or entry.get("providerPublishTime")
+        )
+        snippet = entry.get("summary") or entry.get("description") or entry.get("content") or ""
         normalized.append(
             {
                 "title": str(title).strip(),
@@ -822,25 +1488,59 @@ def _normalize_news_items(items: list[dict[str, object]]) -> list[dict[str, str]
     return normalized
 
 
+def _infer_news_symbols(symbol: str, *, user_id: str | None = None) -> list[str]:
+    symbol = (symbol or "").strip().upper()
+    if not symbol:
+        return []
+    symbols = [symbol]
+    meta_map = _build_asset_meta_map(user_id=user_id, symbols={symbol})
+    name = str(meta_map.get(symbol, {}).get("name") or "").lower()
+    if any(key in name for key in ("warrant", "unit")):
+        for suffix in ("WS", "W", "U"):
+            if symbol.endswith(suffix) and len(symbol) > len(suffix):
+                base = symbol[: -len(suffix)].rstrip(".-")
+                if base and base not in symbols:
+                    symbols.append(base)
+                break
+    return symbols
+
+
+def _fetch_yfinance_news(symbol: str, *, limit: int) -> list[dict[str, str]]:
+    try:
+        import yfinance as yf  # type: ignore
+    except Exception:
+        return []
+    try:
+        ticker = yf.Ticker(symbol)
+        items = ticker.news or []
+    except Exception:
+        return []
+    if not isinstance(items, list):
+        return []
+    normalized = _normalize_news_items([entry for entry in items if isinstance(entry, dict)])
+    return normalized[:limit]
+
+
 def _fetch_symbol_news(symbol: str, *, user_id: str | None = None, limit: int = 6) -> list[dict[str, str]]:
     if not symbol:
         return []
-    cache_key = build_cache_key("market-news", symbol.upper())
+    cache_key = build_cache_key("market-news", "alpaca", symbol.upper())
 
-    def _download() -> list[dict[str, str]]:
-        items = fetch_news(symbols=[symbol], limit=limit, user_id=user_id)
-        if not items and yf is not None:
-            try:
-                ticker = yf.Ticker(symbol)
-                items = ticker.news or []
-            except Exception:
-                items = []
-        if not isinstance(items, list):
-            return []
-        return _normalize_news_items(items)[:limit]
+    cached = cache_get_object(cache_key)
+    if isinstance(cached, list) and cached:
+        return cached
 
-    result = cache_memoize(cache_key, _download, MARKET_NEWS_CACHE_TTL)
-    return result if isinstance(result, list) else []
+    symbols = _infer_news_symbols(symbol, user_id=user_id)
+    items = fetch_news(symbols=symbols, limit=limit, user_id=user_id)
+    normalized: list[dict[str, str]] = []
+    if isinstance(items, list) and items:
+        normalized = _normalize_news_items(items)[:limit]
+    if not normalized:
+        fallback_symbol = symbols[-1] if symbols else symbol
+        normalized = _fetch_yfinance_news(fallback_symbol, limit=limit)
+    if normalized:
+        cache_set_object(cache_key, normalized, MARKET_NEWS_CACHE_TTL)
+    return normalized
 
 
 def _build_ai_summary(
@@ -1076,7 +1776,7 @@ def market_insights(request: HttpRequest) -> HttpResponse:
 def market_insights_data(request: HttpRequest) -> JsonResponse:
     request_id = ensure_request_id(request)
     key_id, secret = resolve_alpaca_credentials(user=request.user)
-    if yf is None and not (key_id and secret):
+    if not (key_id and secret):
         record_metric(
             "market.insights.error",
             request_id=request_id,
@@ -1102,6 +1802,9 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         params = raw.dict() if hasattr(raw, "dict") else dict(raw)
 
     resolved = _resolve_market_params(params)
+    page_offset = _parse_offset(params.get("offset"))
+    page_size = resolved.limit
+    page_stop = max(page_size + 1, page_offset + page_size + 1)
     list_type = _resolve_list_type(params.get("list") or params.get("list_type"))
     detail_mode = str(params.get("detail") or "").strip().lower() in {"1", "true", "yes"}
     detail_symbol = _normalize_query(params.get("symbol") or params.get("detail_symbol"))
@@ -1381,6 +2084,8 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
     timeframe_source = "unknown"
 
     if restrict_to_query:
+        page_offset = 0
+        page_stop = page_size
         future = None
         try:
             with track_latency(
@@ -1441,61 +2146,162 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                 list_items = losers
                 active_list_type = "losers"
         else:
-            gainers = [entry for entry in ranked if entry["change_pct_period"] >= 0][: resolved.limit]
-            losers = [entry for entry in ranked if entry["change_pct_period"] < 0][: resolved.limit]
+            gainers = [entry for entry in ranked if entry["change_pct_period"] >= 0][: page_stop]
+            losers = [entry for entry in ranked if entry["change_pct_period"] < 0][: page_stop]
             list_items = losers if list_type == "losers" else gainers
     else:
         user_id = str(request.user.id) if request.user.is_authenticated else None
         used_timeframe_rankings = False
+        snapshot_rankings: list[dict[str, object]] | None = None
+        timeframe_snapshot: list[dict[str, object]] | None = None
         if list_type in {"gainers", "losers"}:
-            if timeframe_rankings is None:
-                timeframe_rankings, timeframe_source = _resolve_universe_timeframe_rankings(
-                    resolved.timeframe,
+            if resolved.timeframe.key == "1d":
+                movers_limit = min(50, max(page_stop, page_size))
+                movers = market_data.fetch_market_movers(
+                    limit=movers_limit,
                     user_id=user_id,
+                    timeout=MARKET_REQUEST_TIMEOUT,
                 )
-            if timeframe_rankings:
-                gainers, losers = _split_rankings(timeframe_rankings, resolved.limit)
+                raw_gainers = movers.get("gainers", []) if movers else []
+                raw_losers = movers.get("losers", []) if movers else []
+                gainers = [
+                    entry for entry in raw_gainers if isinstance(entry, dict) and _passes_rank_filters(entry)
+                ][:page_stop]
+                losers = [entry for entry in raw_losers if isinstance(entry, dict) and _passes_rank_filters(entry)][
+                    :page_stop
+                ]
                 if gainers or losers:
                     list_items = losers if list_type == "losers" else gainers
-                    data_source = timeframe_source or data_source
+                    data_source = "alpaca"
                     ranking_timeframe = resolved.timeframe
                     used_timeframe_rankings = True
 
+            if not used_timeframe_rankings and resolved.timeframe.key != "1d":
+                timeframe_snapshot = _load_timeframe_snapshot_rows(resolved.timeframe.key)
+                if timeframe_snapshot:
+                    gainers, losers = _split_rankings(timeframe_snapshot, page_stop)
+                    if gainers or losers:
+                        list_items = losers if list_type == "losers" else gainers
+                        data_source = "alpaca"
+                        ranking_timeframe = resolved.timeframe
+                        used_timeframe_rankings = True
+                elif MARKET_RANKINGS_BACKGROUND_ONLY:
+                    if snapshot_rankings is None:
+                        snapshot_rankings = _build_snapshot_rankings(user_id)
+                    if snapshot_rankings:
+                        gainers, losers = _split_rankings(snapshot_rankings, page_stop)
+                        if gainers or losers:
+                            list_items = losers if list_type == "losers" else gainers
+                            data_source = "alpaca"
+                            ranking_timeframe = TIMEFRAMES["1d"]
+                            used_timeframe_rankings = True
+
+            if not used_timeframe_rankings and resolved.timeframe.key == "1d":
+                if snapshot_rankings is None:
+                    snapshot_rankings = _build_snapshot_rankings(user_id)
+                if snapshot_rankings:
+                    gainers, losers = _split_rankings(snapshot_rankings, page_stop)
+                    if gainers or losers:
+                        list_items = losers if list_type == "losers" else gainers
+                        data_source = "alpaca"
+                        ranking_timeframe = resolved.timeframe
+                        used_timeframe_rankings = True
+
+            if not used_timeframe_rankings:
+                if timeframe_rankings is None and not MARKET_RANKINGS_BACKGROUND_ONLY:
+                    timeframe_rankings, timeframe_source = _resolve_universe_timeframe_rankings(
+                        resolved.timeframe,
+                        user_id=user_id,
+                    )
+                if timeframe_rankings:
+                    gainers, losers = _split_rankings(timeframe_rankings, page_stop)
+                    if gainers or losers:
+                        list_items = losers if list_type == "losers" else gainers
+                        data_source = timeframe_source or data_source
+                        ranking_timeframe = resolved.timeframe
+                        used_timeframe_rankings = True
+
         if not used_timeframe_rankings:
-            if list_type in {"gainers", "losers"}:
-                movers = market_data.fetch_market_movers(
-                    limit=resolved.limit,
-                    user_id=str(request.user.id),
-                    timeout=MARKET_REQUEST_TIMEOUT,
-                )
-                gainers = movers.get("gainers", []) if movers else []
-                losers = movers.get("losers", []) if movers else []
-                list_items = losers if list_type == "losers" else gainers
-                data_source = "alpaca" if list_items else "unknown"
-            else:
-                list_items = market_data.fetch_most_actives(
-                    by="volume",
-                    limit=resolved.limit,
-                    user_id=str(request.user.id),
-                    timeout=MARKET_REQUEST_TIMEOUT,
-                )
-                most_actives = list_items
-                volume_label = _("成交量")
-                for entry in list_items:
-                    if isinstance(entry, dict):
-                        entry.setdefault("period_label", volume_label)
-                        entry.setdefault("period_label_en", "Volume")
-                data_source = "alpaca" if list_items else "unknown"
+            if list_type == "most_active":
+                if resolved.timeframe.key == "1d":
+                    active_limit = min(100, max(page_stop, page_size))
+                    list_items = market_data.fetch_most_actives(
+                        by="volume",
+                        limit=active_limit,
+                        user_id=user_id,
+                        timeout=MARKET_REQUEST_TIMEOUT,
+                    )
+                    list_items = [
+                        entry for entry in list_items if isinstance(entry, dict) and _passes_rank_filters(entry)
+                    ][:page_stop]
+                    most_actives = list_items
+                    volume_label = _("成交量")
+                    for entry in list_items:
+                        if isinstance(entry, dict):
+                            entry.setdefault("period_label", volume_label)
+                            entry.setdefault("period_label_en", "Volume")
+                    data_source = "alpaca" if list_items else "unknown"
+                if not list_items:
+                    if snapshot_rankings is None:
+                        snapshot_rankings = _build_snapshot_rankings(user_id)
+                    if snapshot_rankings:
+                        list_items = _sort_rows_by_metric(
+                            snapshot_rankings,
+                            "volume",
+                            reverse=True,
+                            predicate=lambda value: value > 0,
+                        )[:page_stop]
+                        most_actives = list_items
+                        volume_label = _("成交量")
+                        for entry in list_items:
+                            if isinstance(entry, dict):
+                                entry.setdefault("period_label", volume_label)
+                                entry.setdefault("period_label_en", "Volume")
+                        data_source = "alpaca" if list_items else "unknown"
+                    elif not MARKET_RANKINGS_BACKGROUND_ONLY:
+                        list_items = market_data.fetch_most_actives(
+                            by="volume",
+                            limit=page_stop,
+                            user_id=user_id,
+                            timeout=MARKET_REQUEST_TIMEOUT,
+                        )
+                        list_items = [
+                            entry for entry in list_items if isinstance(entry, dict) and _passes_rank_filters(entry)
+                        ]
+                        most_actives = list_items
+                        volume_label = _("成交量")
+                        for entry in list_items:
+                            if isinstance(entry, dict):
+                                entry.setdefault("period_label", volume_label)
+                                entry.setdefault("period_label_en", "Volume")
+                        data_source = "alpaca" if list_items else "unknown"
+            elif list_type == "top_turnover":
+                if snapshot_rankings is None:
+                    snapshot_rankings = _build_snapshot_rankings(user_id)
+                source_rows = snapshot_rankings
+                if not snapshot_rankings:
+                    if universe_rankings is None:
+                        universe_rankings, universe_source = _resolve_universe_rankings(user_id)
+                    source_rows = universe_rankings
+                    data_source = universe_source or data_source
+                else:
+                    data_source = "alpaca" if snapshot_rankings else data_source
+                list_items = _sort_rows_by_metric(
+                    source_rows,
+                    "dollar_volume",
+                    reverse=True,
+                    predicate=lambda value: value > 0,
+                )[:page_stop]
 
     if list_type in {"gainers", "losers"} and not list_items:
         user_id = str(request.user.id) if request.user.is_authenticated else None
-        if timeframe_rankings is None:
+        if timeframe_rankings is None and not MARKET_RANKINGS_BACKGROUND_ONLY:
             timeframe_rankings, timeframe_source = _resolve_universe_timeframe_rankings(
                 resolved.timeframe,
                 user_id=user_id,
             )
         if timeframe_rankings:
-            gainers, losers = _split_rankings(timeframe_rankings, resolved.limit)
+            gainers, losers = _split_rankings(timeframe_rankings, page_stop)
             if gainers or losers:
                 list_items = losers if list_type == "losers" else gainers
                 data_source = timeframe_source or data_source
@@ -1506,23 +2312,23 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
             if universe_rankings is None:
                 universe_rankings, universe_source = _resolve_universe_rankings(user_id)
             if universe_rankings:
-                gainers, losers = _split_rankings(universe_rankings, resolved.limit)
+                gainers, losers = _split_rankings(universe_rankings, page_stop)
                 if gainers or losers:
                     list_items = losers if list_type == "losers" else gainers
                     data_source = universe_source or data_source
                     if ranking_timeframe is None:
                         ranking_timeframe = TIMEFRAMES["1d"]
 
-        if not list_items:
+        if not list_items and not MARKET_RANKINGS_BACKGROUND_ONLY:
             series_map, fallback_source = _fetch_history(
                 TOP_SYMBOLS,
                 resolved.timeframe,
                 user_id=str(request.user.id),
             )
-            ranked = _rank_symbols(series_map, resolved.timeframe, limit=resolved.limit)
+            ranked = _rank_symbols(series_map, resolved.timeframe, limit=page_stop)
             if ranked:
-                gainers = [entry for entry in ranked if entry["change_pct_period"] >= 0][: resolved.limit]
-                losers = [entry for entry in ranked if entry["change_pct_period"] < 0][: resolved.limit]
+                gainers = [entry for entry in ranked if entry["change_pct_period"] >= 0][: page_stop]
+                losers = [entry for entry in ranked if entry["change_pct_period"] < 0][: page_stop]
                 list_items = losers if list_type == "losers" else gainers
                 data_source = fallback_source or data_source
                 if ranking_timeframe is None:
@@ -1538,12 +2344,14 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
             for entry in universe_rankings:
                 if not isinstance(entry, dict):
                     continue
+                if not _passes_rank_filters(entry):
+                    continue
                 volume_value = _coerce_number(entry.get("volume"))
                 if volume_value is None:
                     continue
                 ranked_by_volume.append((volume_value, entry))
             ranked_by_volume.sort(key=lambda item: item[0], reverse=True)
-            most_actives = [row for _volume, row in ranked_by_volume][: resolved.limit]
+            most_actives = [row for _volume, row in ranked_by_volume][: page_stop]
             list_items = most_actives
             volume_label = _("成交量")
             for entry in list_items:
@@ -1555,7 +2363,7 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
     suggestions = _build_suggestions(resolved.query)
 
     meta_symbols: set[str] = set()
-    for collection in (list_items, gainers, losers):
+    for collection in (list_items, gainers, losers, most_actives):
         for item in collection:
             if isinstance(item, dict) and item.get("symbol"):
                 meta_symbols.add(str(item.get("symbol")).upper())
@@ -1563,6 +2371,31 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
     _attach_asset_meta(list_items, meta_map=meta_map)
     _attach_asset_meta(gainers, meta_map=meta_map)
     _attach_asset_meta(losers, meta_map=meta_map)
+    _attach_asset_meta(most_actives, meta_map=meta_map)
+    list_items = _filter_by_meta(list_items, meta_map=meta_map)
+    gainers = _filter_by_meta(gainers, meta_map=meta_map)
+    losers = _filter_by_meta(losers, meta_map=meta_map)
+    most_actives = _filter_by_meta(most_actives, meta_map=meta_map)
+    if active_list_type == "losers":
+        list_items = losers
+    elif active_list_type == "most_active":
+        list_items = most_actives
+    elif active_list_type == "gainers":
+        list_items = gainers
+
+    page_items, total_items, next_offset = _paginate_items(
+        list_items,
+        offset=page_offset,
+        limit=page_size,
+    )
+    list_items = page_items
+    has_more = next_offset is not None
+    if active_list_type == "gainers":
+        gainers = list_items
+    elif active_list_type == "losers":
+        losers = list_items
+    elif active_list_type == "most_active":
+        most_actives = list_items
 
     response = {
         "timeframe": {
@@ -1589,11 +2422,17 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         "gainers": gainers,
         "losers": losers,
         "most_actives": most_actives,
+        "offset": page_offset,
+        "limit": page_size,
+        "next_offset": next_offset,
+        "has_more": has_more,
+        "total": total_items,
         "limit_clamped": resolved.limit_clamped,
         "request_id": request_id,
         "suggestions": suggestions,
         "recent_queries": recent_queries,
         "watchlist": watchlist,
+        "snapshot_refresh": _snapshot_refresh_meta(),
     }
     record_metric(
         "market.insights.response",
@@ -1887,7 +2726,7 @@ def _fetch_history(
     *,
     user_id: str | None = None,
 ) -> tuple[dict[str, pd.Series], str]:
-    cache_key = build_cache_key("market-history", timeframe.key, sorted(symbols))
+    cache_key = build_cache_key("market-history", "alpaca", timeframe.key, sorted(symbols))
     result = cache_memoize(
         cache_key,
         lambda: _download_history(symbols, timeframe, user_id=user_id),
@@ -1908,15 +2747,8 @@ def _infer_market_source(data: pd.DataFrame | None) -> str:
     columns = data.columns
     if isinstance(columns, pd.MultiIndex):
         level0 = set(columns.get_level_values(0))
-        if level0 & fields:
-            return "alpaca"
-        level1 = set(columns.get_level_values(1))
-        if level1 & fields:
-            return "yfinance"
-        return "unknown"
-    if set(columns) & fields:
-        return "yfinance"
-    return "unknown"
+        return "alpaca" if level0 & fields else "unknown"
+    return "alpaca" if set(columns) & fields else "unknown"
 
 
 def _rank_symbols(
@@ -1924,6 +2756,7 @@ def _rank_symbols(
     timeframe: Timeframe,
     limit: int = 20,
 ) -> list[dict[str, object]]:
+    label = str(timeframe.label)
     ranked: list[dict[str, object]] = []
     for sym, series in series_map.items():
         window = _slice_series(series, timeframe)
@@ -1946,7 +2779,7 @@ def _rank_symbols(
                 "price": round(end_price, 2),
                 "change_pct_period": round(period_change, 2),
                 "change_pct_day": round(day_change, 2),
-                "period_label": timeframe.label,
+                "period_label": label,
                 "period_label_en": timeframe.label_en,
                 "series": normalized,
                 "timestamps": timestamps,

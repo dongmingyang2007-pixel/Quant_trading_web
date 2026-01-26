@@ -10,6 +10,7 @@ from .indicators import *  # noqa: F401,F403
 from .risk import *  # noqa: F401,F403
 from .execution import *  # noqa: F401,F403
 from .ma_cross import *  # noqa: F401,F403
+from .mean_reversion import *  # noqa: F401,F403
 from .ml_engine import *  # noqa: F401,F403
 from .charts import *  # noqa: F401,F403
 from .pipeline import *  # noqa: F401,F403

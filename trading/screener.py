@@ -4,7 +4,7 @@ Minimal screener module – only for today's top gainers/losers sidebar.
 
 We keep:
 - CORE_TICKERS_US: the universe the sidebar will look at
-- _fetch_quote_snapshot(symbols): try Yahoo batch first, then per-symbol yfinance
+- _fetch_quote_snapshot(symbols): fetch Alpaca snapshots + cache
 - fetch_page(...): a simple fallback the view can call when primary fetch fails
 
 All other original screener features (AlphaVantage listing, sectors, fundamentals,
@@ -13,25 +13,15 @@ formatting, etc.) are intentionally deleted because the app no longer needs them
 
 from __future__ import annotations
 
-import json
-import os
 import time
 from typing import Any, Sequence
 
 from django.utils.translation import gettext_lazy as _
 from django.conf import settings
 
-from .http_client import http_client, HttpClientError
 from .observability import record_metric
 from .cache_utils import cache_get_object, cache_set_object, build_cache_key
-from .network import get_requests_session, resolve_retry_config, retry_call_result
-from .alpaca_data import fetch_stock_snapshots, resolve_alpaca_credentials
-
-# yfinance is optional – we'll use it only as a fallback
-try:
-    import yfinance as yf  # type: ignore
-except Exception:
-    yf = None  # type: ignore
+from .alpaca_data import DEFAULT_FEED, fetch_stock_snapshots, resolve_alpaca_credentials
 
 
 # Cache TTLs (Redis 优先，其次内存)
@@ -118,7 +108,7 @@ def resolve_sector(value: str | None) -> tuple[str, str]:
 
 
 def _quote_cache_key(symbol: str) -> str:
-    return build_cache_key("screener-quote", symbol.upper())
+    return build_cache_key("screener-quote", "alpaca", symbol.upper())
 
 
 # ---------------------------------------------------------------------------
@@ -130,9 +120,8 @@ def _fetch_quote_snapshot(symbols: Sequence[str], *, user_id: str | None = None)
 
     Strategy:
     1. use local cache if younger than QUOTE_CACHE_TTL_SECONDS
-    2. try Yahoo batch endpoint
-    3. if batch fails, fall back to per-symbol yfinance (if available)
-    4. write everything we get back to the cache
+    2. use Alpaca snapshots
+    3. write everything we get back to the cache
     """
     results: dict[str, dict[str, Any]] = {}
     if not symbols:
@@ -144,7 +133,7 @@ def _fetch_quote_snapshot(symbols: Sequence[str], *, user_id: str | None = None)
         if not sym:
             continue
         cached = cache_get_object(_quote_cache_key(sym))
-        if cached:
+        if isinstance(cached, dict) and cached.get("source") == "alpaca":
             results[sym] = cached
         else:
             to_fetch.append(sym)
@@ -153,152 +142,61 @@ def _fetch_quote_snapshot(symbols: Sequence[str], *, user_id: str | None = None)
         return results
 
     chunk_size = 40
-    remaining = list(to_fetch)
     key_id, secret = resolve_alpaca_credentials(user_id=user_id)
-    if key_id and secret:
-        remaining = []
-        def _normalize_snapshot(symbol: str, snapshot: dict[str, Any]) -> dict[str, Any] | None:
-            latest_trade = snapshot.get("latestTrade") or snapshot.get("latest_trade") or {}
-            latest_quote = snapshot.get("latestQuote") or snapshot.get("latest_quote") or {}
-            daily_bar = snapshot.get("dailyBar") or snapshot.get("daily_bar") or {}
-            prev_bar = snapshot.get("prevDailyBar") or snapshot.get("prev_daily_bar") or {}
-            price = (
-                latest_trade.get("p")
-                or daily_bar.get("c")
-                or prev_bar.get("c")
-                or latest_quote.get("ap")
-                or latest_quote.get("bp")
-            )
-            if price is None:
-                return None
-            change_pct = None
-            if daily_bar.get("c") is not None and prev_bar.get("c"):
-                try:
-                    change_pct = (float(daily_bar["c"]) / float(prev_bar["c"]) - 1.0) * 100.0
-                except Exception:
-                    change_pct = None
-            volume = (
-                daily_bar.get("v")
-                or daily_bar.get("volume")
-                or prev_bar.get("v")
-                or prev_bar.get("volume")
-            )
-            return {
-                "symbol": symbol,
-                "shortName": symbol,
-                "regularMarketPrice": float(price),
-                "regularMarketChangePercent": float(change_pct) if change_pct is not None else None,
-                "regularMarketVolume": int(volume) if volume is not None else None,
-                "currency": "USD",
-                "_ts": time.time(),
-            }
-
-        for idx in range(0, len(to_fetch), chunk_size):
-            chunk = [s for s in to_fetch[idx : idx + chunk_size] if s]
-            if not chunk:
-                continue
-            snapshots = fetch_stock_snapshots(chunk, user_id=user_id)
-            for symbol in chunk:
-                snapshot = snapshots.get(symbol) if isinstance(snapshots, dict) else None
-                if not isinstance(snapshot, dict):
-                    remaining.append(symbol)
-                    continue
-                entry = _normalize_snapshot(symbol, snapshot)
-                if not entry:
-                    remaining.append(symbol)
-                    continue
-                results[symbol] = entry
-                cache_set_object(_quote_cache_key(symbol), entry, SCREENER_CACHE_TTL)
-
-    if not remaining:
+    if not (key_id and secret):
         return results
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; QuantTradingSidebar/1.0)",
-        "Accept": "application/json",
-    }
-
-    for idx in range(0, len(remaining), chunk_size):
-        chunk = [s for s in remaining[idx : idx + chunk_size] if s]
-        if not chunk:
-            continue
-
-        params = {
-            "symbols": ",".join(chunk),
-            "lang": "en-US",
-            "region": "US",
+    def _normalize_snapshot(symbol: str, snapshot: dict[str, Any]) -> dict[str, Any] | None:
+        latest_trade = snapshot.get("latestTrade") or snapshot.get("latest_trade") or {}
+        latest_quote = snapshot.get("latestQuote") or snapshot.get("latest_quote") or {}
+        daily_bar = snapshot.get("dailyBar") or snapshot.get("daily_bar") or {}
+        prev_bar = snapshot.get("prevDailyBar") or snapshot.get("prev_daily_bar") or {}
+        price = (
+            latest_trade.get("p")
+            or daily_bar.get("c")
+            or prev_bar.get("c")
+            or latest_quote.get("ap")
+            or latest_quote.get("bp")
+        )
+        if price is None:
+            return None
+        change_pct = None
+        if daily_bar.get("c") is not None and prev_bar.get("c"):
+            try:
+                change_pct = (float(daily_bar["c"]) / float(prev_bar["c"]) - 1.0) * 100.0
+            except Exception:
+                change_pct = None
+        volume = (
+            daily_bar.get("v")
+            or daily_bar.get("volume")
+            or prev_bar.get("v")
+            or prev_bar.get("volume")
+        )
+        return {
+            "symbol": symbol,
+            "shortName": symbol,
+            "regularMarketPrice": float(price),
+            "regularMarketChangePercent": float(change_pct) if change_pct is not None else None,
+            "regularMarketVolume": int(volume) if volume is not None else None,
+            "currency": "USD",
+            "source": "alpaca",
+            "_ts": time.time(),
         }
 
-        try:
-            # ① try Yahoo batch api
-            resp = http_client.get(
-                "https://query1.finance.yahoo.com/v7/finance/quote",
-                params=params,
-                headers=headers,
-                timeout=10,
-            )
-            payload = resp.json()
-            for item in payload.get("quoteResponse", {}).get("result", []):
-                symbol = item.get("symbol")
-                if not symbol:
-                    continue
-                item["_ts"] = time.time()
-                results[symbol] = item
-                cache_set_object(_quote_cache_key(symbol), item, SCREENER_CACHE_TTL)
-        except (HttpClientError, ValueError, json.JSONDecodeError):
-            # ② batch failed – use yfinance for each symbol
-            if yf is not None:
-                retry_config = resolve_retry_config(
-                    retries=os.environ.get("MARKET_FETCH_MAX_RETRIES"),
-                    backoff=os.environ.get("MARKET_FETCH_RETRY_BACKOFF"),
-                    default_timeout=getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", None),
-                )
-                session = get_requests_session(retry_config.timeout)
-                for symbol in chunk:
-                    try:
-                        def _download_symbol() -> dict[str, Any] | None:
-                            tk = yf.Ticker(symbol, session=session)
-                            fast = getattr(tk, "fast_info", None) or {}
-                            info = getattr(tk, "info", None) or {}
-                            price = (
-                                fast.get("last_price")
-                                or fast.get("lastPrice")
-                                or fast.get("regularMarketPrice")
-                                or info.get("regularMarketPrice")
-                                or info.get("previousClose")
-                            )
-                            if price is None:
-                                return None
-                            change_pct = (
-                                fast.get("regularMarketChangePercent")
-                                or info.get("regularMarketChangePercent")
-                            )
-                            volume = (
-                                fast.get("regularMarketVolume")
-                                or info.get("regularMarketVolume")
-                                or fast.get("volume")
-                                or info.get("volume")
-                            )
-                            return {
-                                "symbol": symbol,
-                                "shortName": fast.get("shortName") or info.get("shortName") or symbol,
-                                "regularMarketPrice": float(price),
-                                "regularMarketChangePercent": float(change_pct) if change_pct is not None else 0.0,
-                                "regularMarketVolume": int(volume) if volume is not None else None,
-                                "_ts": time.time(),
-                            }
-
-                        entry = retry_call_result(
-                            _download_symbol,
-                            config=retry_config,
-                            should_retry=lambda value: value is None,
-                        )
-                        if entry:
-                            results[symbol] = entry
-                            cache_set_object(_quote_cache_key(symbol), entry, SCREENER_CACHE_TTL)
-                    except Exception:
-                        continue
-            # if yfinance is None, we just leave these symbols missing
+    for idx in range(0, len(to_fetch), chunk_size):
+        chunk = [s for s in to_fetch[idx : idx + chunk_size] if s]
+        if not chunk:
+            continue
+        snapshots = fetch_stock_snapshots(chunk, feed=DEFAULT_FEED, user_id=user_id)
+        for symbol in chunk:
+            snapshot = snapshots.get(symbol) if isinstance(snapshots, dict) else None
+            if not isinstance(snapshot, dict):
+                continue
+            entry = _normalize_snapshot(symbol, snapshot)
+            if not entry:
+                continue
+            results[symbol] = entry
+            cache_set_object(_quote_cache_key(symbol), entry, SCREENER_CACHE_TTL)
 
     total_symbols = len([s for s in symbols if s and s.strip()])
     if total_symbols:

@@ -87,12 +87,14 @@ class QuantStrategyForm(forms.Form):
         ("ml_momentum", "机器学习动量"),
         ("rl_policy", "强化学习策略"),
         ("sma", "传统双均线"),
+        ("mean_reversion", "RSI 均值回归"),
     ]
     STRATEGY_ENGINE_CHOICES_EN = [
         ("multi_combo", "Multi-combo (ML + RL + SMA)"),
         ("ml_momentum", "ML momentum"),
         ("rl_policy", "RL policy"),
         ("sma", "Classic SMA"),
+        ("mean_reversion", "Mean Reversion (RSI)"),
     ]
     RISK_PROFILE_CHOICES_ZH = [
         ("conservative", "保守"),

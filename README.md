@@ -68,9 +68,19 @@ python3 -m daphne -b 127.0.0.1 -p 8000 quant_trading_site.asgi:application
 
 6) 可选：启动 Celery（新终端）：
 ```bash
+# 终端 A：worker
+export REDIS_URL=redis://127.0.0.1:6379/0
+export CELERY_BROKER_URL=$REDIS_URL
+export CELERY_RESULT_BACKEND=$REDIS_URL
 celery -A quant_trading_site worker -l info -Q backtests,training,rl,paper_trading
+
+# 终端 B：beat
+export REDIS_URL=redis://127.0.0.1:6379/0
+export CELERY_BROKER_URL=$REDIS_URL
+export CELERY_RESULT_BACKEND=$REDIS_URL
 celery -A quant_trading_site beat -l info
 ```
+榜单快照刷新任务挂在 `paper_trading` 队列，请确保 worker 包含该队列。
 
 7) 可选：启动实时引擎（新终端）：
 ```bash
@@ -111,6 +121,14 @@ pip install -r requirements-rl.txt   # 强化学习相关
 - `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND`：异步队列配置。
 - `CELERY_ALWAYS_EAGER`：置为 `1` 可强制同步执行。
 - `TASK_RETURN_SNAPSHOT=1`：仅在需要时让回测任务返回完整快照。
+- `MARKET_RANKINGS_REFRESH_SECONDS` / `MARKET_RANKINGS_REFRESH_MARGIN_SECONDS`：榜单快照刷新周期与安全余量。
+- `MARKET_RANKINGS_SNAPSHOT_CHUNK_SIZE`：榜单快照批量拉取的 symbol 数（默认 100）。
+- `MARKET_RANKINGS_BACKGROUND_ONLY`：仅使用后台快照榜单，禁止用户请求触发实时拉取（默认开启）。
+- `MARKET_RANKINGS_DISABLE_FILTERS`：关闭榜单过滤条件（默认开启）。
+- `MARKET_RANKINGS_ALLOW_STALE_SNAPSHOTS`：允许使用过期快照直到新快照生成（默认开启）。
+- `MARKET_RANKINGS_TIMEFRAME_KEYS`：需要后台生成快照的时间范围（默认 `5d,1mo,6mo`）。
+- `MARKET_RANKINGS_TIMEFRAME_SNAPSHOT_TTL`：时间范围快照有效期（秒）。
+- `MARKET_RANKINGS_DAILY_WINDOW_5D` / `MARKET_RANKINGS_DAILY_WINDOW_1MO` / `MARKET_RANKINGS_DAILY_WINDOW_6MO`：按日线计算时的窗口长度（交易日）。
 - `OLLAMA_ENDPOINT` / `OLLAMA_MODEL` / `AI_PROVIDER` / `GEMINI_API_KEY`：LLM 洞察与外部模型（可选）。
 - `METRICS_MAX_BYTES`：遥测文件大小轮转阈值。
 
@@ -120,6 +138,7 @@ pip install -r requirements-rl.txt   # 强化学习相关
 celery -A quant_trading_site worker -l info -Q backtests,training,rl,paper_trading
 celery -A quant_trading_site beat -l info
 ```
+榜单快照刷新任务默认也使用 `paper_trading` 队列。
 Celery beat 的调度文件默认写入 `storage_bundle/`。
 
 本地开发（未配置 Redis 时）：回测会自动使用本地线程执行器（Local runner）。
@@ -183,7 +202,7 @@ python manage.py realtime_refresh_assets --user-id <你的用户ID>
 - `ALPACA_DATA_FEED`：`sip` 或 `iex`，默认 `sip`。
 - `ALPACA_DATA_WS_URL`：Alpaca WS 地址（默认 `wss://stream.data.alpaca.markets/v2/sip`）。
 - `ALPACA_DATA_REST_URL`：Alpaca 数据 REST 根地址（默认 `https://data.alpaca.markets`）。
-- `ALPACA_TRADING_REST_URL`：Alpaca 交易 REST 根地址（默认 `https://paper-api.alpaca.markets`）。
+- `ALPACA_TRADING_REST_URL`：Alpaca 交易 REST 根地址（默认 `https://paper-api.alpaca.markets`；live 账号请改为 `https://api.alpaca.markets`）。
 - `REALTIME_STATE_DIR` / `REALTIME_DATA_DIR`：实时引擎状态/数据目录（默认在 `storage_bundle/data_cache/realtime/`）。
 - `REALTIME_NDJSON_MAX_BYTES`：NDJSON 文件轮转阈值（默认 10MB）。
 - `METRICS_MAX_BYTES`：遥测文件轮转阈值。

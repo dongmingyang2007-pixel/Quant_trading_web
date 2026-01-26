@@ -146,35 +146,60 @@ def compute_triple_barrier_labels(
     max_holding: int,
 ) -> tuple[pd.Series, pd.Series]:
     idx = price.index
-    arr = price.values
+    arr = price.to_numpy(dtype=float)
     n = len(arr)
     binary = np.full(n, np.nan)
     multi = np.zeros(n)
-    up_arr = np.asarray(up.reindex(idx).ffill().bfill().fillna(up.mean() if isinstance(up, pd.Series) else up)) if isinstance(up, pd.Series) else np.full(n, up)
-    down_arr = np.asarray(down.reindex(idx).ffill().bfill().fillna(down.mean() if isinstance(down, pd.Series) else down)) if isinstance(down, pd.Series) else np.full(n, down)
-    for i in range(n - 1):
-        p0 = arr[i]
-        horizon = min(n - i - 1, max_holding)
-        if horizon <= 0:
-            break
-        future = arr[i + 1 : i + 1 + horizon]
-        rets = future / p0 - 1
-        up_thr = float(up_arr[i]) if i < len(up_arr) else float(up_arr[-1])
-        dn_thr = float(down_arr[i]) if i < len(down_arr) else float(down_arr[-1])
-        hit_up = np.where(rets >= up_thr)[0]
-        hit_dn = np.where(rets <= -dn_thr)[0]
-        t_up = hit_up[0] if hit_up.size else np.inf
-        t_dn = hit_dn[0] if hit_dn.size else np.inf
-        if t_up < t_dn:
-            binary[i] = 1
-            multi[i] = 1
-        elif t_dn < t_up:
-            binary[i] = 0
-            multi[i] = -1
-        else:
-            terminal = 1 if rets[-1] > 0 else 0
-            binary[i] = terminal
-            multi[i] = 0
+    if n <= 1:
+        return pd.Series(binary, index=idx), pd.Series(multi, index=idx)
+    max_holding = max(1, int(max_holding))
+
+    if isinstance(up, pd.Series):
+        up_series = up.reindex(idx)
+        fill_val = float(up_series.mean()) if not up_series.dropna().empty else 0.0
+        up_arr = up_series.ffill().bfill().fillna(fill_val).to_numpy(dtype=float)
+    else:
+        up_arr = np.full(n, float(up))
+    if isinstance(down, pd.Series):
+        down_series = down.reindex(idx)
+        fill_val = float(down_series.mean()) if not down_series.dropna().empty else 0.0
+        down_arr = down_series.ffill().bfill().fillna(fill_val).to_numpy(dtype=float)
+    else:
+        down_arr = np.full(n, float(down))
+
+    pad = np.full(max_holding, np.nan, dtype=float)
+    arr_pad = np.concatenate([arr, pad])
+    window = max_holding + 1
+    windows = np.lib.stride_tricks.sliding_window_view(arr_pad, window_shape=window)
+    current = windows[:, 0]
+    future = windows[:, 1:]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rets = future / current[:, None] - 1
+    rets = np.where(np.isfinite(rets), rets, np.nan)
+
+    steps = np.arange(max_holding)
+    hit_up = rets >= up_arr[:, None]
+    hit_down = rets <= -down_arr[:, None]
+    t_up = np.min(np.where(hit_up, steps, np.inf), axis=1)
+    t_down = np.min(np.where(hit_down, steps, np.inf), axis=1)
+
+    remaining = (n - 1) - np.arange(n)
+    horizon_len = np.clip(remaining, 0, max_holding)
+    last_idx = np.clip(horizon_len - 1, 0, max_holding - 1).astype(int)
+    last_ret = rets[np.arange(n), last_idx]
+    last_ret = np.where(horizon_len > 0, last_ret, np.nan)
+
+    valid = horizon_len > 0
+    up_first = t_up < t_down
+    down_first = t_down < t_up
+    no_hit = ~(up_first | down_first)
+
+    binary[valid & up_first] = 1
+    binary[valid & down_first] = 0
+    binary[valid & no_hit] = (last_ret > 0).astype(float)
+
+    multi[valid & up_first] = 1
+    multi[valid & down_first] = -1
     return pd.Series(binary, index=idx), pd.Series(multi, index=idx)
 
 
@@ -486,6 +511,7 @@ def _generate_validation_report(
         embargo=max(0, params.embargo_days),
     )
     cost_rate = (params.transaction_cost_bps + params.slippage_bps) / 10000.0
+    long_threshold, short_threshold = _resolve_signal_thresholds(params)
     validation_slices: list[dict[str, Any]] = []
     model_params = params.ml_params or {}
     model_engine = (params.ml_model or "sk_gbdt").lower()
@@ -518,10 +544,11 @@ def _generate_validation_report(
                 proba = np.array(raw_proba).ravel()
         except Exception:
             continue
+        long_threshold, short_threshold = _resolve_signal_thresholds(params)
         signal = np.where(
-            proba >= params.entry_threshold,
+            proba >= long_threshold,
             1.0,
-            np.where(proba <= params.exit_threshold, -1.0, 0.0),
+            np.where(proba <= short_threshold, -1.0, 0.0),
         )
         exposure = pd.Series(signal, index=test_slice.index, dtype=float).shift(fill_value=0.0)
         turnover = exposure.diff().abs().fillna(exposure.abs())
@@ -599,6 +626,16 @@ def _extract_class_prob(proba: np.ndarray, classes: np.ndarray | None, label: in
     return np.full(len(proba), default)
 
 
+def _resolve_signal_thresholds(params: StrategyInput) -> tuple[float, float]:
+    long_threshold = float(getattr(params, "long_threshold", 0.5) or 0.5)
+    short_threshold = float(getattr(params, "short_threshold", 0.3) or 0.3)
+    long_threshold = max(0.0, min(long_threshold, 1.0))
+    short_threshold = max(0.0, min(short_threshold, long_threshold))
+    long_threshold = max(long_threshold, 0.5)
+    short_threshold = min(short_threshold, 0.5)
+    return long_threshold, short_threshold
+
+
 def _pfws_predict(
     dataset: pd.DataFrame,
     feature_columns: list[str],
@@ -615,6 +652,7 @@ def _pfws_predict(
     model_params = params.ml_params or {}
     labels_for_weight = dataset["target_multiclass"] if ("target_multiclass" in dataset and params.label_style == "triple_barrier") else dataset["target"]
     sample_weight = _maybe_get_sample_weight(labels_for_weight, params)
+    long_threshold, short_threshold = _resolve_signal_thresholds(params)
     for train_idx, test_idx in splitter.split(len(dataset)):
         train_slice = dataset.iloc[train_idx]
         test_slice = dataset.iloc[test_idx]
@@ -634,9 +672,9 @@ def _pfws_predict(
             continue
         probabilities.iloc[test_idx] = proba
         raw_signal.iloc[test_idx] = np.where(
-            proba >= params.entry_threshold,
+            proba >= long_threshold,
             1.0,
-            np.where(proba <= params.exit_threshold, -1.0, 0.0),
+            np.where(proba <= short_threshold, -1.0, 0.0),
         )
         if roc_auc_score is not None and test_slice["target"].nunique() > 1:
             try:
@@ -851,10 +889,11 @@ def run_ml_backtest(
             except Exception:
                 pass
 
+        long_threshold, short_threshold = _resolve_signal_thresholds(params)
         signal_fold = np.where(
-            proba_vals >= entry_thr,
+            proba_vals >= long_threshold,
             1.0,
-            np.where((proba_down if proba_down.size else proba_vals) >= (1 - exit_thr), -1.0, 0.0),
+            np.where(proba_vals <= short_threshold, -1.0, 0.0),
         )
         exposure_fold = pd.Series(signal_fold, index=test_slice.index, dtype=float).shift(fill_value=0.0)
         turnover = exposure_fold.diff().abs().fillna(exposure_fold.abs())
@@ -1043,6 +1082,7 @@ def run_ml_backtest(
             "effective_participation": exec_stats.get("effective_participation"),
             "adv_hard_cap_hits": adv_hits,
         },
+        "signal_thresholds": {"long": long_threshold, "short": short_threshold},
         "cpcv": cpcv or {},
         "stress_test": stress_report or {},
         "drift": {"psi_returns": psi_ret, "psi_probabilities": psi_proba},

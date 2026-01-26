@@ -28,6 +28,30 @@ _STRATEGY_INPUT_TYPES = get_type_hints(StrategyInput)
 LOGGER = logging.getLogger(__name__)
 
 
+def _resolve_snapshot_user_id() -> str | None:
+    try:
+        from .models import RealtimeProfile, UserProfile
+    except Exception:
+        return None
+
+    try:
+        active_profile = RealtimeProfile.objects.filter(is_active=True).order_by("-updated_at").first()
+        if active_profile and active_profile.user_id:
+            return str(active_profile.user_id)
+    except Exception:
+        pass
+
+    try:
+        for profile in UserProfile.objects.order_by("-updated_at")[:10]:
+            creds = profile.api_credentials if isinstance(profile.api_credentials, dict) else {}
+            if creds.get("alpaca_api_key_id") and creds.get("alpaca_api_secret_key"):
+                return str(profile.user_id)
+    except Exception:
+        pass
+
+    return None
+
+
 def _is_date_type(type_hint: object | None) -> bool:
     if type_hint is date:
         return True
@@ -415,6 +439,21 @@ def run_robustness_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
 def run_paper_trading_heartbeat(limit: int = 20) -> list[dict[str, Any]]:
     """定时刷新正在运行的模拟实盘会话。"""
     return run_pending_sessions(limit=limit)
+
+
+@shared_task(
+    autoretry_for=(Exception,),
+    retry_backoff=10,
+    retry_kwargs={"max_retries": 2},
+    default_retry_delay=10,
+    ignore_result=False,
+    queue="paper_trading",
+)
+def refresh_market_snapshot_rankings() -> dict[str, Any]:
+    from .views import market as market_views
+
+    user_id = _resolve_snapshot_user_id()
+    return market_views.refresh_snapshot_rankings(user_id=user_id)
 
 
 def _normalize_ai_history(raw: Any) -> list[dict[str, str]]:

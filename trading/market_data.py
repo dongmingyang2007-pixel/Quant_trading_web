@@ -26,11 +26,6 @@ from .alpaca_data import (
     resolve_alpaca_credentials,
 )
 
-try:  # optional dependency
-    import yfinance as yf  # type: ignore
-except Exception:  # pragma: no cover
-    yf = None  # type: ignore
-
 RATE_LIMIT_PER_WINDOW = int(os.environ.get("MARKET_FETCH_RATE_LIMIT", "10000") or 0)
 RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("MARKET_FETCH_RATE_WINDOW", "60") or 0)
 
@@ -510,13 +505,10 @@ def fetch(
     cache_alias: str | None = None,
     user_id: str | None = None,
 ) -> pd.DataFrame:
-    """Fetch market data with simple TTL caching and graceful fallback."""
+    """Fetch market data with simple TTL caching and disk fallback."""
 
     unique = [sym for sym in dict.fromkeys(symbols) if sym]
-    cache_key = build_cache_key("market-data", sorted(unique), period or start, end, interval, fields)
-    retry_config = _market_retry_config(timeout)
-    session = get_requests_session(retry_config.timeout)
-
+    cache_key = build_cache_key("market-data", "alpaca", sorted(unique), period or start, end, interval, fields)
     def _cache_paths(key: str) -> tuple[Path, Path]:
         digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
         base = digest[:24]
@@ -538,6 +530,10 @@ def fetch(
                     _warn_parquet_missing("market cache read")
                     return pd.DataFrame()
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                if not isinstance(meta, dict):
+                    continue
+                if meta.get("source") != "alpaca":
+                    continue
                 ts = float(meta.get("timestamp", 0))
                 if time.time() - ts > DISK_CACHE_TTL_SECONDS:
                     try:
@@ -561,7 +557,13 @@ def fetch(
                 _warn_parquet_missing("market cache write")
                 return
             path, meta_path = _cache_paths(cache_key)
-            meta = {"timestamp": time.time(), "symbols": unique, "fields": fields, "cache_key": cache_key}
+            meta = {
+                "timestamp": time.time(),
+                "symbols": unique,
+                "fields": fields,
+                "cache_key": cache_key,
+                "source": "alpaca",
+            }
             _write_parquet_atomic(df, path)
             _write_json_atomic(meta_path, meta)
         except Exception:
@@ -596,31 +598,7 @@ def fetch(
                     continue
                 if isinstance(frame, pd.DataFrame) and not frame.empty:
                     return frame
-        if yf is None or not _rate_limited():
-            return pd.DataFrame()
-
-        def _download() -> pd.DataFrame:
-            return yf.download(
-                tickers=" ".join(unique),
-                period=period,
-                interval=interval,
-                start=start,
-                end=end,
-                auto_adjust=False,
-                group_by="ticker",
-                threads=False,
-                progress=False,
-                timeout=retry_config.timeout,
-                session=session,
-            )
-
-        try:
-            data = retry_call_result(_download, config=retry_config, should_retry=_empty_frame)
-        except Exception:
-            return pd.DataFrame()
-        if not isinstance(data, pd.DataFrame):
-            return pd.DataFrame()
-        return data
+        return pd.DataFrame()
 
     if not cache:
         frame = _builder()
@@ -673,11 +651,7 @@ def fetch_recent_window(
     limit: int = 120,
     user_id: str | None = None,
 ) -> dict[str, pd.DataFrame]:
-    """Batch-fetch a recent window of price data for one or more symbols.
-
-    Returns a dict of symbol -> DataFrame limited to `limit` rows (most recent first).
-    This is used by paper trading heartbeat to avoid N duplicate requests. Falls back to disk cache when rate limited.
-    """
+    """Batch-fetch a recent window of price data for one or more symbols."""
     if not symbols:
         return {}
     if isinstance(symbols, str):
@@ -726,66 +700,7 @@ def fetch_recent_window(
                     pass
             if result:
                 return result
-    if not unique_symbols or yf is None:  # pragma: no cover - network dependency
-        return {}
-    retry_config = _market_retry_config(None)
-    session = get_requests_session(retry_config.timeout)
-    def _resolve_period(interval: str, limit: int) -> str:
-        """Choose a compact period for yf.download to avoid over-fetching."""
-        interval = (interval or "1d").lower()
-        if interval.endswith("m") or interval.endswith("h"):
-            return "5d"  # intraday endpoints accept up to ~60d; 5d is enough for rolling signals here
-        days = max(30, limit * 2)
-        if days >= 365 * 10:
-            return "10y"
-        return f"{days}d"
-
-    def _download_recent() -> pd.DataFrame:
-        return yf.download(
-            tickers=" ".join(unique_symbols),
-            period=_resolve_period(interval, limit),
-            interval=interval,
-            progress=False,
-            threads=False,
-            timeout=retry_config.timeout,
-            session=session,
-        )
-
-    try:
-        data = retry_call_result(_download_recent, config=retry_config, should_retry=_empty_frame)
-    except Exception:
-        data = pd.DataFrame()
-    result: dict[str, pd.DataFrame] = {}
-    if not isinstance(data, pd.DataFrame) or data.empty:
-        # degrade to daily interval as a fallback if intraday fails
-        if interval.endswith("m") or interval.endswith("h"):
-            try:
-                degraded = fetch_recent_window(unique_symbols, interval="1d", limit=limit)
-                if degraded:
-                    LOGGER.warning("market_data degraded interval %s -> 1d for symbols=%s", interval, unique_symbols)
-                    record_metric("market_fetch_degraded", interval_from=interval, interval_to="1d", symbols=len(unique_symbols))
-                    return degraded
-            except Exception:
-                return {}
-        return result
-    if isinstance(data.columns, pd.MultiIndex):
-        # data has MultiIndex (field, symbol)
-        for sym in unique_symbols:
-            try:
-                sub = data.xs(sym, level=1, axis=1).dropna().tail(limit)
-                if not sub.empty:
-                    result[sym] = sub
-            except Exception:
-                continue
-    else:
-        # Single symbol only
-        try:
-            frame = data.dropna().tail(limit)
-            if not frame.empty:
-                result[unique_symbols[0]] = frame
-        except Exception:
-            pass
-    return result
+    return {}
 
 
 def fetch_latest_quote(
@@ -818,39 +733,4 @@ def fetch_latest_quote(
                 as_of = pd.to_datetime(ts, utc=True, errors="coerce") if ts else None
                 as_of_val = as_of.to_pydatetime() if as_of is not None and not pd.isna(as_of) else None
                 return {"price": float(price), "as_of": as_of_val, "source": "alpaca"}
-    if yf is None or not _rate_limited():  # pragma: no cover - network dependency
-        return {}
-    retry_config = _market_retry_config(None)
-    session = get_requests_session(retry_config.timeout)
-    source = "yf"
-    def _download_latest() -> pd.DataFrame:
-        return yf.download(
-            tickers=symbol,
-            period="5d",
-            interval=interval,
-            progress=False,
-            threads=False,
-            timeout=retry_config.timeout,
-            session=session,
-        )
-
-    try:
-        data = retry_call_result(_download_latest, config=retry_config, should_retry=_empty_frame)
-        if isinstance(data, pd.DataFrame) and not data.empty:
-            extracted = _extract_price_from_frame(data)
-            if extracted:
-                extracted["source"] = source
-                return extracted
-    except Exception:
-        pass
-    # Fallback to end-of-day fetch
-    try:
-        frame = fetch([symbol], period="5d", interval="1d", cache=False)
-        if isinstance(frame, pd.DataFrame) and not frame.empty:
-            extracted = _extract_price_from_frame(frame)
-            if extracted:
-                extracted["source"] = "fallback"
-                return extracted
-    except Exception:
-        pass
     return {}

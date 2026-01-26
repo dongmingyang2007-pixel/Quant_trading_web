@@ -13,6 +13,9 @@
 
   const listContainer = document.querySelector('[data-role="ranking-list"]');
   const rankingChangeHeader = document.querySelector('[data-role="ranking-change-header"]');
+  const rankingChangeLabel = document.querySelector('[data-role="ranking-change-label"]');
+  const rankingSortButton = document.querySelector('[data-role="ranking-sort"]');
+  const rankingSortIcon = document.querySelector('[data-role="ranking-sort-icon"]');
   const rankingsSection = document.querySelector('[data-role="rankings-section"]');
   const allStocksSection = document.querySelector('[data-role="all-stocks"]');
   const allStocksLetters = document.querySelector('[data-role="all-stocks-letters"]');
@@ -22,9 +25,30 @@
   const allStocksBack = document.querySelector('[data-role="all-stocks-back"]');
   const rankTabs = Array.prototype.slice.call(document.querySelectorAll('[data-role="rank-tab"]'));
   const rankDesc = document.querySelector('[data-role="rank-desc"]');
+  const rankContext = document.querySelector('[data-role="rank-context"]');
+  const rankSortSummaries = Array.prototype.slice.call(document.querySelectorAll('[data-role="rank-sort-summary"]'));
+  const rankSentinel = document.querySelector('[data-role="ranking-sentinel"]');
+  const statusState = document.querySelector('[data-role="status-state"]');
   const statusText = document.querySelector('[data-role="status-text"]');
+  const statusContext = document.querySelector('[data-role="status-context"]');
+  const statusUpdated = document.querySelector('[data-role="status-updated"]');
+  const statusExpanded = document.querySelector('[data-role="status-expanded"]');
+  let snapshotText = document.querySelector('[data-role="snapshot-text"]');
+  const snapshotProgress = document.querySelector('[data-role="snapshot-progress"]');
+  const snapshotProgressFill = document.querySelector('[data-role="snapshot-progress-fill"]');
+  const snapshotWarning = document.querySelector('[data-role="snapshot-warning"]');
+  const snapshotWarningText = document.querySelector('[data-role="snapshot-warning-text"]');
+  const snapshotDetails = document.querySelector('[data-role="snapshot-details"]');
+  const snapshotDetailsPanel = document.querySelector('[data-role="snapshot-details-panel"]');
+  const snapshotRetry = document.querySelector('[data-role="snapshot-retry"]');
+  const priceBasisText = document.querySelector('[data-role="price-basis"]');
   const sourceText = document.querySelector('[data-role="source-text"]');
+  const statusRefresh = document.querySelector('[data-role="status-refresh"]');
   const statusSection = document.querySelector('.market-status');
+  const timezoneToggle = document.querySelector('[data-role="timezone-toggle"]');
+  const autoRefreshToggle = document.querySelector('[data-role="auto-refresh-toggle"]');
+  const autoRefreshPause = document.querySelector('[data-role="auto-refresh-pause"]');
+  const autoRefreshCountdown = document.querySelector('[data-role="auto-refresh-countdown"]');
   const timeframeButtons = Array.prototype.slice.call(document.querySelectorAll('.market-timeframe'));
   const searchForm = document.getElementById('market-search-form');
   const searchInput = document.getElementById('market-search-input');
@@ -36,6 +60,9 @@
   const watchlistChips = document.querySelector('[data-role="watchlist-chips"]');
   const watchCount = document.querySelector('[data-role="watch-count"]');
   const watchAddBtn = document.getElementById('market-watch-add');
+  const quickTabs = Array.prototype.slice.call(document.querySelectorAll('[data-role="quick-tab"]'));
+  const quickPanels = Array.prototype.slice.call(document.querySelectorAll('[data-role="quick-panel"]'));
+  const recentClear = document.querySelector('[data-role="recent-clear"]');
   const typeaheadPanel = document.querySelector('[data-role="typeahead-panel"]');
   const typeaheadList = typeaheadPanel && typeaheadPanel.querySelector('[data-role="typeahead-list"]');
   const typeaheadHint = typeaheadPanel && typeaheadPanel.querySelector('[data-role="typeahead-hint"]');
@@ -54,6 +81,8 @@
   const detailTimeframeTrigger = detailRoot.querySelector('[data-role="detail-timeframe-trigger"]');
   const detailTimeframeMenu = detailRoot.querySelector('[data-role="detail-timeframe-menu"]');
   const detailTimeframeCurrent = detailRoot.querySelector('[data-role="detail-timeframe-current"]');
+  const detailAdvancedToggle = detailRoot.querySelector('[data-role="detail-advanced-toggle"]');
+  const detailAdvancedPanel = detailRoot.querySelector('[data-role="detail-advanced-panel"]');
   const profileSummary = document.querySelector('[data-role="profile-summary"]');
   const profileMetrics = document.querySelector('[data-role="profile-metrics"]');
   const aiSummary = document.querySelector('[data-role="ai-summary"]');
@@ -63,15 +92,33 @@
   const viewChart = document.querySelector('[data-view="chart"]');
   const viewBackButtons = Array.prototype.slice.call(document.querySelectorAll('[data-view-back]'));
   const viewChartButton = document.querySelector('[data-view-chart]');
+  const paneTabs = Array.prototype.slice.call(document.querySelectorAll('[data-role="pane-tab"]'));
   const detailSymbolEl = document.querySelector('[data-role="detail-symbol"]');
   const detailNameEl = document.querySelector('[data-role="detail-name"]');
   const detailPriceEl = document.querySelector('[data-role="detail-price"]');
   const detailChangeEl = document.querySelector('[data-role="detail-change"]');
   const detailMetaEl = document.querySelector('[data-role="detail-meta"]');
+  const rankingTable = document.querySelector('[data-role="ranking-table"]');
+  const marketPage = document.querySelector('.market-page');
   const marketSocketUrl = (() => {
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     return `${protocol}://${window.location.host}/ws/market/`;
   })();
+
+  const stateUtils = window.MarketInsightsState || {};
+  const mergeRankItems =
+    stateUtils.mergeRankItems ||
+    ((existing, incoming) => ({
+      merged: Array.isArray(existing) ? existing.concat(Array.isArray(incoming) ? incoming : []) : Array.isArray(incoming) ? incoming : [],
+      appended: Array.isArray(incoming) ? incoming : [],
+    }));
+  const toggleSortState =
+    stateUtils.toggleSortState ||
+    ((state) => (state === 'default' ? 'desc' : state === 'desc' ? 'asc' : 'default'));
+  const formatTimestamp = stateUtils.formatTimestamp || ((value) => (value || '').toString());
+  const loadPreference = stateUtils.loadPreference || ((key, fallback) => fallback);
+  const savePreference = stateUtils.savePreference || (() => {});
+  const locale = langPrefix === 'zh' ? 'zh-CN' : 'en-US';
 
   const initialBtn = document.querySelector('.market-timeframe.is-active');
   let currentTimeframe = (initialBtn && initialBtn.getAttribute('data-timeframe')) || '1mo';
@@ -98,14 +145,55 @@
   let detailRetryTimer = null;
   let currentView = 'list';
   let autoRefreshTimer = null;
+  let autoRefreshCountdownTimer = null;
+  let autoRefreshNextAt = 0;
+  let autoRefreshRemainingMs = 0;
+  let autoRefreshPaused = false;
+  let autoRefreshSuspended = false;
+  let statusMessageOverride = '';
+  let currentStatusState = 'ready';
+  let snapshotState = null;
   let isListLoading = false;
   let liveWaitTimer = null;
   let lastLiveUpdateAt = 0;
   let liveQuoteTimer = null;
-  const AUTO_REFRESH_MS = 60 * 1000;
-  const DEFAULT_LIST_LIMIT = 200;
+  let chartInitTimer = null;
+  let pendingChartRender = null;
+  const DEFAULT_AUTO_REFRESH_MS = 60 * 1000;
+  const AUTO_REFRESH_OPTIONS = [0, 15000, 30000, 60000];
+  const PREF_TIMEZONE_KEY = 'market.timezone';
+  const PREF_AUTO_REFRESH_KEY = 'market.autoRefreshMs';
+  let timezoneMode = loadPreference(PREF_TIMEZONE_KEY, 'utc');
+  if (timezoneMode !== 'utc' && timezoneMode !== 'local') {
+    timezoneMode = 'utc';
+  }
+  let autoRefreshMs = parseInt(loadPreference(PREF_AUTO_REFRESH_KEY, `${DEFAULT_AUTO_REFRESH_MS}`), 10);
+  if (!Number.isFinite(autoRefreshMs) || !AUTO_REFRESH_OPTIONS.includes(autoRefreshMs)) {
+    autoRefreshMs = DEFAULT_AUTO_REFRESH_MS;
+  }
   const LIVE_WAIT_MS = 10000;
   const LIVE_QUOTE_POLL_MS = 15000;
+  const RANK_PAGE_SIZE = 20;
+  const RANKING_COLUMNS =
+    rankingTable && rankingTable.querySelectorAll('th').length
+      ? rankingTable.querySelectorAll('th').length
+      : 6;
+  const ALL_STOCKS_COLUMNS = 5;
+  let rankOffset = 0;
+  let rankPageSize = RANK_PAGE_SIZE;
+  let rankNextOffset = null;
+  let rankHasMore = false;
+  let rankIsLoadingMore = false;
+  let rankObserver = null;
+  let rankItemsBase = [];
+  let rankItems = [];
+  let rankSort = 'default';
+  let chartVisible = false;
+  let lastRankingTimeframe = null;
+  let lastRankingListType = null;
+  let lastStatusGeneratedAt = '';
+  let lastSnapshotMeta = null;
+  let lastSnapshotKey = '';
   let detailCache = {
     symbol: '',
     range: '',
@@ -115,23 +203,59 @@
 
   const TEXT = langPrefix === 'zh'
     ? {
-        timeframes: { '1d': '近1日', '5d': '近5日', '1mo': '近1月', '6mo': '近6月' },
+        timeframes: { '1d': '实时榜', '5d': '近5日', '1mo': '近1月', '6mo': '近6月' },
+        listLabels: {
+          gainers: '涨幅榜',
+          losers: '跌幅榜',
+          most_active: '活跃榜',
+          top_turnover: '成交额',
+          all: '全部股票',
+        },
+        statusLabels: {
+          ready: '已就绪',
+          refreshing: '刷新中',
+          snapshot_building: '生成快照',
+          partial_ready: '部分就绪',
+          stale: '数据过期',
+        },
+        statusMessages: {
+          ready: '数据已更新',
+          refreshing: '正在刷新榜单…',
+          snapshot_building: '正在生成快照…',
+          partial_ready: '快照已完成，部分标的仍在补齐/校验',
+          stale: '数据可能已过期',
+        },
         loading: '正在加载',
         dataSuffix: '数据…',
         updated: '数据已更新',
+        sortedBy: '排序：',
+        sortDefault: '默认',
+        sortAsc: '升序',
+        sortDesc: '降序',
+        loadingMore: '正在加载更多…',
         closedFallback: '闭市，已展示上一交易日榜单',
         justNow: '刚刚',
         retrying: '请求过快，正在重试',
+        refreshSkipped: '刷新中，已忽略重复请求',
+        countdownPrefix: '下次刷新',
+        paused: '已暂停',
+        pause: '暂停',
+        resume: '继续',
         emptySymbol: '暂无可展示的标的。',
         emptyList: '暂无数据',
+        emptyHint: '试试切换时间范围或搜索股票。',
         statusError: '加载失败，请稍后再试。',
         genericError: '加载失败',
+        errorHint: '请检查网络或稍后再试。',
+        retryAction: '重试',
         updatedLabel: '更新：',
+        partialData: '部分数据尚未就绪',
+        partialDetail: '快照已完成，但部分标的仍在后台补齐或校验。',
         emptyChips: '暂无推荐',
         emptyWatchlist: '还没有自选股。',
         statusNeedSymbol: '请先输入股票代码。',
-        watchAdded: (symbol) => `已加入关注：${symbol}`,
-        watchRemoved: (symbol) => `已移除关注：${symbol}`,
+        watchAdded: (symbol) => `已加入自选：${symbol}`,
+        watchRemoved: (symbol) => `已移除自选：${symbol}`,
         typeaheadTrending: '热门推荐',
         typeaheadRecent: '最近检索',
         typeaheadWatch: '自选股',
@@ -167,27 +291,67 @@
           employees: '员工数',
           dividend_yield: '股息率',
         },
+        snapshotPrefix: '快照',
+        snapshotUnknown: '—',
+        snapshotUpdated: '已更新',
+        snapshotRunning: '刷新中',
+        snapshotError: '刷新失败',
         sourcePrefix: '数据来源：',
         sourceLabels: {
           alpaca: 'Alpaca',
-          yfinance: 'Yahoo Finance',
           cache: '缓存',
           unknown: '未知',
         },
       }
     : {
-        timeframes: { '1d': '1D', '5d': '5D', '1mo': '1M', '6mo': '6M' },
+        timeframes: { '1d': 'Realtime', '5d': '5D', '1mo': '1M', '6mo': '6M' },
+        listLabels: {
+          gainers: 'Gainers',
+          losers: 'Losers',
+          most_active: 'Most Active',
+          top_turnover: 'Turnover',
+          all: 'All Stocks',
+        },
+        statusLabels: {
+          ready: 'Up to date',
+          refreshing: 'Refreshing',
+          snapshot_building: 'Building',
+          partial_ready: 'Partial',
+          stale: 'Stale',
+        },
+        statusMessages: {
+          ready: 'Data is up to date.',
+          refreshing: 'Refreshing leaderboard…',
+          snapshot_building: 'Snapshot is building…',
+          partial_ready: 'Snapshot complete; some symbols are still backfilling.',
+          stale: 'Data may be stale.',
+        },
         loading: 'Loading',
         dataSuffix: 'data…',
         updated: 'Data refreshed',
+        sortedBy: 'Sorted by:',
+        sortDefault: 'default',
+        sortAsc: 'asc',
+        sortDesc: 'desc',
+        loadingMore: 'Loading more…',
         closedFallback: 'Market closed, showing previous session movers',
         justNow: 'just now',
         retrying: 'Rate limited, retrying',
+        refreshSkipped: 'Refresh already in progress',
+        countdownPrefix: 'Next refresh',
+        paused: 'Paused',
+        pause: 'Pause',
+        resume: 'Resume',
         emptySymbol: 'No symbols to display.',
         emptyList: 'No data',
+        emptyHint: 'Try a different timeframe or search for a ticker.',
         statusError: 'Failed to load, please try again later.',
         genericError: 'Failed to load',
+        errorHint: 'Check your network connection and try again.',
+        retryAction: 'Retry',
         updatedLabel: 'Updated:',
+        partialData: 'Partial data pending',
+        partialDetail: 'Snapshot is complete, but some instruments are still being backfilled or validated.',
         emptyChips: 'No suggestions available.',
         emptyWatchlist: 'Watchlist is empty.',
         statusNeedSymbol: 'Enter a ticker before performing this action.',
@@ -228,14 +392,33 @@
           employees: 'Employees',
           dividend_yield: 'Dividend Yield',
         },
+        snapshotPrefix: 'Snapshot',
+        snapshotUnknown: '—',
+        snapshotUpdated: 'Updated',
+        snapshotRunning: 'Refreshing',
+        snapshotError: 'Failed',
         sourcePrefix: 'Data source: ',
         sourceLabels: {
           alpaca: 'Alpaca',
-          yfinance: 'Yahoo Finance',
           cache: 'Cache',
           unknown: 'Unknown',
         },
       };
+
+  function ensureSnapshotNode() {
+    if (snapshotText || !statusSection || !sourceText) return;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'market-status-meta';
+    snapshotText = document.createElement('span');
+    snapshotText.className = 'market-snapshot';
+    snapshotText.dataset.role = 'snapshot-text';
+    snapshotText.textContent = `${TEXT.snapshotPrefix}：${TEXT.snapshotUnknown}`;
+    wrapper.appendChild(snapshotText);
+    wrapper.appendChild(sourceText);
+    statusSection.appendChild(wrapper);
+  }
+
+  ensureSnapshotNode();
 
   function getIndicatorLib() {
     if (window.technicalindicators) return window.technicalindicators;
@@ -532,16 +715,18 @@
 
     resize() {
       if (this.chart && this.container) {
-        this.chart.applyOptions({
-          width: this.container.clientWidth || 0,
-          height: this.container.clientHeight || 0,
-        });
+        const width = this.container.clientWidth || 0;
+        const height = this.container.clientHeight || 0;
+        if (width > 0 && height > 0) {
+          this.chart.applyOptions({ width, height });
+        }
       }
       if (this.indicatorChart && this.indicatorContainer) {
-        this.indicatorChart.applyOptions({
-          width: this.indicatorContainer.clientWidth || 0,
-          height: this.indicatorContainer.clientHeight || 0,
-        });
+        const width = this.indicatorContainer.clientWidth || 0;
+        const height = this.indicatorContainer.clientHeight || 0;
+        if (width > 0 && height > 0) {
+          this.indicatorChart.applyOptions({ width, height });
+        }
       }
       this._resizeOverlay();
       this.renderOverlay();
@@ -724,13 +909,13 @@
       if (this.indicatorChart) {
         const indicatorScale = this.indicatorChart.timeScale();
         timeScale.subscribeVisibleTimeRangeChange((range) => {
-          if (this._syncingIndicator || !range) return;
+          if (this._syncingIndicator || !range || !this.indicatorSeries.length) return;
           this._syncingIndicator = true;
           indicatorScale.setVisibleRange(range);
           this._syncingIndicator = false;
         });
         indicatorScale.subscribeVisibleTimeRangeChange((range) => {
-          if (this._syncingIndicator || !range) return;
+          if (this._syncingIndicator || !range || !this.indicatorSeries.length) return;
           this._syncingIndicator = true;
           timeScale.setVisibleRange(range);
           this._syncingIndicator = false;
@@ -866,6 +1051,11 @@
       timeframeButtons.forEach((b) => b.classList.remove('is-active'));
       btn.classList.add('is-active');
       currentTimeframe = btn.getAttribute('data-timeframe') || '1mo';
+      rankSort = 'default';
+      rankItemsBase = [];
+      rankItems = [];
+      updateSortIndicator();
+      updateStatusContext();
       if (currentListType !== 'all') {
         if (searchInput) {
           searchInput.value = '';
@@ -907,10 +1097,317 @@
     });
   }
 
-  function setStatus(text) {
-    if (statusText) {
+  if (statusRefresh) {
+    statusRefresh.addEventListener('click', () => {
+      triggerRefresh();
+    });
+  }
+
+  if (timezoneToggle) {
+    timezoneToggle.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-tz]');
+      if (!button) return;
+      const nextMode = button.dataset.tz;
+      setTimezoneMode(nextMode);
+    });
+  }
+
+  if (autoRefreshToggle) {
+    autoRefreshToggle.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-interval]');
+      if (!button) return;
+      const nextValue = parseInt(button.dataset.interval, 10);
+      if (!Number.isFinite(nextValue)) return;
+      setAutoRefreshInterval(nextValue);
+    });
+  }
+
+  if (autoRefreshPause) {
+    autoRefreshPause.addEventListener('click', () => {
+      if (!autoRefreshMs) return;
+      if (autoRefreshPaused) {
+        resumeAutoRefresh({ manual: true });
+      } else {
+        pauseAutoRefresh({ manual: true });
+      }
+    });
+  }
+
+  if (snapshotDetails && snapshotDetailsPanel) {
+    snapshotDetails.addEventListener('click', () => {
+      const next = !snapshotDetailsPanel.hidden;
+      snapshotDetailsPanel.hidden = next;
+    });
+  }
+
+  if (snapshotRetry) {
+    snapshotRetry.addEventListener('click', () => {
+      triggerRefresh();
+    });
+  }
+
+  function getStatusLabel(state) {
+    const labels = TEXT.statusLabels || {};
+    return labels[state] || labels.ready || '';
+  }
+
+  function getStatusMessage(state) {
+    const messages = TEXT.statusMessages || {};
+    return messages[state] || messages.ready || '';
+  }
+
+  function applyStatusState(nextState, { forceMessage = false } = {}) {
+    currentStatusState = nextState;
+    if (statusSection) {
+      statusSection.dataset.state = nextState || '';
+    }
+    if (statusState) {
+      statusState.textContent = getStatusLabel(nextState);
+    }
+    if (statusText && (forceMessage || !statusMessageOverride)) {
+      statusText.textContent = getStatusMessage(nextState);
+    }
+  }
+
+  function deriveStatusState() {
+    if (isListLoading) return 'refreshing';
+    if (snapshotState && snapshotState.state === 'snapshot_building') return 'snapshot_building';
+    if (snapshotState && snapshotState.state === 'partial_ready') return 'partial_ready';
+    if (!lastStatusGeneratedAt) return 'stale';
+    return 'ready';
+  }
+
+  function refreshStatusState({ forceMessage = false } = {}) {
+    const derived = deriveStatusState();
+    const force =
+      forceMessage ||
+      derived === 'partial_ready' ||
+      derived === 'snapshot_building' ||
+      derived === 'stale';
+    applyStatusState(derived, { forceMessage: force });
+  }
+
+  function setStatus(text, { forceState = null, forceMessage = false } = {}) {
+    statusMessageOverride = text || '';
+    if (statusText && text) {
       statusText.textContent = text;
     }
+    if (forceState) {
+      applyStatusState(forceState, { forceMessage });
+      return;
+    }
+    refreshStatusState();
+  }
+
+  function formatDisplayTime(value) {
+    return formatTimestamp(value, timezoneMode, locale);
+  }
+
+  function setStatusUpdated(value) {
+    lastStatusGeneratedAt = value || '';
+    if (!statusUpdated) return;
+    const formatted = value ? formatDisplayTime(value) : '';
+    statusUpdated.textContent = formatted || '';
+    if (statusUpdated.tagName === 'TIME') {
+      statusUpdated.setAttribute('datetime', value || '');
+    }
+  }
+
+  function updateTimezoneToggle() {
+    if (!timezoneToggle) return;
+    timezoneToggle.querySelectorAll('button[data-tz]').forEach((btn) => {
+      const isActive = btn.dataset.tz === timezoneMode;
+      btn.classList.toggle('is-active', isActive);
+      btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
+  }
+
+  function updateAutoRefreshToggle() {
+    if (!autoRefreshToggle) return;
+    autoRefreshToggle.querySelectorAll('button[data-interval]').forEach((btn) => {
+      const value = parseInt(btn.dataset.interval, 10);
+      const isActive = Number.isFinite(value) && value === autoRefreshMs;
+      btn.classList.toggle('is-active', isActive);
+      btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
+    const enabled = Boolean(autoRefreshMs);
+    if (autoRefreshPause) {
+      autoRefreshPause.disabled = !enabled;
+      autoRefreshPause.classList.toggle('is-disabled', !enabled);
+      autoRefreshPause.textContent = autoRefreshPaused || autoRefreshSuspended ? TEXT.resume : TEXT.pause;
+    }
+    updateAutoRefreshCountdown();
+  }
+
+  function updateAutoRefreshCountdown() {
+    if (!autoRefreshCountdown) return;
+    if (!autoRefreshMs) {
+      autoRefreshCountdown.textContent = `${TEXT.countdownPrefix}: —`;
+      return;
+    }
+    if (autoRefreshPaused || autoRefreshSuspended) {
+      autoRefreshCountdown.textContent = `${TEXT.countdownPrefix}: ${TEXT.paused}`;
+      return;
+    }
+    if (!autoRefreshNextAt) {
+      autoRefreshCountdown.textContent = `${TEXT.countdownPrefix}: —`;
+      return;
+    }
+    const remaining = Math.max(autoRefreshNextAt - Date.now(), 0);
+    const seconds = Math.max(Math.ceil(remaining / 1000), 0);
+    autoRefreshCountdown.textContent = `${TEXT.countdownPrefix}: ${seconds}s`;
+  }
+
+  function refreshTimeDisplays() {
+    if (lastStatusGeneratedAt) {
+      setStatusUpdated(lastStatusGeneratedAt);
+    }
+    if (lastSnapshotMeta) {
+      setSnapshotStatus(lastSnapshotMeta, lastSnapshotKey);
+    }
+    if (detailCache && detailCache.payload) {
+      updateDetailTimes(detailCache.payload, { updateSubtitle: !(detailManager && detailManager.liveMode) });
+    }
+  }
+
+  function setTimezoneMode(nextMode, { persist = true } = {}) {
+    if (nextMode !== 'utc' && nextMode !== 'local') return;
+    timezoneMode = nextMode;
+    if (persist) {
+      savePreference(PREF_TIMEZONE_KEY, nextMode);
+    }
+    updateTimezoneToggle();
+    refreshTimeDisplays();
+  }
+
+  function setAutoRefreshInterval(nextInterval, { persist = true } = {}) {
+    if (!AUTO_REFRESH_OPTIONS.includes(nextInterval)) return;
+    autoRefreshMs = nextInterval;
+    autoRefreshPaused = false;
+    autoRefreshSuspended = false;
+    autoRefreshRemainingMs = 0;
+    autoRefreshNextAt = 0;
+    if (persist) {
+      savePreference(PREF_AUTO_REFRESH_KEY, nextInterval);
+    }
+    updateAutoRefreshToggle();
+    scheduleAutoRefresh();
+  }
+
+  function triggerRefresh() {
+    if (isListLoading) {
+      setStatus(TEXT.refreshSkipped, { forceState: 'refreshing', forceMessage: true });
+      return;
+    }
+    const value = (searchInput && searchInput.value.trim()) || '';
+    if (currentListType === 'all') {
+      loadAllStocks({ query: value, page: 1, letter: allStocksLetter });
+    } else {
+      loadData(value, { listType: currentListType, keepListType: true, openDetail: false });
+    }
+  }
+
+  function getListLabelText(listType) {
+    if (TEXT.listLabels && TEXT.listLabels[listType]) {
+      return TEXT.listLabels[listType];
+    }
+    return getListLabel(listType);
+  }
+
+  function buildContextLabel(listType, timeframeKey) {
+    const listLabel = getListLabelText(listType);
+    if (listType === 'all') {
+      return listLabel;
+    }
+    const tfLabel = TEXT.timeframes[timeframeKey] || timeframeKey;
+    return `${listLabel} · ${tfLabel}`;
+  }
+
+  function updateStatusContext() {
+    const label = buildContextLabel(currentListType, currentTimeframe);
+    if (statusContext) {
+      statusContext.textContent = label;
+    }
+    if (rankContext) {
+      if (currentListType === 'all') {
+        rankContext.textContent = label;
+      } else {
+        const tfLabel = TEXT.timeframes[currentTimeframe] || currentTimeframe;
+        rankContext.textContent = `${getListLabelText(currentListType)}（${tfLabel}）`;
+      }
+    }
+    updateSortSummary();
+  }
+
+  function isListVisible() {
+    return currentView === 'list';
+  }
+
+  function isChartContainerReady() {
+    if (!detailChartEl) return false;
+    if (detailChartEl.offsetParent === null) return false;
+    const width = detailChartEl.clientWidth || 0;
+    const height = detailChartEl.clientHeight || 0;
+    return width > 24 && height > 24;
+  }
+
+  function scheduleChartInit() {
+    if (chartInitTimer || !detailChartEl) return;
+    let attempts = 0;
+    const tryInit = () => {
+      attempts += 1;
+      if (ensureDetailChart()) {
+        chartInitTimer = null;
+        if (pendingChartRender) {
+          const { symbol, rangeKey, payload, bars } = pendingChartRender;
+          pendingChartRender = null;
+          applyDetailPayload(symbol, rangeKey, payload, bars, true);
+        }
+        return;
+      }
+      if (attempts < 10) {
+        chartInitTimer = setTimeout(tryInit, 120);
+      } else {
+        chartInitTimer = null;
+      }
+    };
+    chartInitTimer = setTimeout(tryInit, 0);
+  }
+
+  function buildSortSummary() {
+    const header = getListHeader(currentListType);
+    const stateLabel =
+      rankSort === 'asc' ? TEXT.sortAsc : rankSort === 'desc' ? TEXT.sortDesc : TEXT.sortDefault;
+    return `${TEXT.sortedBy} ${header} (${stateLabel})`;
+  }
+
+  function updateSortSummary() {
+    if (!rankSortSummaries.length) return;
+    const summary = buildSortSummary();
+    rankSortSummaries.forEach((el) => {
+      if (el) el.textContent = summary;
+    });
+  }
+
+  function updateSortIndicator() {
+    if (rankingSortButton) {
+      const isActive = rankSort !== 'default';
+      rankingSortButton.classList.toggle('is-active', isActive);
+      if (rankingChangeHeader) {
+        const sortState = rankSort === 'asc' ? 'ascending' : rankSort === 'desc' ? 'descending' : 'none';
+        rankingChangeHeader.setAttribute('aria-sort', sortState);
+      }
+      if (rankingSortIcon) {
+        if (rankSort === 'asc') {
+          rankingSortIcon.textContent = '↑';
+        } else if (rankSort === 'desc') {
+          rankingSortIcon.textContent = '↓';
+        } else {
+          rankingSortIcon.textContent = '↕';
+        }
+      }
+    }
+    updateSortSummary();
   }
 
   function updateRankDescription(type) {
@@ -919,6 +1416,7 @@
       gainers: rankDesc.dataset.descGainers,
       losers: rankDesc.dataset.descLosers,
       most_active: rankDesc.dataset.descMostActive,
+      top_turnover: rankDesc.dataset.descTopTurnover,
       all: rankDesc.dataset.descAll,
     };
     const nextText = descMap[type] || rankDesc.dataset.descGainers || '';
@@ -929,11 +1427,18 @@
 
   function setActiveListType(type) {
     currentListType = type;
+    rankSort = 'default';
+    rankItemsBase = [];
+    rankItems = [];
+    updateSortIndicator();
     rankTabs.forEach((tab) => {
       const tabType = tab.dataset.list || '';
-      tab.classList.toggle('is-active', tabType === type);
+      const isActive = tabType === type;
+      tab.classList.toggle('is-active', isActive);
+      tab.setAttribute('aria-pressed', isActive ? 'true' : 'false');
     });
     updateRankDescription(type);
+    updateStatusContext();
     if (rankingsSection && allStocksSection) {
       const showAll = type === 'all';
       rankingsSection.hidden = showAll;
@@ -941,12 +1446,100 @@
     }
   }
 
+  function resetRankPaging(pageSize) {
+    rankOffset = 0;
+    rankNextOffset = null;
+    rankHasMore = false;
+    rankIsLoadingMore = false;
+    if (typeof pageSize === 'number' && Number.isFinite(pageSize)) {
+      rankPageSize = pageSize;
+    }
+    if (rankSentinel) {
+      rankSentinel.hidden = true;
+    }
+  }
+
+  function updateRankPaging(payload, items, offset, pageSize) {
+    const responseOffset = Number(payload && payload.offset);
+    const responseLimit = Number(payload && payload.limit);
+    const nextOffset =
+      payload && Number.isFinite(payload.next_offset)
+        ? Number(payload.next_offset)
+        : (Number.isFinite(responseOffset) ? responseOffset : offset) + (items ? items.length : 0);
+    const hasMore = Boolean(payload && payload.has_more);
+    rankOffset = Number.isFinite(responseOffset) ? responseOffset : offset;
+    rankNextOffset = hasMore ? nextOffset : null;
+    rankHasMore = hasMore;
+    if (Number.isFinite(responseLimit)) {
+      rankPageSize = responseLimit;
+    } else if (Number.isFinite(pageSize)) {
+      rankPageSize = pageSize;
+    }
+    if (rankSentinel) {
+      rankSentinel.hidden = !rankHasMore;
+    }
+  }
+
+  function applyRankSort(items) {
+    if (!Array.isArray(items)) return [];
+    if (rankSort === 'default') return items.slice();
+    const direction = rankSort === 'asc' ? 1 : -1;
+    return items
+      .slice()
+      .sort((left, right) => {
+        const leftValue = resolveMetricValue(left, currentListType);
+        const rightValue = resolveMetricValue(right, currentListType);
+        if (leftValue === null && rightValue === null) return 0;
+        if (leftValue === null) return 1;
+        if (rightValue === null) return -1;
+        return (leftValue - rightValue) * direction;
+      });
+  }
+
+  function updateRankItems(items, isAppend) {
+    const incoming = Array.isArray(items) ? items : [];
+    const mergedResult = mergeRankItems(isAppend ? rankItemsBase : [], incoming);
+    rankItemsBase = mergedResult.merged;
+    rankItems = applyRankSort(rankItemsBase);
+    return { merged: rankItems, appended: mergedResult.appended };
+  }
+
+  function maybeLoadMoreRankings() {
+    if (rankIsLoadingMore || !rankHasMore) return;
+    if (!isListVisible() || currentListType === 'all') return;
+    if (!rankNextOffset && rankNextOffset !== 0) return;
+    loadData('', {
+      listType: currentListType,
+      keepListType: true,
+      openDetail: false,
+      append: true,
+      offset: rankNextOffset,
+      pageSize: rankPageSize,
+    });
+  }
+
+  function setupRankObserver() {
+    if (!rankSentinel) return;
+    if (rankObserver) {
+      rankObserver.disconnect();
+      rankObserver = null;
+    }
+    rankObserver = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        maybeLoadMoreRankings();
+      },
+      { rootMargin: '200px' },
+    );
+    rankObserver.observe(rankSentinel);
+  }
+
   function setRetryingState(retryAfterSeconds) {
     const delaySeconds = Math.min(Math.max(parseInt(retryAfterSeconds, 10) || 3, 2), 30);
     if (statusSection) {
       statusSection.classList.add('is-retrying');
     }
-    setStatus(TEXT.retrying);
+    setStatus(TEXT.retrying, { forceState: 'refreshing', forceMessage: true });
     if (retryTimer) {
       clearTimeout(retryTimer);
     }
@@ -964,6 +1557,129 @@
     const normalizedKey = sourceKey && labels[sourceKey] ? sourceKey : 'unknown';
     const label = labels[normalizedKey] || labels.unknown || '';
     sourceText.textContent = `${TEXT.sourcePrefix || ''}${label}`;
+  }
+
+  function buildSnapshotPrefix(timeframeKey) {
+    const key = typeof timeframeKey === 'string' ? timeframeKey : '';
+    const label = key && key !== '1d' ? (TEXT.timeframes && TEXT.timeframes[key]) || key : '';
+    return label ? `${TEXT.snapshotPrefix}(${label})` : TEXT.snapshotPrefix;
+  }
+
+  function formatSnapshotStatus(meta, timeframeKey) {
+    const prefix = buildSnapshotPrefix(timeframeKey);
+    const result = {
+      state: 'ready',
+      text: `${prefix}：${TEXT.snapshotUnknown}`,
+      warning: false,
+      warningText: TEXT.partialData,
+      warningDetail: TEXT.partialDetail,
+      progressValue: 0,
+      showProgress: false,
+    };
+    if (!meta || typeof meta !== 'object') {
+      result.state = 'stale';
+      return result;
+    }
+    const progress = meta.progress;
+    if (progress && progress.status === 'running') {
+      const completed = Number(progress.chunks_completed);
+      const total = Number(progress.total_chunks);
+      const totalSymbols = Number(progress.total_symbols);
+      const chunkSize = Number(progress.chunk_size);
+      let progressText = '';
+      let progressValue = 0;
+      if (Number.isFinite(completed) && Number.isFinite(chunkSize) && Number.isFinite(totalSymbols) && totalSymbols > 0) {
+        const completedSymbols = Math.min(totalSymbols, completed * chunkSize);
+        progressValue = Math.round((completedSymbols / totalSymbols) * 100);
+        progressText = ` ${completedSymbols}/${totalSymbols} (${progressValue}%)`;
+      } else if (Number.isFinite(completed) && Number.isFinite(total) && total > 0) {
+        progressValue = Math.round((completed / total) * 100);
+        progressText = ` ${completed}/${total} (${progressValue}%)`;
+      } else if (Number.isFinite(completed)) {
+        progressText = ` ${completed}`;
+      }
+      result.text = `${prefix}：${TEXT.snapshotRunning}${progressText}`;
+      result.progressValue = progressValue;
+      result.showProgress = true;
+      if (progressValue >= 100) {
+        result.state = 'partial_ready';
+        result.warning = true;
+      } else {
+        result.state = 'snapshot_building';
+      }
+      return result;
+    }
+    if (meta.error) {
+      const errorMsg = meta.error && meta.error.error ? String(meta.error.error) : '';
+      const suffix = errorMsg ? ` · ${errorMsg}` : '';
+      result.text = `${prefix}：${TEXT.snapshotError}${suffix}`;
+      result.state = 'partial_ready';
+      result.warning = true;
+      result.progressValue = 0;
+      return result;
+    }
+    const timeframes = meta.timeframes && typeof meta.timeframes === 'object' ? meta.timeframes : null;
+    let latest = null;
+    if (timeframeKey && timeframeKey !== '1d' && timeframes && timeframes[timeframeKey]) {
+      latest = timeframes[timeframeKey];
+      if (latest && latest.status && latest.status !== 'complete') {
+        result.text = `${prefix}：${TEXT.snapshotError}`;
+        result.state = 'partial_ready';
+        result.warning = true;
+        return result;
+      }
+    }
+    if (!latest && meta.latest) {
+      latest = meta.latest;
+    }
+    const generatedAt = latest && latest.generated_at ? String(latest.generated_at) : '';
+    if (generatedAt) {
+      result.text = `${prefix}：${TEXT.snapshotUpdated} ${formatDisplayTime(generatedAt)}`;
+      result.progressValue = 100;
+      result.showProgress = false;
+      result.state = 'ready';
+      return result;
+    }
+    result.state = 'stale';
+    return result;
+  }
+
+  function setSnapshotStatus(meta, timeframeKey) {
+    if (!snapshotText) return;
+    lastSnapshotMeta = meta;
+    lastSnapshotKey = timeframeKey;
+    const result = formatSnapshotStatus(meta, timeframeKey);
+    snapshotText.textContent = result.text;
+    snapshotText.classList.toggle('is-error', result.state === 'partial_ready');
+    if (snapshotProgressFill) {
+      const progressBar = snapshotProgressFill.closest('.market-progress-bar');
+      const clamped = Math.min(Math.max(Number(result.progressValue) || 0, 0), 100);
+      snapshotProgressFill.style.width = `${clamped}%`;
+      if (progressBar) {
+        progressBar.setAttribute('aria-valuenow', String(clamped));
+      }
+    }
+    if (snapshotProgress) {
+      snapshotProgress.hidden = !result.showProgress;
+    }
+    if (snapshotWarning) {
+      const warningText = result.warningText || TEXT.partialData;
+      if (snapshotWarningText) {
+        snapshotWarningText.textContent = warningText;
+      } else {
+        snapshotWarning.textContent = warningText;
+      }
+      if (snapshotDetailsPanel) {
+        snapshotDetailsPanel.hidden = true;
+        snapshotDetailsPanel.textContent = result.warningDetail || TEXT.partialDetail;
+      }
+      snapshotWarning.hidden = !result.warning;
+    }
+    if (statusExpanded) {
+      statusExpanded.hidden = !(result.showProgress || result.warning);
+    }
+    snapshotState = result;
+    refreshStatusState();
   }
 
   function applyLiveUpdate(update) {
@@ -1002,9 +1718,10 @@
         applyChangeState(changeCell, changePct);
         return;
       }
-      if (isRankingRow && currentListType !== 'most_active' && currentTimeframe === '1d') {
+      if (isRankingRow && (currentListType === 'gainers' || currentListType === 'losers') && currentTimeframe === '1d') {
         changeCell.textContent = formatChange(changePct);
-        applyChangeState(changeCell, changePct, currentListType === 'losers');
+        const meta = getListMeta(currentListType);
+        applyChangeState(changeCell, changePct, meta && meta.invert);
       }
     });
     if (detailSymbol && detailSymbol === symbol) {
@@ -1124,17 +1841,33 @@
   }
 
   function setView(mode) {
-    currentView = mode || 'list';
+    const targetView = mode || 'list';
+    chartVisible = targetView === 'chart';
+    currentView = targetView;
     if (viewList) viewList.classList.toggle('is-active', currentView === 'list');
     if (viewDetail) viewDetail.classList.toggle('is-active', currentView === 'detail');
     if (viewChart) viewChart.classList.toggle('is-active', currentView === 'chart');
-    if (currentView === 'chart') {
+    if (marketPage) {
+      marketPage.classList.remove('view-list', 'view-detail', 'view-chart');
+      marketPage.classList.add(`view-${currentView}`);
+    }
+
+    if (paneTabs.length) {
+      paneTabs.forEach((tab) => {
+        const matches = tab.dataset.view === currentView;
+        tab.classList.toggle('is-active', matches);
+        tab.setAttribute('aria-selected', matches ? 'true' : 'false');
+        tab.setAttribute('tabindex', matches ? '0' : '-1');
+      });
+    }
+
+    if (chartVisible) {
       resizeDetailChart();
     }
-    if (currentView === 'list') {
+    if (isListVisible()) {
       scheduleAutoRefresh();
     }
-    if (currentView !== 'chart') {
+    if (!chartVisible) {
       clearLiveWait();
       stopLiveQuotePolling();
     }
@@ -1165,8 +1898,25 @@
         detailChangeEl.textContent = '--';
       }
     }
+    updateDetailTimes(payload);
+  }
+
+  function updateDetailTimes(payload, options = {}) {
+    const { updateSubtitle = true } = options;
+    const raw = payload && payload.generated_at ? payload.generated_at : '';
+    const display = raw ? formatDisplayTime(raw) : '';
     if (detailMetaEl) {
-      detailMetaEl.textContent = payload && payload.generated_at ? `${TEXT.updatedLabel} ${payload.generated_at}` : '';
+      detailMetaEl.textContent = display ? `${TEXT.updatedLabel} ${display}` : '';
+    }
+    if (detailUpdated) {
+      detailUpdated.textContent = display ? `${TEXT.updatedLabel} ${display}` : '';
+    }
+    if (detailSubtitle && updateSubtitle) {
+      if (display) {
+        detailSubtitle.textContent = langPrefix === 'zh' ? `更新时间：${display}` : `Updated: ${display}`;
+      } else {
+        detailSubtitle.textContent = '';
+      }
     }
   }
 
@@ -1197,26 +1947,35 @@
   function ensureDetailChart() {
     if (!detailChartEl) return false;
     if (detailManager) return true;
-    detailManager = new ChartManager({
-      container: detailChartEl,
-      indicatorContainer: detailIndicatorEl,
-      langPrefix,
-      onStatus: setDetailStatus,
-    });
-    const ready = detailManager.init();
-    if (ready && detailOverlaySelect) {
-      detailManager.setOverlay(detailOverlaySelect.value);
-    }
-    if (ready && detailIndicatorSelect) {
-      detailManager.setIndicator(detailIndicatorSelect.value);
-    }
-    if (ready && detailDrawButtons.length) {
-      const activeDraw = detailDrawButtons.find((btn) => btn.classList.contains('is-active'));
-      if (activeDraw && activeDraw.dataset.draw && activeDraw.dataset.draw !== 'clear') {
-        detailManager.setDrawMode(activeDraw.dataset.draw);
+    if (!isChartContainerReady()) return false;
+    try {
+      detailManager = new ChartManager({
+        container: detailChartEl,
+        indicatorContainer: detailIndicatorEl,
+        langPrefix,
+        onStatus: setDetailStatus,
+      });
+      const ready = detailManager.init();
+      if (ready && detailOverlaySelect) {
+        detailManager.setOverlay(detailOverlaySelect.value);
       }
+      if (ready && detailIndicatorSelect) {
+        detailManager.setIndicator(detailIndicatorSelect.value);
+      }
+      if (ready && detailDrawButtons.length) {
+        const activeDraw = detailDrawButtons.find((btn) => btn.classList.contains('is-active'));
+        if (activeDraw && activeDraw.dataset.draw && activeDraw.dataset.draw !== 'clear') {
+          detailManager.setDrawMode(activeDraw.dataset.draw);
+        }
+      }
+      return ready;
+    } catch (error) {
+      if (detailManager) {
+        detailManager = null;
+      }
+      setDetailStatus(TEXT.detailError, true);
+      return false;
     }
-    return ready;
   }
 
   function renderProfilePanel(profile) {
@@ -1328,6 +2087,8 @@
     updateDetailTimeScale(effectiveKey);
     if (!renderChart) return;
     if (!ensureDetailChart() || !detailManager) {
+      pendingChartRender = { symbol, rangeKey, payload, bars };
+      scheduleChartInit();
       return;
     }
     detailManager.setData(bars);
@@ -1335,19 +2096,11 @@
       const sourceLabel = TEXT.sourceLabels[payload.data_source] || TEXT.sourceLabels.unknown || '';
       detailSource.textContent = sourceLabel ? `${TEXT.sourcePrefix || ''}${sourceLabel}` : '';
     }
-    if (detailUpdated) {
-      detailUpdated.textContent = payload.generated_at ? `${TEXT.updatedLabel} ${payload.generated_at}` : '';
-    }
+    updateDetailTimes(payload);
     const tfLabel =
       payload.timeframe && (langPrefix === 'zh' ? payload.timeframe.label : payload.timeframe.label_en);
     if (detailTitle) {
       detailTitle.textContent = tfLabel ? `${symbol} · ${tfLabel}` : symbol;
-    }
-    if (detailSubtitle) {
-      detailSubtitle.textContent =
-        langPrefix === 'zh'
-          ? `更新时间：${payload.generated_at || TEXT.justNow}`
-          : `Updated: ${payload.generated_at || TEXT.justNow}`;
     }
     const requested = payload.requested_timeframe
       ? langPrefix === 'zh'
@@ -1494,9 +2247,28 @@
     });
   }
 
+  function highlightSelectedRows(symbol) {
+    const normalized = normalizeSymbol(symbol);
+    if (listContainer) {
+      listContainer.querySelectorAll('tr[data-symbol]').forEach((row) => {
+        const isActive = row.dataset.symbol === normalized;
+        row.classList.toggle('is-selected', isActive);
+        row.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      });
+    }
+    if (allStocksBody) {
+      allStocksBody.querySelectorAll('tr[data-symbol]').forEach((row) => {
+        const isActive = row.dataset.symbol === normalized;
+        row.classList.toggle('is-selected', isActive);
+        row.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      });
+    }
+  }
+
   function openDetailPanel(symbol) {
     detailSymbol = symbol;
     setView('detail');
+    highlightSelectedRows(symbol);
     if (detailSymbolEl) {
       detailSymbolEl.textContent = symbol;
     }
@@ -1525,6 +2297,10 @@
     }
     setView('chart');
     setDetailRange(detailRange);
+    if (!isChartContainerReady()) {
+      scheduleChartInit();
+      return;
+    }
     loadDetailData(detailSymbol, detailRange, { renderChart: true, allowCache: true });
   }
 
@@ -1565,7 +2341,7 @@
       clearListState(container);
       const row = document.createElement('tr');
       const cell = document.createElement('td');
-      cell.colSpan = 5;
+      cell.colSpan = container === listContainer ? RANKING_COLUMNS : ALL_STOCKS_COLUMNS;
       cell.textContent = TEXT.loading;
       row.appendChild(cell);
       container.appendChild(row);
@@ -1584,15 +2360,53 @@
     }
   }
 
+  function setRankingLoadingMore(isLoading) {
+    if (!listContainer || listContainer.tagName !== 'TBODY') return;
+    const existing = listContainer.querySelector('[data-role="ranking-loader"]');
+    if (!isLoading) {
+      if (existing) {
+        existing.remove();
+      }
+      return;
+    }
+    if (existing) return;
+    const row = document.createElement('tr');
+    row.dataset.role = 'ranking-loader';
+    const cell = document.createElement('td');
+    cell.colSpan = RANKING_COLUMNS;
+    cell.className = 'ranking-loading';
+    cell.textContent = TEXT.loadingMore || TEXT.loading;
+    row.appendChild(cell);
+    listContainer.appendChild(row);
+  }
+
   function renderEmpty(container, message) {
     if (!container) return;
     clearListState(container);
     if (container.tagName === 'TBODY') {
       const row = document.createElement('tr');
       const cell = document.createElement('td');
-      cell.colSpan = 5;
-      cell.className = 'market-list-empty';
-      cell.textContent = message;
+      cell.colSpan = container === listContainer ? RANKING_COLUMNS : ALL_STOCKS_COLUMNS;
+      const wrapper = document.createElement('div');
+      wrapper.className = 'market-list-empty';
+      const title = document.createElement('p');
+      title.className = 'market-state-title';
+      title.textContent = message;
+      const hint = document.createElement('p');
+      hint.className = 'market-state-hint';
+      hint.textContent = TEXT.emptyHint || '';
+      const actions = document.createElement('div');
+      actions.className = 'market-state-actions';
+      const retryBtn = document.createElement('button');
+      retryBtn.type = 'button';
+      retryBtn.className = 'market-state-btn';
+      retryBtn.dataset.action = 'retry';
+      retryBtn.textContent = TEXT.retryAction || 'Retry';
+      actions.appendChild(retryBtn);
+      wrapper.appendChild(title);
+      wrapper.appendChild(hint);
+      wrapper.appendChild(actions);
+      cell.appendChild(wrapper);
       row.appendChild(cell);
       container.appendChild(row);
       return;
@@ -1609,9 +2423,27 @@
     if (container.tagName === 'TBODY') {
       const row = document.createElement('tr');
       const cell = document.createElement('td');
-      cell.colSpan = 5;
-      cell.className = 'market-error';
-      cell.textContent = message || TEXT.genericError;
+      cell.colSpan = container === listContainer ? RANKING_COLUMNS : ALL_STOCKS_COLUMNS;
+      const wrapper = document.createElement('div');
+      wrapper.className = 'market-error';
+      const title = document.createElement('p');
+      title.className = 'market-state-title';
+      title.textContent = message || TEXT.genericError;
+      const hint = document.createElement('p');
+      hint.className = 'market-state-hint';
+      hint.textContent = TEXT.errorHint || '';
+      const actions = document.createElement('div');
+      actions.className = 'market-state-actions';
+      const retryBtn = document.createElement('button');
+      retryBtn.type = 'button';
+      retryBtn.className = 'market-state-btn';
+      retryBtn.dataset.action = 'retry';
+      retryBtn.textContent = TEXT.retryAction || 'Retry';
+      actions.appendChild(retryBtn);
+      wrapper.appendChild(title);
+      wrapper.appendChild(hint);
+      wrapper.appendChild(actions);
+      cell.appendChild(wrapper);
       row.appendChild(cell);
       container.appendChild(row);
       return;
@@ -1641,6 +2473,21 @@
     if (abs >= 1e6) return `${(parsed / 1e6).toFixed(1)}M`;
     if (abs >= 1e3) return `${(parsed / 1e3).toFixed(1)}K`;
     return Math.round(parsed).toString();
+  }
+
+  function formatCompactCurrency(value) {
+    const compact = formatCompactNumber(value);
+    return compact === '--' ? compact : `$${compact}`;
+  }
+
+  function formatMultiple(value) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return '--';
+    }
+    if (value >= 10) {
+      return `${value.toFixed(1)}x`;
+    }
+    return `${value.toFixed(2)}x`;
   }
 
   function applyChangeState(el, value, invert, subtle) {
@@ -1777,6 +2624,24 @@
     });
   }
 
+  function syncWatchButtons() {
+    if (!listContainer) return;
+    const buttons = listContainer.querySelectorAll('[data-role="watch-toggle"]');
+    if (!buttons.length) return;
+    buttons.forEach((btn) => {
+      const symbol = (btn.dataset.symbol || '').toUpperCase();
+      if (!symbol) return;
+      const isWatched = watchPool.includes(symbol);
+      btn.classList.toggle('is-active', isWatched);
+      btn.setAttribute('aria-pressed', isWatched ? 'true' : 'false');
+      btn.setAttribute(
+        'aria-label',
+        isWatched ? `${TEXT.typeaheadRemove} ${symbol}` : `${TEXT.typeaheadAdd} ${symbol}`,
+      );
+      btn.textContent = isWatched ? '★' : '☆';
+    });
+  }
+
   function showChipSkeleton(container, count = 3) {
     if (!container) return;
     if (container.dataset.loading === 'true') return;
@@ -1872,6 +2737,20 @@
     });
   }
 
+  function setQuickTab(target) {
+    quickTabs.forEach((tab) => {
+      const isActive = tab.dataset.target === target;
+      tab.classList.toggle('is-active', isActive);
+      tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      tab.setAttribute('tabindex', isActive ? '0' : '-1');
+    });
+    quickPanels.forEach((panel) => {
+      const isActive = panel.dataset.panel === target;
+      panel.classList.toggle('is-active', isActive);
+      panel.hidden = !isActive;
+    });
+  }
+
   const hasTypeaheadUi = Boolean(searchInput && typeaheadPanel && typeaheadList);
   const TYPEAHEAD_LIMIT = 9;
 
@@ -1881,10 +2760,83 @@
 
   function normalizeListType(value) {
     const text = (value || '').toString().trim().toLowerCase();
-    if (text === 'gainers' || text === 'losers' || text === 'most_active' || text === 'all') {
+    if (
+      text === 'gainers' ||
+      text === 'losers' ||
+      text === 'most_active' ||
+      text === 'top_turnover' ||
+      text === 'all'
+    ) {
       return text;
     }
     return 'gainers';
+  }
+
+  const LIST_TYPE_META = {
+    gainers: {
+      header: { zh: '涨跌幅', en: 'Chg%' },
+      label: { zh: '涨跌幅', en: 'Chg%' },
+      metricKey: 'change_pct_period',
+      metricType: 'percent',
+      invert: false,
+      useMetricLabel: false,
+    },
+    losers: {
+      header: { zh: '涨跌幅', en: 'Chg%' },
+      label: { zh: '涨跌幅', en: 'Chg%' },
+      metricKey: 'change_pct_period',
+      metricType: 'percent',
+      invert: false,
+      useMetricLabel: false,
+    },
+    most_active: {
+      header: { zh: '成交量', en: 'Volume' },
+      label: { zh: '成交量', en: 'Volume' },
+      metricKey: 'volume',
+      metricType: 'volume',
+      invert: false,
+      useMetricLabel: true,
+    },
+    top_turnover: {
+      header: { zh: '成交额', en: 'Turnover' },
+      label: { zh: '成交额', en: 'Turnover' },
+      metricKey: 'dollar_volume',
+      metricType: 'turnover',
+      invert: false,
+      neutral: true,
+      useMetricLabel: true,
+    },
+    all: {
+      header: { zh: '涨跌幅', en: 'Chg%' },
+      label: { zh: '全部股票', en: 'All Stocks' },
+      metricKey: 'change_pct',
+      metricType: 'percent',
+      invert: false,
+      useMetricLabel: true,
+    },
+  };
+
+  function getListMeta(listType) {
+    return LIST_TYPE_META[listType] || LIST_TYPE_META.gainers;
+  }
+
+  function coerceNumber(value) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function resolveMetricValue(item, listType) {
+    if (!item || typeof item !== 'object') return null;
+    if (listType === 'gainers' || listType === 'losers') {
+      return coerceNumber(item.change_pct_period) ?? coerceNumber(item.change_pct_day);
+    }
+    if (listType === 'most_active') return coerceNumber(item.volume);
+    if (listType === 'top_turnover') return coerceNumber(item.dollar_volume);
+    if (listType === 'all') return coerceNumber(item.change_pct);
+    return null;
   }
 
   function normalizeList(items) {
@@ -2101,23 +3053,73 @@
     }, 160);
   }
 
-  function scheduleAutoRefresh() {
+  function clearAutoRefreshTimers() {
     if (autoRefreshTimer) {
       clearTimeout(autoRefreshTimer);
       autoRefreshTimer = null;
     }
-    if (currentView !== 'list' || currentListType === 'all') {
+    if (autoRefreshCountdownTimer) {
+      clearInterval(autoRefreshCountdownTimer);
+      autoRefreshCountdownTimer = null;
+    }
+  }
+
+  function pauseAutoRefresh({ manual = false } = {}) {
+    if (!autoRefreshMs) return;
+    if (manual) {
+      autoRefreshPaused = true;
+    } else {
+      autoRefreshSuspended = true;
+    }
+    autoRefreshRemainingMs = Math.max(autoRefreshNextAt - Date.now(), autoRefreshMs);
+    autoRefreshNextAt = 0;
+    clearAutoRefreshTimers();
+    updateAutoRefreshToggle();
+  }
+
+  function resumeAutoRefresh({ manual = false } = {}) {
+    if (!autoRefreshMs) return;
+    if (manual) {
+      autoRefreshPaused = false;
+    } else {
+      autoRefreshSuspended = false;
+    }
+    const delay = autoRefreshRemainingMs || autoRefreshMs;
+    autoRefreshRemainingMs = 0;
+    scheduleAutoRefresh({ delayMs: delay });
+    updateAutoRefreshToggle();
+  }
+
+  function scheduleAutoRefresh({ delayMs = null } = {}) {
+    clearAutoRefreshTimers();
+    if (!isListVisible() || currentListType === 'all') {
+      autoRefreshNextAt = 0;
+      updateAutoRefreshCountdown();
       return;
     }
+    if (!autoRefreshMs) {
+      autoRefreshNextAt = 0;
+      updateAutoRefreshCountdown();
+      return;
+    }
+    if (autoRefreshPaused || autoRefreshSuspended) {
+      autoRefreshNextAt = 0;
+      updateAutoRefreshCountdown();
+      return;
+    }
+    const delay = typeof delayMs === 'number' && delayMs >= 0 ? delayMs : autoRefreshMs;
+    autoRefreshNextAt = Date.now() + delay;
+    updateAutoRefreshCountdown();
+    autoRefreshCountdownTimer = window.setInterval(updateAutoRefreshCountdown, 1000);
     autoRefreshTimer = window.setTimeout(() => {
-      if (currentView !== 'list' || currentListType === 'all') return;
+      if (!isListVisible() || currentListType === 'all') return;
       if (isListLoading) {
         scheduleAutoRefresh();
         return;
       }
       const nextQuery = lastRequest.query || '';
       loadData(nextQuery, { listType: currentListType, keepListType: true, openDetail: false });
-    }, AUTO_REFRESH_MS);
+    }, delay);
   }
 
   function syncTypeaheadPools(payload) {
@@ -2196,17 +3198,27 @@
     const skipListRender = Boolean(options.skipListRender);
     const keepListType = Boolean(options.keepListType);
     const openDetail = options.openDetail !== false;
+    const isAppend = Boolean(options.append);
+    const pageSizeCandidate = Number.parseInt(options.pageSize ?? options.limit, 10);
+    const pageSize = Number.isFinite(pageSizeCandidate) ? pageSizeCandidate : RANK_PAGE_SIZE;
+    const offset = Number.isFinite(options.offset) ? Number(options.offset) : 0;
     if (activeListType === 'all') {
       await loadAllStocks({ query: rawQuery, page: 1 });
       return;
     }
-    lastRequest = { query: normalizedQuery || '', options: { ...options, listType: activeListType } };
+    if (!isAppend) {
+      resetRankPaging(pageSize);
+      lastRequest = { query: normalizedQuery || '', options: { ...options, listType: activeListType } };
+    }
     const requestPayload = {
       timeframe: currentTimeframe,
       list: activeListType,
     };
-    if (!normalizedQuery && !options.limit) {
-      requestPayload.limit = DEFAULT_LIST_LIMIT;
+    if (!normalizedQuery) {
+      requestPayload.limit = pageSize;
+    }
+    if (isAppend || offset) {
+      requestPayload.offset = isAppend ? offset : 0;
     }
     if (normalizedQuery) {
       requestPayload.query = normalizedQuery;
@@ -2224,7 +3236,7 @@
       }
     }
     if (options.limit) {
-      requestPayload.limit = options.limit;
+      requestPayload.limit = pageSize;
     }
 
     if (retryTimer) {
@@ -2234,13 +3246,21 @@
     if (statusSection) {
       statusSection.classList.remove('is-retrying');
     }
-    setStatus(`${TEXT.loading} ${TEXT.timeframes[currentTimeframe] || currentTimeframe} ${TEXT.dataSuffix}`);
-    if (!skipListRender) {
-      setListLoading(listContainer);
+    if (!isAppend) {
+      updateStatusContext();
+      setStatus(`${TEXT.loading} ${TEXT.timeframes[currentTimeframe] || currentTimeframe} ${TEXT.dataSuffix}`, {
+        forceState: 'refreshing',
+      });
+      if (!skipListRender) {
+        setListLoading(listContainer);
+      }
+      showChipSkeleton(recentChips, 3);
+      showChipSkeleton(watchlistChips, 4);
+      isListLoading = true;
+    } else {
+      rankIsLoadingMore = true;
+      setRankingLoadingMore(true);
     }
-    showChipSkeleton(recentChips, 3);
-    showChipSkeleton(watchlistChips, 4);
-    isListLoading = true;
 
     const shouldPost =
       Boolean(options.watchAction) || Boolean(options.recentAction) || Boolean(normalizedQuery);
@@ -2262,10 +3282,11 @@
         });
       } else {
         const params = new URLSearchParams({ timeframe: currentTimeframe, list: activeListType });
-        if (!normalizedQuery && !options.limit) {
-          params.set('limit', String(DEFAULT_LIST_LIMIT));
-        } else if (options.limit) {
-          params.set('limit', String(options.limit));
+        if (!normalizedQuery) {
+          params.set('limit', String(pageSize));
+        }
+        if (isAppend || offset) {
+          params.set('offset', String(isAppend ? offset : 0));
         }
         response = await fetch(`${endpoint}?${params.toString()}`, {
           headers: { 'X-Requested-With': 'XMLHttpRequest' },
@@ -2294,11 +3315,29 @@
           items = payload.gainers || [];
         }
       }
+      const incomingItems = Array.isArray(items) ? items.slice() : [];
+      const isRankingList = responseListType !== 'all' && listContainer && listContainer.tagName === 'TBODY';
+      const shouldUpdateRanking = !skipListRender;
+      let rankUpdate = { merged: incomingItems, appended: incomingItems };
+      if (shouldUpdateRanking && isRankingList) {
+        rankUpdate = updateRankItems(incomingItems, isAppend);
+        items = rankUpdate.merged;
+        lastRankingTimeframe = payload.timeframe || null;
+        lastRankingListType = responseListType;
+      }
+      if (shouldUpdateRanking) {
+        updateRankPaging(payload, incomingItems, isAppend ? offset : 0, pageSize);
+      }
       if (!skipListRender) {
-        renderList(listContainer, items, payload.timeframe, responseListType);
-        if (!items.length) {
-          renderEmpty(listContainer, TEXT.emptySymbol);
+        if (isAppend && rankSort === 'default') {
+          appendList(listContainer, rankUpdate.appended, payload.timeframe, responseListType);
         } else {
+          renderList(listContainer, items, payload.timeframe, responseListType);
+          if (!items.length) {
+            renderEmpty(listContainer, TEXT.emptySymbol);
+          }
+        }
+        if (items.length) {
           const liveSymbols = items
             .map((item) => item && item.symbol)
             .filter(Boolean)
@@ -2309,63 +3348,165 @@
           requestLiveSymbols(liveSymbols);
         }
       }
-      updateSuggestionList(payload.suggestions || []);
-      renderChipGroup(recentChips, payload.recent_queries || [], {
-        emptyText: TEXT.emptyChips,
-        countTarget: recentCount,
-        allowRemove: true,
-      });
-      renderChipGroup(watchlistChips, payload.watchlist || [], {
-        emptyText: TEXT.emptyWatchlist,
-        watch: true,
-        countTarget: watchCount,
-        allowRemove: true,
-      });
-      syncTypeaheadPools(payload);
-      const tfKey = payload.timeframe && payload.timeframe.key;
-      const tfLabel = payload.timeframe && (langPrefix === 'zh' ? payload.timeframe.label : payload.timeframe.label_en);
-      let statusMessage = `${TEXT.timeframes[tfKey] || tfLabel || ''} ${TEXT.updated}（${
-        payload.generated_at || TEXT.justNow
-      }）`;
-      const rankingTimeframe = payload.ranking_timeframe;
-      if (
-        rankingTimeframe &&
-        rankingTimeframe.key &&
-        tfKey &&
-        rankingTimeframe.key !== tfKey &&
-        TEXT.closedFallback
-      ) {
-        statusMessage += ` · ${TEXT.closedFallback}`;
-      }
-      const normalizedSymbol = normalizedQuery || '';
-      const actionSymbol = (options.recentTarget || '').toUpperCase();
-      if (options.watchAction === 'add' && normalizedSymbol) {
-        statusMessage += ` · ${TEXT.watchAdded(normalizedSymbol)}`;
-      } else if (options.watchAction === 'remove' && normalizedSymbol) {
-        statusMessage += ` · ${TEXT.watchRemoved(normalizedSymbol)}`;
-      }
-      if (options.recentAction === 'clear') {
-        statusMessage += ` · ${TEXT.historyCleared || ''}`;
-      } else if (options.recentAction === 'delete' && actionSymbol) {
-        const deletedText =
-          typeof TEXT.historyDeleted === 'function' ? TEXT.historyDeleted(actionSymbol) : TEXT.historyDeleted;
-        statusMessage += ` · ${deletedText}`;
-      }
-      setStatus(statusMessage);
-      setSource(payload.data_source);
-      if (normalizedQuery && openDetail) {
-        openDetailPanel(normalizedQuery);
+      if (!isAppend) {
+        updateSuggestionList(payload.suggestions || []);
+        renderChipGroup(recentChips, payload.recent_queries || [], {
+          emptyText: TEXT.emptyChips,
+          countTarget: recentCount,
+          allowRemove: true,
+        });
+        renderChipGroup(watchlistChips, payload.watchlist || [], {
+          emptyText: TEXT.emptyWatchlist,
+          watch: true,
+          countTarget: watchCount,
+          allowRemove: true,
+        });
+        syncWatchButtons();
+        syncTypeaheadPools(payload);
+        const tfKey = payload.timeframe && payload.timeframe.key;
+        const tfLabel = payload.timeframe && (langPrefix === 'zh' ? payload.timeframe.label : payload.timeframe.label_en);
+        const statusNotes = [];
+        const rankingTimeframe = payload.ranking_timeframe;
+        if (
+          rankingTimeframe &&
+          rankingTimeframe.key &&
+          tfKey &&
+          rankingTimeframe.key !== tfKey &&
+          TEXT.closedFallback
+        ) {
+          statusNotes.push(TEXT.closedFallback);
+        }
+        const normalizedSymbol = normalizedQuery || '';
+        const actionSymbol = (options.recentTarget || '').toUpperCase();
+        if (options.watchAction === 'add' && normalizedSymbol) {
+          statusNotes.push(TEXT.watchAdded(normalizedSymbol));
+        } else if (options.watchAction === 'remove' && normalizedSymbol) {
+          statusNotes.push(TEXT.watchRemoved(normalizedSymbol));
+        }
+        if (options.recentAction === 'clear') {
+          statusNotes.push(TEXT.historyCleared || '');
+        } else if (options.recentAction === 'delete' && actionSymbol) {
+          const deletedText =
+            typeof TEXT.historyDeleted === 'function' ? TEXT.historyDeleted(actionSymbol) : TEXT.historyDeleted;
+          statusNotes.push(deletedText);
+        }
+        setStatus(statusNotes.length ? `${TEXT.updated} · ${statusNotes.join(' · ')}` : TEXT.updated);
+        setStatusUpdated(payload.generated_at || TEXT.justNow);
+        updateStatusContext();
+        const snapshotKey =
+          (payload.ranking_timeframe && payload.ranking_timeframe.key) ||
+          (payload.timeframe && payload.timeframe.key) ||
+          currentTimeframe;
+        setSnapshotStatus(payload.snapshot_refresh, snapshotKey);
+        setSource(payload.data_source);
+        if (normalizedQuery && openDetail) {
+          openDetailPanel(normalizedQuery);
+        }
       }
     } catch (error) {
+      if (isAppend) {
+        setRankingLoadingMore(false);
+        return;
+      }
       renderError(listContainer, error && error.message);
-      setStatus(TEXT.statusError);
+      setStatus(TEXT.statusError, { forceState: 'stale', forceMessage: true });
       setSource('unknown');
       hideChipSkeleton(recentChips);
       hideChipSkeleton(watchlistChips);
     } finally {
-      isListLoading = false;
-      scheduleAutoRefresh();
+      if (isAppend) {
+        rankIsLoadingMore = false;
+        setRankingLoadingMore(false);
+      } else {
+        isListLoading = false;
+        scheduleAutoRefresh();
+        refreshStatusState();
+      }
     }
+  }
+
+  function getListHeader(listType) {
+    const meta = getListMeta(listType);
+    return langPrefix === 'zh' ? meta.header.zh : meta.header.en;
+  }
+
+  function getListLabel(listType) {
+    const meta = getListMeta(listType);
+    return langPrefix === 'zh' ? meta.label.zh : meta.label.en;
+  }
+
+  function formatMetricValue(value, meta) {
+    if (!meta) return '--';
+    if (meta.metricType === 'percent') {
+      return formatChange(value);
+    }
+    if (meta.metricType === 'multiple') {
+      return formatMultiple(value);
+    }
+    if (meta.metricType === 'turnover') {
+      return formatCompactCurrency(value);
+    }
+    return formatCompactNumber(value);
+  }
+
+  function applyMetricStyle(cell, value, meta) {
+    if (!cell || !meta) return;
+    cell.classList.remove('is-neutral');
+    if (meta.metricType === 'percent' && !meta.neutral) {
+      applyChangeState(cell, value, meta.invert);
+      return;
+    }
+    cell.classList.add('is-neutral');
+  }
+
+  function buildRankingRow(item, listType) {
+    const symbol = (item.symbol || '').toString().toUpperCase();
+    if (!symbol) return null;
+    const meta = getListMeta(listType);
+    const row = document.createElement('tr');
+    row.dataset.symbol = normalizeSymbol(symbol);
+    row.setAttribute('aria-selected', 'false');
+    const symbolCell = document.createElement('td');
+    symbolCell.textContent = symbol;
+    const nameCell = document.createElement('td');
+    nameCell.textContent = item.name || '--';
+    const exchangeCell = document.createElement('td');
+    exchangeCell.textContent = item.exchange || '--';
+    const priceCell = document.createElement('td');
+    const priceValue =
+      typeof item.price === 'number'
+        ? item.price
+        : typeof item.last === 'number'
+          ? item.last
+          : Number.parseFloat(item.price);
+    priceCell.textContent = Number.isFinite(priceValue) ? priceValue.toFixed(2) : '--';
+    const changeCell = document.createElement('td');
+    const metricValue = resolveMetricValue(item, listType);
+    changeCell.textContent = formatMetricValue(metricValue, meta);
+    applyMetricStyle(changeCell, metricValue, meta);
+    const watchCell = document.createElement('td');
+    watchCell.className = 'col-watch';
+    const watchButton = document.createElement('button');
+    watchButton.type = 'button';
+    watchButton.className = 'watch-toggle';
+    watchButton.dataset.role = 'watch-toggle';
+    watchButton.dataset.symbol = symbol;
+    const isWatched = watchPool.includes(symbol);
+    watchButton.classList.toggle('is-active', isWatched);
+    watchButton.setAttribute('aria-pressed', isWatched ? 'true' : 'false');
+    watchButton.setAttribute(
+      'aria-label',
+      isWatched ? `${TEXT.typeaheadRemove} ${symbol}` : `${TEXT.typeaheadAdd} ${symbol}`,
+    );
+    watchButton.textContent = isWatched ? '★' : '☆';
+    watchCell.appendChild(watchButton);
+    row.appendChild(symbolCell);
+    row.appendChild(nameCell);
+    row.appendChild(exchangeCell);
+    row.appendChild(priceCell);
+    row.appendChild(changeCell);
+    row.appendChild(watchCell);
+    return row;
   }
 
   function renderList(container, items, timeframe, listType) {
@@ -2376,58 +3517,25 @@
       return;
     }
     const isTableBody = container.tagName === 'TBODY';
-    const isMostActive = listType === 'most_active';
-    const invert = listType === 'losers';
+    const meta = getListMeta(listType);
 
-    if (rankingChangeHeader) {
-      rankingChangeHeader.textContent = isMostActive
-        ? TEXT.volumeLabel
-        : langPrefix === 'zh'
-          ? '涨跌幅'
-          : 'Chg%';
+    if (rankingChangeLabel) {
+      rankingChangeLabel.textContent = getListHeader(listType);
+    } else if (rankingChangeHeader) {
+      rankingChangeHeader.textContent = getListHeader(listType);
     }
 
     if (isTableBody) {
       items.forEach((item) => {
-        const symbol = (item.symbol || '').toString().toUpperCase();
-        if (!symbol) return;
-        const row = document.createElement('tr');
-        row.dataset.symbol = normalizeSymbol(symbol);
-        const symbolCell = document.createElement('td');
-        symbolCell.textContent = symbol;
-        const nameCell = document.createElement('td');
-        nameCell.textContent = item.name || '--';
-        const exchangeCell = document.createElement('td');
-        exchangeCell.textContent = item.exchange || '--';
-        const priceCell = document.createElement('td');
-        const priceValue =
-          typeof item.price === 'number'
-            ? item.price
-            : typeof item.last === 'number'
-              ? item.last
-              : Number.parseFloat(item.price);
-        priceCell.textContent = Number.isFinite(priceValue) ? priceValue.toFixed(2) : '--';
-        const changeCell = document.createElement('td');
-        if (isMostActive) {
-          changeCell.textContent = formatCompactNumber(item.volume);
-          changeCell.classList.add('is-neutral');
-        } else {
-          const changeValue =
-            typeof item.change_pct_period === 'number'
-              ? item.change_pct_period
-              : typeof item.change_pct_day === 'number'
-                ? item.change_pct_day
-                : Number.parseFloat(item.change_pct_period);
-          changeCell.textContent = formatChange(changeValue);
-          applyChangeState(changeCell, changeValue, invert);
+        const row = buildRankingRow(item, listType);
+        if (row) {
+          container.appendChild(row);
         }
-        row.appendChild(symbolCell);
-        row.appendChild(nameCell);
-        row.appendChild(exchangeCell);
-        row.appendChild(priceCell);
-        row.appendChild(changeCell);
-        container.appendChild(row);
       });
+      if (detailSymbol) {
+        highlightSelectedRows(detailSymbol);
+      }
+      syncWatchButtons();
       return;
     }
 
@@ -2452,8 +3560,8 @@
         priceEl.textContent = typeof item.price === 'number' ? item.price.toFixed(2) : '--';
       }
       if (primaryLabelEl) {
-        if (isMostActive) {
-          primaryLabelEl.textContent = item.period_label || item.period_label_en || TEXT.volumeLabel;
+        if (meta.useMetricLabel) {
+          primaryLabelEl.textContent = getListLabel(listType);
         } else {
           const fallback = TEXT.timeframes[currentTimeframe] || (langPrefix === 'zh' ? '近1月' : '1M');
           const tfLabel = timeframe ? (langPrefix === 'zh' ? timeframe.label : timeframe.label_en) : '';
@@ -2463,21 +3571,22 @@
       }
       if (primaryEl) {
         primaryEl.classList.remove('is-neutral');
-        if (isMostActive) {
-          primaryEl.textContent = formatCompactNumber(item.volume);
-          primaryEl.classList.add('is-neutral');
+        const metricValue = resolveMetricValue(item, listType);
+        if (meta.useMetricLabel) {
+          primaryEl.textContent = formatMetricValue(metricValue, meta);
+          applyMetricStyle(primaryEl, metricValue, meta);
         } else {
           primaryEl.textContent = formatChange(item.change_pct_period);
-          applyChangeState(primaryEl, item.change_pct_period, invert);
+          applyChangeState(primaryEl, item.change_pct_period, meta.invert);
         }
       }
       if (dayEl) {
         dayEl.textContent = formatChange(item.change_pct_day);
-        applyChangeState(dayEl, item.change_pct_day, invert, true);
+        applyChangeState(dayEl, item.change_pct_day, meta.invert, true);
       }
       if (windowLabel) {
-        if (isMostActive) {
-          windowLabel.textContent = item.period_label || item.period_label_en || TEXT.volumeLabel;
+        if (meta.useMetricLabel) {
+          windowLabel.textContent = getListLabel(listType);
         } else {
           const fallback = TEXT.timeframes[currentTimeframe] || (langPrefix === 'zh' ? '近1月' : '1M');
           const tfWindow = timeframe ? (langPrefix === 'zh' ? timeframe.label : timeframe.label_en) : '';
@@ -2487,7 +3596,7 @@
       }
       if (updatedEl) {
         const timestamps = Array.isArray(item.timestamps) ? item.timestamps : [];
-        const stamp = timestamps.length ? timestamps[timestamps.length - 1] : '';
+        const stamp = timestamps.length ? formatDisplayTime(timestamps[timestamps.length - 1]) : '';
         updatedEl.textContent = stamp ? `${TEXT.updatedLabel} ${stamp}` : '';
       }
       if (backtestLink) {
@@ -2495,16 +3604,35 @@
         backtestLink.href = `${backtestBase}?ticker=${encodeURIComponent(symbol)}`;
       }
       if (canvas) {
-        drawSparkline(canvas, item.series || [], invert);
+        drawSparkline(canvas, item.series || [], meta.invert);
       }
       const card = fragment.querySelector('.market-card');
       if (card) {
         card.dataset.symbol = normalizeSymbol(item.symbol || '');
-        card.dataset.invert = invert ? '1' : '0';
+        card.dataset.invert = meta.invert ? '1' : '0';
         card.dataset.listType = listType || '';
       }
       container.appendChild(fragment);
     });
+  }
+
+  function appendList(container, items, timeframe, listType) {
+    if (!container) return;
+    if (container.tagName !== 'TBODY') {
+      renderList(container, items, timeframe, listType);
+      return;
+    }
+    setRankingLoadingMore(false);
+    items.forEach((item) => {
+      const row = buildRankingRow(item, listType);
+      if (row) {
+        container.appendChild(row);
+      }
+    });
+    if (detailSymbol) {
+      highlightSelectedRows(detailSymbol);
+    }
+    syncWatchButtons();
   }
 
   function renderAllStocksMessage(message) {
@@ -2512,7 +3640,7 @@
     allStocksBody.innerHTML = '';
     const row = document.createElement('tr');
     const cell = document.createElement('td');
-    cell.colSpan = 5;
+    cell.colSpan = ALL_STOCKS_COLUMNS;
     cell.textContent = message;
     row.appendChild(cell);
     allStocksBody.appendChild(row);
@@ -2522,13 +3650,19 @@
     if (!allStocksBody) return;
     allStocksBody.innerHTML = '';
     if (!Array.isArray(items) || !items.length) {
-      renderAllStocksMessage(TEXT.allStocksEmpty);
+      renderEmpty(allStocksBody, TEXT.allStocksEmpty);
       return;
     }
+    const seen = new Set();
     items.forEach((item) => {
       const row = document.createElement('tr');
       const symbol = normalizeSymbol(item.symbol || '');
+      if (!symbol || seen.has(symbol)) {
+        return;
+      }
+      seen.add(symbol);
       row.dataset.symbol = symbol;
+      row.setAttribute('aria-selected', 'false');
 
       const symbolCell = document.createElement('td');
       symbolCell.textContent = symbol || '--';
@@ -2559,6 +3693,9 @@
       row.appendChild(changeCell);
       allStocksBody.appendChild(row);
     });
+    if (detailSymbol) {
+      highlightSelectedRows(detailSymbol);
+    }
   }
 
   function renderAllStocksPagination(page, totalPages) {
@@ -2627,6 +3764,8 @@
     allStocksSize = Math.min(200, Math.max(20, nextSize || 50));
     setAllStocksLetter(allStocksLetter);
     renderAllStocksMessage(TEXT.allStocksLoading);
+    updateStatusContext();
+    setStatus(TEXT.allStocksLoading, { forceState: 'refreshing' });
     if (allStocksPagination) {
       allStocksPagination.innerHTML = '';
     }
@@ -2659,8 +3798,11 @@
       const totalPages = Number(payload.total_pages) || 1;
       updateAllStocksCount(total, page, totalPages);
       renderAllStocksPagination(page, totalPages);
+      setStatus(TEXT.updated);
+      setStatusUpdated(TEXT.justNow);
     } catch (error) {
-      renderAllStocksMessage(error && error.message ? error.message : TEXT.genericError);
+      renderError(allStocksBody, error && error.message ? error.message : TEXT.genericError);
+      setStatus(TEXT.statusError, { forceState: 'stale', forceMessage: true });
     }
   }
 
@@ -2683,6 +3825,32 @@
   }
 
   function handleCardClick(event) {
+    const retryButton = event.target.closest('[data-action="retry"]');
+    if (retryButton) {
+      const value = (searchInput && searchInput.value.trim()) || '';
+      if (currentListType === 'all') {
+        loadAllStocks({ query: value, page: 1, letter: allStocksLetter });
+      } else {
+        loadData(value, { listType: currentListType, keepListType: true, openDetail: false });
+      }
+      return;
+    }
+    const watchButton = event.target.closest('[data-role="watch-toggle"]');
+    if (watchButton) {
+      event.stopPropagation();
+      const symbol = watchButton.dataset.symbol;
+      if (!symbol) return;
+      const isWatched = watchPool.includes(symbol);
+      const action = isWatched ? 'remove' : 'add';
+      loadData(symbol, {
+        watchAction: action,
+        listType: currentListType,
+        keepListType: true,
+        skipListRender: true,
+        openDetail: false,
+      });
+      return;
+    }
     if (event.target.closest('a')) {
       return;
     }
@@ -2703,6 +3871,24 @@
   attachChipHandler(recentChips, { allowRemove: true, onRemove: (symbol) => requestRecentAction('delete', symbol) });
   attachChipHandler(watchlistChips, { allowRemove: true, watch: true });
 
+  if (quickTabs.length) {
+    const activeTab = quickTabs.find((tab) => tab.classList.contains('is-active')) || quickTabs[0];
+    if (activeTab) {
+      setQuickTab(activeTab.dataset.target);
+    }
+    quickTabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        setQuickTab(tab.dataset.target);
+      });
+    });
+  }
+
+  if (recentClear) {
+    recentClear.addEventListener('click', () => {
+      requestRecentAction('clear');
+    });
+  }
+
   if (rankTabs.length) {
     const activeTab = rankTabs.find((tab) => tab.classList.contains('is-active')) || rankTabs[0];
     if (activeTab) {
@@ -2714,6 +3900,19 @@
     }
     rankTabs.forEach((tab) => {
       tab.addEventListener('click', () => switchList(tab.dataset.list));
+    });
+  }
+
+  if (rankingSortButton) {
+    rankingSortButton.addEventListener('click', () => {
+      if (currentListType === 'all') return;
+      if (!rankItemsBase.length) return;
+      rankSort = toggleSortState(rankSort);
+      updateSortIndicator();
+      rankItems = applyRankSort(rankItemsBase);
+      if (listContainer && lastRankingTimeframe && lastRankingListType) {
+        renderList(listContainer, rankItems, lastRankingTimeframe, lastRankingListType);
+      }
     });
   }
 
@@ -2749,6 +3948,11 @@
 
   if (allStocksBody) {
     allStocksBody.addEventListener('click', (event) => {
+      const retryButton = event.target.closest('[data-action="retry"]');
+      if (retryButton) {
+        loadAllStocks({ query: allStocksQuery, page: 1, letter: allStocksLetter });
+        return;
+      }
       const row = event.target.closest('tr');
       if (!row) return;
       const symbol = row.dataset.symbol;
@@ -2763,6 +3967,23 @@
         const target = btn.dataset.viewBack;
         if (!target) return;
         setView(target);
+      });
+    });
+  }
+
+  if (paneTabs.length) {
+    paneTabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const target = tab.dataset.view || 'detail';
+        if (target === 'list') {
+          setView('list');
+          return;
+        }
+        if (target === 'chart') {
+          openChartView();
+        } else {
+          setView('detail');
+        }
       });
     });
   }
@@ -2813,6 +4034,18 @@
     });
   }
 
+  if (detailAdvancedToggle && detailAdvancedPanel) {
+    detailAdvancedToggle.addEventListener('click', () => {
+      const willOpen = detailAdvancedPanel.hidden;
+      detailAdvancedPanel.hidden = !willOpen;
+      detailAdvancedToggle.classList.toggle('is-active', willOpen);
+      detailAdvancedToggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      if (!willOpen && detailTimeframeMenu) {
+        detailTimeframeMenu.hidden = true;
+      }
+    });
+  }
+
   if (detailOverlaySelect) {
     detailOverlaySelect.addEventListener('change', () => {
       if (!ensureDetailChart() || !detailManager) return;
@@ -2850,7 +4083,21 @@
     });
   }
 
-  window.addEventListener('resize', resizeDetailChart);
+  window.addEventListener('resize', () => {
+    setView(currentView || 'list');
+    resizeDetailChart();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (!autoRefreshPaused) {
+        pauseAutoRefresh({ manual: false });
+      }
+      return;
+    }
+    if (autoRefreshSuspended && !autoRefreshPaused) {
+      resumeAutoRefresh({ manual: false });
+    }
+  });
   window.addEventListener('load', () => {
     if (currentView === 'list') {
       setView('list');
@@ -2863,7 +4110,13 @@
   }
 
   updateInsightPanels({});
+  updateStatusContext();
+  updateSortIndicator();
+  updateTimezoneToggle();
+  updateAutoRefreshToggle();
+  setView(currentView || 'list');
 
+  setupRankObserver();
   loadData();
   connectMarketSocket();
 })();

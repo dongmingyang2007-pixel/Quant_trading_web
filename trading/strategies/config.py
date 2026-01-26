@@ -38,6 +38,7 @@ class StrategyInput:
     test_window: int = 21
     entry_threshold: float = 0.55
     exit_threshold: float = 0.45
+    short_threshold: float = 0.3
     max_leverage: float = 2.5
     # ML pipeline controls
     ml_task: str = "direction"  # 'direction' | 'hybrid'

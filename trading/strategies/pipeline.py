@@ -43,6 +43,7 @@ from .risk import calculate_max_drawdown
 from .config import StrategyOutcome, StrategyInput, QuantStrategyError, DEFAULT_STRATEGY_SEED
 from .indicators import compute_indicators
 from .ma_cross import backtest_sma_strategy, format_table
+from .mean_reversion import backtest_mean_reversion_strategy
 from .ml_engine import (
     build_feature_matrix,
     load_best_ml_config,
@@ -206,10 +207,16 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
                 for outcome in component_outcomes
             ]
     else:
-        backtest, metrics, stats = backtest_sma_strategy(
-            prices, params, summarize_backtest_fn=summarize_backtest, compute_oos_report=_compute_oos_from_backtest
-        )
-        component_outcomes.append(StrategyOutcome("传统双均线", backtest, metrics, stats))
+        if params.strategy_engine == "mean_reversion":
+            backtest, metrics, stats = backtest_mean_reversion_strategy(
+                prices, params, summarize_backtest_fn=summarize_backtest, compute_oos_report=_compute_oos_from_backtest
+            )
+            component_outcomes.append(StrategyOutcome("RSI 均值回归", backtest, metrics, stats))
+        else:
+            backtest, metrics, stats = backtest_sma_strategy(
+                prices, params, summarize_backtest_fn=summarize_backtest, compute_oos_report=_compute_oos_from_backtest
+            )
+            component_outcomes.append(StrategyOutcome("传统双均线", backtest, metrics, stats))
     warnings.extend(stats.pop("runtime_warnings", []))
     if not ensemble_weights and component_outcomes:
         ensemble_weights = {component_outcomes[0].engine: 1.0}
@@ -459,7 +466,16 @@ def _run_quant_pipeline_inner(params: StrategyInput) -> dict[str, Any]:
                 }
             )
     remote_meta = {k: remote_overrides.get(k) for k in ("source", "version", "timestamp") if remote_overrides.get(k) is not None}
-    engine_label = _("机器学习动量 + 风险控制") if params.strategy_engine == "ml_momentum" else _("组合策略（主策略：机器学习动量）") if params.strategy_engine == "multi_combo" else _("双均线动量框架")
+    if params.strategy_engine == "ml_momentum":
+        engine_label = _("机器学习动量 + 风险控制")
+    elif params.strategy_engine == "multi_combo":
+        engine_label = _("组合策略（主策略：机器学习动量）")
+    elif params.strategy_engine == "mean_reversion":
+        engine_label = _("RSI 均值回归")
+    elif params.strategy_engine == "rl_policy":
+        engine_label = _("强化学习策略")
+    else:
+        engine_label = _("双均线动量框架")
     walk_forward_report = build_walk_forward_report(backtest.get("strategy_return"))
     purged_schedule = build_purged_kfold_schedule(
         feature_dataset_for_analysis.index if isinstance(feature_dataset_for_analysis, pd.DataFrame) else None,
