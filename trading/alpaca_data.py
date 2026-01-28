@@ -15,31 +15,97 @@ DEFAULT_FEED = os.environ.get("ALPACA_DATA_FEED", "sip")
 DEFAULT_NEWS_PATH = os.environ.get("ALPACA_NEWS_PATH", "/v1beta1/news")
 
 
-def resolve_alpaca_credentials(
-    *,
-    user: Any | None = None,
-    user_id: str | None = None,
-) -> tuple[str | None, str | None]:
-    key_id = None
-    secret = None
-    if user is not None:
-        key_id = resolve_api_credential(user, "alpaca_api_key_id")
-        secret = resolve_api_credential(user, "alpaca_api_secret_key")
+def _resolve_trading_mode(creds: dict[str, str] | None) -> str:
+    mode = ""
+    if isinstance(creds, dict):
+        mode = str(creds.get("alpaca_trading_mode") or "").strip().lower()
+    if not mode:
+        mode = str(os.environ.get("ALPACA_TRADING_MODE", "")).strip().lower()
+    if mode not in {"paper", "live"}:
+        mode = "paper"
+    return mode
+
+
+def resolve_alpaca_trading_mode(*, user: Any | None = None, user_id: str | None = None) -> str:
+    creds: dict[str, str] | None = None
+    if user is not None and getattr(user, "is_authenticated", False):
+        try:
+            creds = load_api_credentials(str(user.id))
+        except Exception:
+            creds = None
     elif user_id:
         try:
             creds = load_api_credentials(str(user_id))
         except Exception:
-            creds = {}
+            creds = None
+    return _resolve_trading_mode(creds)
+
+
+def resolve_alpaca_credentials(
+    *,
+    user: Any | None = None,
+    user_id: str | None = None,
+    mode: str | None = None,
+    strict_mode: bool = False,
+) -> tuple[str | None, str | None]:
+    creds: dict[str, str] | None = None
+    if user is not None and getattr(user, "is_authenticated", False):
+        try:
+            creds = load_api_credentials(str(user.id))
+        except Exception:
+            creds = None
+    elif user_id:
+        try:
+            creds = load_api_credentials(str(user_id))
+        except Exception:
+            creds = None
+
+    resolved_mode = (mode or "").strip().lower()
+    if resolved_mode not in {"paper", "live"}:
+        resolved_mode = _resolve_trading_mode(creds)
+
+    def _pick(keys: tuple[str, str]) -> tuple[str | None, str | None]:
+        key_id_val, secret_val = None, None
         if isinstance(creds, dict):
-            key_id = creds.get("alpaca_api_key_id")
-            secret = creds.get("alpaca_api_secret_key")
-    if not key_id:
-        key_id = os.environ.get("ALPACA_API_KEY_ID")
-    if not secret:
-        secret = os.environ.get("ALPACA_API_SECRET_KEY")
+            key_id_val = creds.get(keys[0])
+            secret_val = creds.get(keys[1])
+        if not key_id_val:
+            key_id_val = os.environ.get(keys[0].upper()) or os.environ.get(keys[0])
+        if not secret_val:
+            secret_val = os.environ.get(keys[1].upper()) or os.environ.get(keys[1])
+        return key_id_val, secret_val
+
+    live_pair = ("alpaca_live_api_key_id", "alpaca_live_api_secret_key")
+    paper_pair = ("alpaca_paper_api_key_id", "alpaca_paper_api_secret_key")
+    legacy_pair = ("alpaca_api_key_id", "alpaca_api_secret_key")
+
+    key_id = None
+    secret = None
+    if resolved_mode == "live":
+        key_id, secret = _pick(live_pair)
+        if (not key_id or not secret) and not strict_mode:
+            key_id, secret = _pick(legacy_pair)
+        if (not key_id or not secret) and not strict_mode:
+            key_id, secret = _pick(paper_pair)
+    else:
+        key_id, secret = _pick(paper_pair)
+        if (not key_id or not secret) and not strict_mode:
+            key_id, secret = _pick(legacy_pair)
+        if (not key_id or not secret) and not strict_mode:
+            key_id, secret = _pick(live_pair)
+
     if not key_id or not secret:
         return None, None
     return key_id, secret
+
+
+def resolve_alpaca_data_credentials(
+    *,
+    user: Any | None = None,
+    user_id: str | None = None,
+) -> tuple[str | None, str | None]:
+    """Prefer live keys for market data (SIP), then fall back to legacy/paper."""
+    return resolve_alpaca_credentials(user=user, user_id=user_id, mode="live")
 
 
 def _alpaca_headers(key_id: str, secret: str) -> dict[str, str]:
@@ -124,7 +190,7 @@ def fetch_stock_bars(
     timeout: float | None = None,
     base_url: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    key_id, secret = resolve_alpaca_credentials(user=user, user_id=user_id)
+    key_id, secret = resolve_alpaca_data_credentials(user=user, user_id=user_id)
     if not key_id or not secret:
         return {}
     normalized = _normalize_symbols(symbols)
@@ -173,6 +239,65 @@ def fetch_stock_bars(
         if not page_token:
             break
     return aggregated
+
+
+def fetch_stock_trades(
+    symbol: str,
+    *,
+    start: date | datetime | None = None,
+    end: date | datetime | None = None,
+    feed: str | None = None,
+    limit: int | None = None,
+    page_token: str | None = None,
+    max_pages: int = 1,
+    user: Any | None = None,
+    user_id: str | None = None,
+    timeout: float | None = None,
+    base_url: str | None = None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    key_id, secret = resolve_alpaca_data_credentials(user=user, user_id=user_id)
+    if not key_id or not secret:
+        return [], None
+    symbol_text = str(symbol or "").strip().upper()
+    if not symbol_text:
+        return [], None
+
+    params: dict[str, Any] = {}
+    if feed or DEFAULT_FEED:
+        params["feed"] = feed or DEFAULT_FEED
+    if limit:
+        params["limit"] = int(limit)
+    start_ts = _format_ts(start)
+    end_ts = _format_ts(end)
+    if start_ts:
+        params["start"] = start_ts
+    if end_ts:
+        params["end"] = end_ts
+    params["sort"] = "asc"
+
+    url = f"{(base_url or DEFAULT_DATA_URL).rstrip('/')}/v2/stocks/{symbol_text}/trades"
+    headers = _alpaca_headers(key_id, secret)
+
+    aggregated: list[dict[str, Any]] = []
+    next_token = page_token
+    pages = max(1, int(max_pages))
+    for _ in range(pages):
+        if next_token:
+            params["page_token"] = next_token
+        response = _alpaca_get(url, params=params, headers=headers, timeout=timeout)
+        if response is None:
+            break
+        try:
+            payload = response.json()
+        except ValueError:
+            break
+        trades = payload.get("trades") or payload.get("data") or []
+        if isinstance(trades, list):
+            aggregated.extend([t for t in trades if isinstance(t, dict)])
+        next_token = payload.get("next_page_token") or payload.get("next_page") or None
+        if not next_token:
+            break
+    return aggregated, next_token
 
 
 def bars_to_frame(bars_by_symbol: dict[str, list[dict[str, Any]]]) -> pd.DataFrame:
@@ -263,7 +388,7 @@ def fetch_stock_snapshots(
     timeout: float | None = None,
     base_url: str | None = None,
 ) -> dict[str, Any]:
-    key_id, secret = resolve_alpaca_credentials(user=user, user_id=user_id)
+    key_id, secret = resolve_alpaca_data_credentials(user=user, user_id=user_id)
     if not key_id or not secret:
         return {}
     normalized = _normalize_symbols(symbols)
@@ -307,7 +432,7 @@ def fetch_news(
     base_url: str | None = None,
     path: str | None = None,
 ) -> list[dict[str, Any]]:
-    key_id, secret = resolve_alpaca_credentials(user=user, user_id=user_id)
+    key_id, secret = resolve_alpaca_data_credentials(user=user, user_id=user_id)
     if not key_id or not secret:
         return []
     params: dict[str, Any] = {}

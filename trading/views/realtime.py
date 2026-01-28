@@ -5,14 +5,17 @@ import time
 from datetime import datetime, timezone as dt_timezone
 from typing import Any
 
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.utils import timezone
+from django.views.decorators.http import require_http_methods
 
 from ..models import RealtimeProfile
-from ..realtime.config import load_realtime_config_from_payload
+from ..realtime.manual_orders import submit_manual_order
+from ..realtime.config import DEFAULT_CONFIG_NAME, load_realtime_config_from_payload
 from ..realtime.schema import RealtimePayloadError, validate_realtime_payload
-from ..realtime.storage import read_state
+from ..realtime.storage import read_state, state_path, write_state
 
 
 def _parse_unix_ts(value: Any) -> datetime | None:
@@ -44,7 +47,21 @@ def _parse_iso_ts(value: Any) -> datetime | None:
     return timezone.localtime(parsed)
 
 
+def _parse_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 @login_required
+@require_http_methods(["GET", "POST"])
 def realtime_settings(request):
     success_message = None
     error_message = None
@@ -111,6 +128,7 @@ def realtime_settings(request):
                             RealtimeProfile.objects.filter(user=request.user).exclude(
                                 profile_id=target.profile_id
                             ).update(is_active=False)
+                            write_state(DEFAULT_CONFIG_NAME, normalized)
                         success_message = "Realtime profile saved."
                         selected_profile = target
             elif action == "activate":
@@ -121,6 +139,8 @@ def realtime_settings(request):
                     RealtimeProfile.objects.filter(user=request.user).update(is_active=False)
                     target.is_active = True
                     target.save(update_fields=["is_active", "updated_at"])
+                    if isinstance(target.payload, dict):
+                        write_state(DEFAULT_CONFIG_NAME, target.payload)
                     selected_profile = target
                     success_message = "Realtime profile activated."
             elif action == "delete":
@@ -155,9 +175,99 @@ def realtime_settings(request):
 
 
 @login_required
+@require_http_methods(["GET", "POST"])
 def realtime_monitor(request):
     profiles = list(RealtimeProfile.objects.filter(user=request.user).order_by("-updated_at"))
     active_profile = next((profile for profile in profiles if profile.is_active), None)
+
+    if request.method == "POST":
+        action = (request.POST.get("action") or "").strip()
+        if not active_profile:
+            messages.error(request, "尚未激活实时引擎配置档案。")
+            return redirect("trading:realtime_monitor")
+
+        payload = active_profile.payload if isinstance(active_profile.payload, dict) else {}
+        trading_payload = payload.get("trading")
+        if not isinstance(trading_payload, dict):
+            trading_payload = {}
+        payload["trading"] = trading_payload
+        execution_payload = trading_payload.get("execution")
+        if not isinstance(execution_payload, dict):
+            execution_payload = {}
+        trading_payload["execution"] = execution_payload
+
+        if action in {"toggle_trading", "toggle_execution"}:
+            value = _parse_bool(request.POST.get("value"))
+            if action == "toggle_trading":
+                trading_payload["enabled"] = value
+            elif action == "toggle_execution":
+                execution_payload["enabled"] = value
+            try:
+                normalized = validate_realtime_payload(payload)
+            except RealtimePayloadError as exc:
+                messages.error(request, f"配置保存失败：{exc}")
+                return redirect("trading:realtime_monitor")
+            active_profile.payload = normalized
+            active_profile.save(update_fields=["payload", "updated_at"])
+            write_state(DEFAULT_CONFIG_NAME, normalized)
+            messages.success(request, "实时交易配置已更新。")
+            return redirect("trading:realtime_monitor")
+        if action == "set_mode":
+            mode = (request.POST.get("value") or "").strip().lower()
+            if mode not in {"paper", "live"}:
+                messages.error(request, "交易模式无效。")
+                return redirect("trading:realtime_monitor")
+            trading_payload["mode"] = mode
+            try:
+                normalized = validate_realtime_payload(payload)
+            except RealtimePayloadError as exc:
+                messages.error(request, f"配置保存失败：{exc}")
+                return redirect("trading:realtime_monitor")
+            active_profile.payload = normalized
+            active_profile.save(update_fields=["payload", "updated_at"])
+            write_state(DEFAULT_CONFIG_NAME, normalized)
+            messages.success(request, "交易模式已更新。")
+            return redirect("trading:realtime_monitor")
+        if action in {"enable_live_trading", "disable_live_trading"}:
+            trading_payload["enabled"] = True
+            execution_payload["enabled"] = True
+            if action == "enable_live_trading":
+                trading_payload["mode"] = "live"
+                execution_payload["dry_run"] = False
+            else:
+                trading_payload["mode"] = "paper"
+                execution_payload["dry_run"] = False
+            try:
+                normalized = validate_realtime_payload(payload)
+            except RealtimePayloadError as exc:
+                messages.error(request, f"配置保存失败：{exc}")
+                return redirect("trading:realtime_monitor")
+            active_profile.payload = normalized
+            active_profile.save(update_fields=["payload", "updated_at"])
+            write_state(DEFAULT_CONFIG_NAME, normalized)
+            if action == "enable_live_trading":
+                messages.success(request, "已启用实盘下单（Live）。")
+            else:
+                messages.success(request, "已退出实盘，下单将使用模拟模式。")
+            return redirect("trading:realtime_monitor")
+
+        if action == "manual_order":
+            symbol = (request.POST.get("symbol") or "").strip()
+            side = (request.POST.get("side") or "").strip()
+            notional_raw = request.POST.get("notional")
+            try:
+                notional = float(notional_raw) if notional_raw is not None else 0.0
+            except (TypeError, ValueError):
+                notional = 0.0
+            result = submit_manual_order(user=request.user, symbol=symbol, side=side, notional=notional)
+            if result.get("ok"):
+                messages.success(request, result.get("message") or "订单已提交。")
+            else:
+                messages.error(request, result.get("message") or "订单提交失败。")
+            return redirect("trading:realtime_monitor")
+
+        messages.error(request, "未知操作。")
+        return redirect("trading:realtime_monitor")
     config = load_realtime_config_from_payload(active_profile.payload if active_profile else {})
 
     universe_state = read_state("universe_state.json", default={})
@@ -167,6 +277,9 @@ def realtime_monitor(request):
     bars_latest = read_state("bars_latest.json", default={})
     stream_state = read_state("stream_state.json", default={})
     signals_latest = read_state("signals_latest.json", default={})
+    trading_state = read_state("trading_state.json", default={})
+    trade_signals_latest = read_state("trade_signals_latest.json", default={})
+    trade_orders_latest = read_state("trade_orders_latest.json", default={})
 
     now = time.time()
     universe_updated = _parse_unix_ts(universe_state.get("updated_at"))
@@ -219,6 +332,18 @@ def realtime_monitor(request):
         if isinstance(rows, list):
             signals_rows = [row for row in rows if isinstance(row, dict)]
 
+    trade_signal_rows = []
+    if isinstance(trade_signals_latest, dict):
+        rows = trade_signals_latest.get("signals")
+        if isinstance(rows, list):
+            trade_signal_rows = [row for row in rows if isinstance(row, dict)]
+
+    trade_order_rows = []
+    if isinstance(trade_orders_latest, dict):
+        rows = trade_orders_latest.get("orders")
+        if isinstance(rows, list):
+            trade_order_rows = [row for row in rows if isinstance(row, dict)]
+
     last_tick = None
     for row in bars_rows:
         ts = _parse_iso_ts(row.get("timestamp"))
@@ -242,5 +367,9 @@ def realtime_monitor(request):
         "ranked_entries": ranked_entries,
         "bars_rows": bars_rows[:12],
         "signals_rows": signals_rows,
+        "trading_state": trading_state if isinstance(trading_state, dict) else {},
+        "trade_signal_rows": trade_signal_rows,
+        "trade_order_rows": trade_order_rows,
+        "config": config,
     }
     return render(request, "trading/realtime_monitor.html", context)

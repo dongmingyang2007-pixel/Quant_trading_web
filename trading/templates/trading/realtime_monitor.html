@@ -16,6 +16,14 @@
         </div>
     </div>
 
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert {% if message.tags %}alert-{{ message.tags }}{% else %}alert-info{% endif %}">
+                {{ message }}
+            </div>
+        {% endfor %}
+    {% endif %}
+
     <div class="row g-4 mb-4">
         <div class="col-lg-4">
             <div class="card shadow-sm h-100">
@@ -235,6 +243,193 @@
                     {% else %}
                         <p class="text-muted mb-0">{% bilingual "No signals available yet." "暂无信号记录。" %}</p>
                     {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4 mt-1">
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div>
+                            <h2 class="h5 mb-1">{% bilingual "Trading pipeline" "交易管线" %}</h2>
+                            <p class="text-muted small mb-0">{% bilingual "Realtime strategy combiner and risk checks." "实时策略组合与风控状态。" %}</p>
+                        </div>
+                        <span class="badge bg-light text-dark">{% bilingual "Mode" "模式" %}: {{ trading_state.mode|default:config.trading.mode|default:"—" }}</span>
+                    </div>
+                    <div class="d-flex flex-column gap-2 mb-3">
+                        <div class="d-flex justify-content-between">
+                            <span>{% bilingual "Enabled" "已启用" %}</span>
+                            {% if trading_state.enabled %}
+                                <span class="badge bg-success-subtle text-success-emphasis">{% bilingual "Yes" "是" %}</span>
+                            {% else %}
+                                <span class="badge bg-secondary-subtle text-secondary-emphasis">{% bilingual "No" "否" %}</span>
+                            {% endif %}
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span>{% bilingual "Combiner" "组合器" %}</span>
+                            <span>{{ trading_state.combiner|default:"—" }}</span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span>{% bilingual "Strategies" "策略数量" %}</span>
+                            <span>{{ trading_state.strategy_count|default:"—" }}</span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span>{% bilingual "Execution" "执行开关" %}</span>
+                            <span>{% if trading_state.execution_enabled %}{% bilingual "On" "开启" %}{% else %}{% bilingual "Off" "关闭" %}{% endif %}</span>
+                        </div>
+                        {% if trading_state.strategies %}
+                            <div class="text-muted small">
+                                {% bilingual "Strategies" "策略" %}:
+                                {% for name in trading_state.strategies %}
+                                    <code>{{ name }}</code>{% if not forloop.last %}, {% endif %}
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+                    {% if trade_signal_rows %}
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th scope="col">{% bilingual "Time" "时间" %}</th>
+                                        <th scope="col">{% bilingual "Symbol" "标的" %}</th>
+                                        <th scope="col">{% bilingual "Action" "方向" %}</th>
+                                        <th scope="col" class="text-end">{% bilingual "Weight" "权重" %}</th>
+                                        <th scope="col" class="text-end">{% bilingual "Confidence" "置信度" %}</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for row in trade_signal_rows|slice:":10" %}
+                                        <tr>
+                                            <td class="text-nowrap">{{ row.timestamp|default:"—" }}</td>
+                                            <td><code>{{ row.symbol|default:"—" }}</code></td>
+                                            <td>{{ row.action|default:"—" }}</td>
+                                            <td class="text-end">{{ row.weight|default:"—" }}</td>
+                                            <td class="text-end">{{ row.confidence|default:"—" }}</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <p class="text-muted mb-0">{% bilingual "No combined signals yet." "暂无组合信号。" %}</p>
+                    {% endif %}
+                    <hr class="my-3">
+                        <div class="d-flex flex-column gap-2">
+                            <div class="text-muted small">{% bilingual "Trading controls" "交易控制" %}</div>
+                            <div class="d-flex flex-wrap gap-2">
+                                {% if config.trading.mode == 'live' and trading_state.execution_enabled %}
+                                    <form method="post">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="action" value="disable_live_trading">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">
+                                            {% bilingual "Exit Live Trading" "退出实盘" %}
+                                        </button>
+                                    </form>
+                                {% else %}
+                                    <form method="post">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="action" value="enable_live_trading">
+                                        <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('{% if lang_prefix == 'zh' %}确认开启实盘下单？这将使用 Live 账户。{% else %}Enable live trading? This will use your Live account.{% endif %}')">
+                                            {% bilingual "Live Trading" "实盘下单" %}
+                                        </button>
+                                    </form>
+                                {% endif %}
+                                <form method="post">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="action" value="set_mode">
+                                    <input type="hidden" name="value" value="paper">
+                                    <button type="submit" class="btn btn-sm {% if config.trading.mode == 'paper' %}btn-primary{% else %}btn-outline-primary{% endif %}" aria-pressed="{% if config.trading.mode == 'paper' %}true{% else %}false{% endif %}">
+                                    {% bilingual "Paper" "模拟" %}
+                                </button>
+                            </form>
+                            <form method="post">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="set_mode">
+                                <input type="hidden" name="value" value="live">
+                                <button type="submit" class="btn btn-sm {% if config.trading.mode == 'live' %}btn-danger{% else %}btn-outline-danger{% endif %}" aria-pressed="{% if config.trading.mode == 'live' %}true{% else %}false{% endif %}">
+                                    {% bilingual "Live" "实盘" %}
+                                </button>
+                            </form>
+                            <form method="post">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="toggle_trading">
+                                <input type="hidden" name="value" value="{% if trading_state.enabled %}0{% else %}1{% endif %}">
+                                <button type="submit" class="btn btn-sm {% if trading_state.enabled %}btn-outline-secondary{% else %}btn-outline-primary{% endif %}">
+                                    {% if trading_state.enabled %}{% bilingual "Disable trading" "关闭交易" %}{% else %}{% bilingual "Enable trading" "开启交易" %}{% endif %}
+                                </button>
+                            </form>
+                            <form method="post">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="toggle_execution">
+                                <input type="hidden" name="value" value="{% if trading_state.execution_enabled %}0{% else %}1{% endif %}">
+                                <button type="submit" class="btn btn-sm {% if trading_state.execution_enabled %}btn-outline-secondary{% else %}btn-outline-danger{% endif %}">
+                                    {% if trading_state.execution_enabled %}{% bilingual "Disable execution" "关闭执行" %}{% else %}{% bilingual "Enable execution" "开启执行" %}{% endif %}
+                                </button>
+                            </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div>
+                            <h2 class="h5 mb-1">{% bilingual "Recent orders" "最近下单" %}</h2>
+                            <p class="text-muted small mb-0">{% bilingual "Execution results from the realtime pipeline." "实时管线的下单结果。" %}</p>
+                        </div>
+                    </div>
+                    {% if trade_order_rows %}
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th scope="col">{% bilingual "Time" "时间" %}</th>
+                                        <th scope="col">{% bilingual "Symbol" "标的" %}</th>
+                                        <th scope="col">{% bilingual "Action" "方向" %}</th>
+                                        <th scope="col" class="text-end">{% bilingual "Weight" "权重" %}</th>
+                                        <th scope="col">{% bilingual "Status" "状态" %}</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for row in trade_order_rows|slice:":10" %}
+                                        <tr>
+                                            <td class="text-nowrap">{{ row.timestamp|default:"—" }}</td>
+                                            <td><code>{{ row.symbol|default:"—" }}</code></td>
+                                            <td>{{ row.action|default:"—" }}</td>
+                                            <td class="text-end">{{ row.weight|default:"—" }}</td>
+                                            <td>{{ row.status|default:"—" }}</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <p class="text-muted mb-0">{% bilingual "No orders yet." "暂无下单记录。" %}</p>
+                    {% endif %}
+                    <hr class="my-3">
+                    <form method="post" class="row g-2 align-items-end">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="manual_order">
+                        <div class="col-12 col-md-5">
+                            <label class="form-label">{% bilingual "Symbol" "标的" %}</label>
+                            <input name="symbol" class="form-control form-control-sm" placeholder="{% bilingual 'e.g. AAPL' '例如 AAPL' %}">
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <label class="form-label">{% bilingual "Notional (USD)" "下单金额 (USD)" %}</label>
+                            <input name="notional" type="number" step="0.01" min="1" class="form-control form-control-sm" placeholder="1000">
+                        </div>
+                        <div class="col-12 col-md-3 d-flex gap-2">
+                            <button type="submit" name="side" value="buy" class="btn btn-sm btn-success w-100">{% bilingual "Buy" "买入" %}</button>
+                            <button type="submit" name="side" value="sell" class="btn btn-sm btn-danger w-100">{% bilingual "Sell" "卖出" %}</button>
+                        </div>
+                    </form>
                 </div>
             </div>
         </div>

@@ -12,7 +12,7 @@ from typing import Callable, Iterable
 
 import websockets
 
-from ...alpaca_data import resolve_alpaca_credentials
+from ...alpaca_data import resolve_alpaca_data_credentials
 from ...observability import record_metric
 from ..bars import parse_timestamp
 
@@ -50,12 +50,13 @@ class AlpacaStreamClient:
         self.on_trade = on_trade
         self.on_quote = on_quote
         self.on_status = on_status
-        self._key_id, self._secret = resolve_alpaca_credentials(user_id=user_id)
+        self._key_id, self._secret = resolve_alpaca_data_credentials(user_id=user_id)
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._command_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self._symbols: set[str] = set()
         self._connected = False
+        self._fallback_feed_attempted = False
 
     def start(self) -> bool:
         if self._thread:
@@ -174,6 +175,8 @@ class AlpacaStreamClient:
                     record_metric("realtime.stream.status", status=event_type, message=message)
                     if self.on_status:
                         self.on_status(event_type, message)
+                    if event_type in {"error", "subscription"} and self._maybe_request_feed_fallback(message):
+                        raise RuntimeError("alpaca_feed_fallback")
                     continue
                 if event_type in {"t", "trade"}:
                     self._handle_trade(event)
@@ -227,3 +230,22 @@ class AlpacaStreamClient:
         except (TypeError, ValueError):
             ask_size_val = None
         self.on_quote(symbol, bid_val, ask_val, bid_size_val, ask_size_val, ts)
+
+    def _maybe_request_feed_fallback(self, message: str) -> bool:
+        if self._fallback_feed_attempted:
+            return False
+        if str(self.feed).lower() != "sip":
+            return False
+        lowered = str(message or "").lower()
+        if not lowered:
+            return False
+        triggers = ("not authorized", "not permitted", "subscription", "forbidden", "unauthorized", "insufficient")
+        if not any(trigger in lowered for trigger in triggers):
+            return False
+        self._fallback_feed_attempted = True
+        self.feed = "iex"
+        self.stream_url = _default_stream_url("iex")
+        record_metric("realtime.stream.fallback", from_feed="sip", to_feed="iex")
+        if self.on_status:
+            self.on_status("fallback", "SIP feed denied, switched to IEX.")
+        return True

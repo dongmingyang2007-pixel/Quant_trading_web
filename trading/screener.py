@@ -21,7 +21,7 @@ from django.conf import settings
 
 from .observability import record_metric
 from .cache_utils import cache_get_object, cache_set_object, build_cache_key
-from .alpaca_data import DEFAULT_FEED, fetch_stock_snapshots, resolve_alpaca_credentials
+from .alpaca_data import DEFAULT_FEED, fetch_stock_snapshots, resolve_alpaca_data_credentials
 
 
 # Cache TTLs (Redis 优先，其次内存)
@@ -142,7 +142,7 @@ def _fetch_quote_snapshot(symbols: Sequence[str], *, user_id: str | None = None)
         return results
 
     chunk_size = 40
-    key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+    key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
     if not (key_id and secret):
         return results
 

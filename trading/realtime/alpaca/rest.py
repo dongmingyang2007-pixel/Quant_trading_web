@@ -6,7 +6,7 @@ import os
 import pandas as pd
 import requests
 
-from ...alpaca_data import fetch_stock_bars_frame, fetch_stock_snapshots, resolve_alpaca_credentials
+from ...alpaca_data import fetch_stock_bars_frame, fetch_stock_snapshots, resolve_alpaca_data_credentials
 from ...network import get_requests_session, resolve_retry_config, retry_call_result
 
 DEFAULT_TRADING_URL = os.environ.get("ALPACA_TRADING_REST_URL", "https://paper-api.alpaca.markets").rstrip("/")
@@ -32,15 +32,27 @@ def fetch_bars_frame(
     user_id: str | None,
     timeout: float | None = None,
 ) -> pd.DataFrame:
-    return fetch_stock_bars_frame(
+    normalized_feed = feed or "sip"
+    frame = fetch_stock_bars_frame(
         symbols,
         timeframe=timeframe,
         limit=limit,
-        feed="sip",
+        feed=normalized_feed,
         adjustment="split",
         user_id=user_id,
         timeout=timeout,
     )
+    if frame.empty and normalized_feed.lower() == "sip":
+        frame = fetch_stock_bars_frame(
+            symbols,
+            timeframe=timeframe,
+            limit=limit,
+            feed="iex",
+            adjustment="split",
+            user_id=user_id,
+            timeout=timeout,
+        )
+    return frame
 
 
 def fetch_assets(
@@ -51,7 +63,7 @@ def fetch_assets(
     timeout: float | None = None,
     base_url: str | None = None,
 ) -> list[dict[str, Any]]:
-    key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+    key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
     if not key_id or not secret:
         return []
     params: dict[str, Any] = {}

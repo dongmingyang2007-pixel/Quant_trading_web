@@ -13,6 +13,36 @@ from .strategy_defaults import ADVANCED_STRATEGY_DEFAULTS
 
 
 class ApiCredentialForm(forms.Form):
+    alpaca_trading_mode = forms.ChoiceField(
+        required=False,
+        label="Alpaca Trading Mode",
+        choices=[("paper", "Paper (模拟)"), ("live", "Live (实盘)")],
+        help_text="选择默认交易环境（paper 或 live）。",
+    )
+    alpaca_paper_api_key_id = forms.CharField(
+        required=False,
+        label="Alpaca Paper API Key ID",
+        widget=forms.PasswordInput(render_value=True),
+        help_text="用于 Alpaca Paper 交易环境的 Key ID。",
+    )
+    alpaca_paper_api_secret_key = forms.CharField(
+        required=False,
+        label="Alpaca Paper API Secret",
+        widget=forms.PasswordInput(render_value=True),
+        help_text="用于 Alpaca Paper 交易环境的 Secret Key。",
+    )
+    alpaca_live_api_key_id = forms.CharField(
+        required=False,
+        label="Alpaca Live API Key ID",
+        widget=forms.PasswordInput(render_value=True),
+        help_text="用于 Alpaca Live 交易环境的 Key ID。",
+    )
+    alpaca_live_api_secret_key = forms.CharField(
+        required=False,
+        label="Alpaca Live API Secret",
+        widget=forms.PasswordInput(render_value=True),
+        help_text="用于 Alpaca Live 交易环境的 Secret Key。",
+    )
     alpaca_api_key_id = forms.CharField(
         required=False,
         label="Alpaca API Key ID",

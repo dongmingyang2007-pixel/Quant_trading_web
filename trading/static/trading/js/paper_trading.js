@@ -2,40 +2,108 @@
   const panel = document.querySelector('[data-tab-panel="paper"]') || document.querySelector('.paper-page');
   if (!panel) return;
 
-  const listEl = panel.querySelector('[data-role="paper-session-list"]');
-  const detailEl = panel.querySelector('[data-role="paper-detail"]');
-  const form = panel.querySelector('[data-role="paper-form"]');
-  const alertEl = panel.querySelector('[data-role="paper-form-alert"]');
-  const searchInput = panel.querySelector('[data-role="paper-search"]');
-  const statusSelect = panel.querySelector('[data-role="paper-status"]');
-  const sortSelect = panel.querySelector('[data-role="paper-sort"]');
-  const prevBtn = panel.querySelector('[data-role="paper-prev"]');
-  const nextBtn = panel.querySelector('[data-role="paper-next"]');
-  const countEl = panel.querySelector('[data-role="paper-count"]');
+  const lang = (window.langPrefix || document.documentElement.lang || 'zh').toLowerCase();
+  const isZh = lang.startsWith('zh');
+  const TEXT = {
+    envPaper: isZh ? '模拟' : 'PAPER',
+    envLive: isZh ? '实盘' : 'LIVE',
+    connecting: isZh ? '连接中…' : 'Connecting…',
+    connected: isZh ? '已连接' : 'Connected',
+    refreshing: isZh ? '刷新中…' : 'Refreshing…',
+    error: isZh ? '连接失败' : 'Error',
+    updatedAt: isZh ? '更新时间' : 'Updated',
+    freshness: (s) => (isZh ? `距今 ${s}s` : `${s}s ago`),
+    noAccount: isZh ? '暂无 Alpaca 账户数据，请检查 API Key。' : 'No Alpaca data. Check API keys.',
+    noPositions: isZh ? '暂无持仓。' : 'No positions.',
+    emptyCta: isZh ? '去市场页添加标的' : 'Go to Market',
+    previewTitle: isZh ? '调仓预览' : 'Rebalance preview',
+    confirmTitle: isZh ? '二次确认' : 'Confirm action',
+    confirmLive: isZh ? '输入 LIVE 以确认' : 'Type LIVE to confirm',
+    confirmSwitchLive: isZh ? '切换到实盘将使用真实资金，下单不可撤销。继续？' : 'Switching to LIVE uses real capital. Continue?',
+    confirmLiquidate: isZh ? '确认清仓当前账户全部持仓？' : 'Liquidate all positions?',
+    confirmExecute: isZh ? '确认执行本次调仓？' : 'Execute this rebalance?',
+    previewEmpty: isZh ? '没有需要执行的订单。' : 'No orders to execute.',
+    previewWarnings: isZh ? '校验提示' : 'Validation',
+    previewOrders: isZh ? '预览订单' : 'Planned orders',
+    previewSummary: isZh ? '目标权重合计' : 'Target sum',
+    previewCash: isZh ? '现金剩余' : 'Cash remainder',
+    executeSuccess: isZh ? '调仓指令已提交' : 'Rebalance submitted',
+    executeFailed: isZh ? '调仓失败' : 'Rebalance failed',
+    liveRequired: isZh ? '请在输入框中输入 LIVE 以继续。' : 'Type LIVE to continue.',
+    retry: isZh ? '重试' : 'Retry',
+    statusOk: isZh ? '正常' : 'OK',
+    statusBlocked: isZh ? '受限' : 'Blocked',
+    statusUnknown: isZh ? '未知' : 'Unknown',
+    sumLabel: isZh ? '目标合计' : 'Target sum',
+    cashLabel: isZh ? '现金剩余' : 'Cash',
+  };
 
-  const listState = {
-    query: "",
-    status: "all",
-    sort: "updated",
-    limit: 6,
-    offset: 0,
-    total: 0,
+  const alpacaModeButtons = Array.prototype.slice.call(panel.querySelectorAll('[data-role="alpaca-mode-btn"]'));
+  const alpacaSummaryEl = panel.querySelector('[data-role="alpaca-summary"]');
+  const alpacaPositionsEl = panel.querySelector('[data-role="alpaca-positions"]');
+  const alpacaRefreshBtn = panel.querySelector('[data-role="alpaca-refresh"]');
+  const alpacaUpdatedEl = panel.querySelector('[data-role="alpaca-updated"]');
+  const alpacaErrorEl = panel.querySelector('[data-role="alpaca-error"]');
+  const alpacaStatusPill = panel.querySelector('[data-role="alpaca-status-pill"]');
+  const alpacaPreviewBtn = panel.querySelector('[data-role="alpaca-preview"]');
+  const alpacaResetBtn = panel.querySelector('[data-role="alpaca-reset"]');
+  const alpacaLiquidateBtn = panel.querySelector('[data-role="alpaca-liquidate"]');
+  const alpacaLiquidateUnlisted = panel.querySelector('[data-role="alpaca-liquidate-unlisted"]');
+  const alpacaNormalizeBtn = panel.querySelector('[data-role="alpaca-normalize"]');
+  const alpacaRebalanceSummary = panel.querySelector('[data-role="alpaca-rebalance-summary"]');
+  const alpacaRebalanceStatus = panel.querySelector('[data-role="alpaca-rebalance-status"]');
+
+  const envModePill = panel.querySelector('[data-role="env-mode-pill"]');
+  const envConnection = panel.querySelector('[data-role="env-connection"]');
+  const envUpdated = panel.querySelector('[data-role="env-updated"]');
+  const envFreshness = panel.querySelector('[data-role="env-freshness"]');
+  const envAutoToggle = panel.querySelector('[data-role="alpaca-auto-toggle"]');
+
+  const modal = panel.querySelector('[data-role="paper-modal"]');
+  const modalBody = panel.querySelector('[data-role="paper-modal-body"]');
+  const modalTitle = panel.querySelector('[data-role="paper-modal-title"]');
+  const modalInputWrap = panel.querySelector('[data-role="paper-modal-input"]');
+  const modalInput = panel.querySelector('#paper-modal-confirm');
+  const modalConfirmBtn = panel.querySelector('[data-role="paper-modal-confirm"]');
+  const modalCancelBtn = panel.querySelector('[data-role="paper-modal-cancel"]');
+  const modalClosers = Array.prototype.slice.call(panel.querySelectorAll('[data-role="paper-modal-close"]'));
+
+  const alpacaAccountEndpoint = '/api/paper/alpaca/account/';
+  const alpacaRebalanceEndpoint = '/api/paper/alpaca/rebalance/';
+  const DEFAULT_AUTO_REFRESH_MS = 0;
+  const AUTO_REFRESH_OPTIONS = [0, 15000, 30000, 60000];
+
+  const alpacaState = {
+    mode: 'paper',
+    account: null,
+    positions: [],
+    lastUpdated: null,
+    loading: false,
+    error: '',
+    autoRefreshMs: DEFAULT_AUTO_REFRESH_MS,
+    autoTimer: null,
+    freshnessTimer: null,
   };
 
   const getCsrfToken = () => {
     const match = document.cookie.match(/csrftoken=([^;]+)/);
     if (match) return match[1];
-    const input = document.querySelector("input[name=csrfmiddlewaretoken]");
-    return input ? input.value : "";
+    const input = document.querySelector('input[name=csrfmiddlewaretoken]');
+    return input ? input.value : '';
   };
 
   const formatMoney = (val) => {
-    if (val === null || val === undefined || Number.isNaN(val)) return "--";
-    return new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val);
+    if (val === null || val === undefined || Number.isNaN(val)) return '--';
+    return new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val);
+  };
+
+  const formatPct = (val) => {
+    if (val === null || val === undefined || Number.isNaN(val)) return '--';
+    return `${(Number(val) * 100).toFixed(2)}%`;
   };
 
   const formatTs = (ts) => {
-    if (!ts) return "--";
+    if (!ts) return '--';
     try {
       return new Date(ts).toLocaleString();
     } catch (e) {
@@ -43,503 +111,633 @@
     }
   };
 
-  const drawSparkline = (canvas, series) => {
-    if (!canvas || !series || series.length < 2) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const values = series.map((val) => Number(val) || 0);
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const range = max - min || 1;
-    const width = canvas.width || canvas.offsetWidth || 160;
-    const height = canvas.height || canvas.offsetHeight || 44;
-    ctx.clearRect(0, 0, width, height);
-    ctx.beginPath();
-    values.forEach((val, index) => {
-      const x = (index / (values.length - 1)) * width;
-      const y = height - ((val - min) / range) * height;
-      if (index === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    const trendUp = values[values.length - 1] >= values[0];
-    ctx.strokeStyle = trendUp ? "#2563eb" : "#dc2626";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-  };
-
-  const renderDetail = (session) => {
-    if (!detailEl) return;
-    if (!session) {
-      const lang = (window.langPrefix || document.documentElement.lang || "zh").toLowerCase();
-      detailEl.innerHTML = `<p class="text-muted mb-0">${lang.startsWith("zh") ? "暂无会话，先创建一个吧。" : "No session yet. Create one to get started."}</p>`;
+  const setConnectionState = (state) => {
+    if (!envConnection) return;
+    if (state === 'loading') {
+      envConnection.textContent = TEXT.refreshing;
       return;
     }
-    const trades = session.recent_trades || [];
-    const curve = session.equity_curve || [];
-    const latestEquity = session.last_equity || 0;
-    const pnlPct = session.pnl_pct !== null && session.pnl_pct !== undefined ? `${(session.pnl_pct * 100).toFixed(2)}%` : "--";
-    const lang = (window.langPrefix || document.documentElement.lang || "zh").toLowerCase();
-    const cfg = session.config || {};
-    const slippageBps = cfg.slippage_bps ?? 5;
-    const commissionBps = cfg.transaction_cost_bps ?? 8;
-    const confidence = session.signal_confidence;
-    const riskGuard = session.risk_guard;
-    const lastRunTs = session.last_run_at ? new Date(session.last_run_at).getTime() : null;
-    const intervalMs = (session.interval_seconds || 300) * 1000;
-    const nowTs = Date.now();
-    let healthState = "ok";
-    let healthLabel = lang.startsWith("zh") ? "调度正常" : "On schedule";
-    if (!lastRunTs) {
-      healthState = "warn";
-      healthLabel = lang.startsWith("zh") ? "尚未运行" : "Not run yet";
-    } else if (nowTs - lastRunTs > intervalMs * 3) {
-      healthState = "error";
-      healthLabel = lang.startsWith("zh") ? "严重延迟" : "Severely delayed";
-    } else if (nowTs - lastRunTs > intervalMs * 1.5) {
-      healthState = "warn";
-      healthLabel = lang.startsWith("zh") ? "轻微延迟" : "Running behind";
+    if (state === 'error') {
+      envConnection.textContent = TEXT.error;
+      return;
     }
-    const labels = lang.startsWith("zh")
-      ? {
-          status: "状态",
-          equity: "权益",
-          cash: "现金",
-          pnl: "收益",
-          positions: "持仓",
-          trades: "成交明细",
-          curve: "权益曲线（最近）",
-          none: "暂无数据",
-          noTrades: "暂无成交。",
-          noPos: "暂无持仓",
-          heartbeat: "调仓间隔",
-          lastRun: "最近运行",
-          export: "导出成交",
-        }
-      : {
-          status: "Status",
-          equity: "Equity",
-          cash: "Cash",
-          pnl: "Return",
-          positions: "Positions",
-          trades: "Trades",
-          curve: "Equity (latest)",
-          none: "No data",
-          noTrades: "No trades yet.",
-          noPos: "No positions",
-          heartbeat: "Rebalance interval",
-          lastRun: "Last run",
-          export: "Export trades",
-        };
-    const signalSource = session.signal_source || "unknown";
-    const signalLabels = lang.startsWith("zh")
-      ? { fresh: "新信号", fallback_cached: "回退信号", light_cached: "快速缓存", failure: "失败", unknown: "未知" }
-      : { fresh: "Fresh", fallback_cached: "Fallback", light_cached: "Light cached", failure: "Failure", unknown: "Unknown" };
-    const lastSkip = session.last_skip || null;
-    const skipLabels = lang.startsWith("zh")
-      ? { illiquid: "因流动性跳过", quote_unavailable: "行情缺失跳过", other: "已跳过" }
-      : { illiquid: "Skipped (illiquid)", quote_unavailable: "Skipped (no quote)", other: "Skipped" };
+    envConnection.textContent = TEXT.connected;
+  };
 
-    const positions = session.positions || {};
-    const posList = Object.keys(positions).length
-      ? Object.entries(positions).map(([sym, qty]) => `<div class="paper-detail-box"><div class="fw-semibold">${sym}</div><div class="text-muted small">${lang.startsWith("zh") ? "数量" : "Qty"}: ${Number(qty).toFixed(3)}</div></div>`).join("")
-      : `<p class="text-muted mb-0">${labels.noPos}</p>`;
+  const updateEnvPill = () => {
+    if (!envModePill) return;
+    const isLive = alpacaState.mode === 'live';
+    envModePill.textContent = isLive ? TEXT.envLive : TEXT.envPaper;
+    envModePill.classList.toggle('is-live', isLive);
+  };
 
-    const tradesList = trades.length
-      ? trades.map(tr => `<li class="list-group-item d-flex justify-content-between align-items-start">
+  const updateModeButtons = () => {
+    alpacaModeButtons.forEach((btn) => {
+      const mode = btn.dataset.mode;
+      const active = mode === alpacaState.mode;
+      btn.classList.toggle('is-active', active);
+      btn.classList.toggle('is-live', active && mode === 'live');
+    });
+    updateEnvPill();
+  };
+
+  const updateAutoToggle = () => {
+    if (!envAutoToggle) return;
+    envAutoToggle.querySelectorAll('button[data-interval]').forEach((btn) => {
+      const val = Number(btn.dataset.interval);
+      const active = val === alpacaState.autoRefreshMs;
+      btn.classList.toggle('is-active', active);
+    });
+  };
+
+  const setLoading = (loading) => {
+    alpacaState.loading = loading;
+    if (alpacaRefreshBtn) {
+      alpacaRefreshBtn.disabled = loading;
+      alpacaRefreshBtn.textContent = loading ? (isZh ? '刷新中…' : 'Refreshing…') : (isZh ? '刷新' : 'Refresh');
+    }
+    setConnectionState(loading ? 'loading' : alpacaState.error ? 'error' : 'ok');
+  };
+
+  const setError = (message) => {
+    alpacaState.error = message || '';
+    if (alpacaErrorEl) {
+      alpacaErrorEl.textContent = alpacaState.error;
+    }
+    setConnectionState(alpacaState.error ? 'error' : 'ok');
+  };
+
+  const updateFreshness = () => {
+    if (!envFreshness) return;
+    if (!alpacaState.lastUpdated) {
+      envFreshness.textContent = '';
+      return;
+    }
+    const diff = Math.max(0, Math.floor((Date.now() - new Date(alpacaState.lastUpdated).getTime()) / 1000));
+    envFreshness.textContent = TEXT.freshness(diff);
+  };
+
+  const updateUpdatedTime = () => {
+    const label = alpacaState.lastUpdated ? formatTs(alpacaState.lastUpdated) : '--';
+    if (envUpdated) {
+      envUpdated.textContent = `${TEXT.updatedAt}: ${label}`;
+    }
+    if (alpacaUpdatedEl) {
+      alpacaUpdatedEl.textContent = label;
+    }
+    updateFreshness();
+  };
+
+  const renderSummary = () => {
+    if (!alpacaSummaryEl) return;
+    if (alpacaState.loading) {
+      alpacaSummaryEl.innerHTML = `<p class="text-muted small mb-0">${isZh ? '加载中…' : 'Loading…'}</p>`;
+      return;
+    }
+    if (!alpacaState.account) {
+      alpacaSummaryEl.innerHTML = `<p class="text-muted small mb-0">${TEXT.noAccount}</p>`;
+      if (alpacaStatusPill) {
+        alpacaStatusPill.textContent = TEXT.statusUnknown;
+        alpacaStatusPill.classList.remove('is-error');
+        alpacaStatusPill.classList.toggle('is-live', alpacaState.mode === 'live');
+      }
+      return;
+    }
+    const acc = alpacaState.account;
+    const metrics = [
+      { label: isZh ? '权益' : 'Equity', value: `$${formatMoney(acc.equity)}` },
+      { label: isZh ? '现金' : 'Cash', value: `$${formatMoney(acc.cash)}` },
+      { label: isZh ? '购买力' : 'Buying Power', value: `$${formatMoney(acc.buying_power)}` },
+      { label: isZh ? '净值' : 'Net Value', value: `$${formatMoney(acc.portfolio_value)}` },
+      { label: isZh ? '初始保证金' : 'Initial Margin', value: `$${formatMoney(acc.initial_margin)}` },
+      { label: isZh ? '维持保证金' : 'Maintenance', value: `$${formatMoney(acc.maintenance_margin)}` },
+    ];
+    alpacaSummaryEl.innerHTML = `
+      <div class="paper-alpaca-metrics">
+        ${metrics
+          .map(
+            (item) => `
             <div>
-              <div class="fw-semibold">${tr.side === "buy" ? (lang.startsWith("zh") ? "买入" : "Buy") : (lang.startsWith("zh") ? "卖出" : "Sell")} ${tr.symbol}</div>
-              <div class="text-muted small">${formatTs(tr.executed_at)}</div>
-            </div>
-            <div class="text-end">
-              <div>${Number(tr.quantity).toFixed(4)} @ $${formatMoney(tr.price)}</div>
-              <div class="text-muted small">${lang.startsWith("zh") ? "金额" : "Notional"} $${formatMoney(tr.notional)}</div>
-            </div>
-          </li>`).join("")
-      : `<li class="list-group-item text-muted">${labels.noTrades}</li>`;
-
-    const exportBase = `/api/v1/paper/sessions/${session.session_id}/trades/`;
-    detailEl.innerHTML = `
-      <div class="paper-detail-grid">
-        <div>
-          <div class="d-flex align-items-center gap-2 flex-wrap">
-            <p class="mb-1"><strong>${session.name || session.ticker}</strong></p>
-            <span class="health-pill state-${healthState}">${healthLabel}</span>
-          </div>
-          <p class="text-muted mb-1">${session.status.toUpperCase()} · ${session.ticker}${session.benchmark ? ` / ${session.benchmark}` : ""}</p>
-          <p class="mb-0">${labels.heartbeat}: ${session.interval_seconds}s · ${labels.lastRun}: ${formatTs(session.last_run_at)}</p>
-        </div>
-        <div class="paper-metrics">
-          <div><span class="label">${labels.equity}</span><span class="value">$${formatMoney(latestEquity)}</span></div>
-          <div><span class="label">${labels.cash}</span><span class="value">$${formatMoney(session.current_cash)}</span></div>
-          <div><span class="label">${labels.pnl}</span><span class="value">${pnlPct}</span></div>
-        </div>
-      </div>
-
-      <div class="paper-detail-summary">
-        <div class="paper-detail-box">
-          <div class="fw-semibold">${lang.startsWith("zh") ? "账户成立" : "Created"}</div>
-          <div class="text-muted small">${formatTs(session.created_at)}</div>
-        </div>
-        <div class="paper-detail-box">
-          <div class="fw-semibold">${lang.startsWith("zh") ? "下次运行" : "Next run"}</div>
-          <div class="text-muted small">${formatTs(session.next_run_at)}</div>
-        </div>
-        <div class="paper-detail-box">
-          <div class="fw-semibold">${lang.startsWith("zh") ? "最近成交" : "Last trade"}</div>
-          <div class="text-muted small">${formatTs(session.last_trade_at)}</div>
-        </div>
-        <div class="paper-detail-box">
-          <div class="fw-semibold">${lang.startsWith("zh") ? "最近跳过" : "Last skip"}</div>
-          <div class="text-muted small">
-            ${lastSkip ? `${skipLabels[lastSkip.reason] || skipLabels.other} · ${formatTs(lastSkip.at)}` : (lang.startsWith("zh") ? "暂无" : "None")}
-          </div>
-        </div>
-        <div class="paper-detail-box">
-          <div class="fw-semibold">${lang.startsWith("zh") ? "信号来源" : "Signal source"}</div>
-          <div class="text-muted small d-flex align-items-center gap-2 flex-wrap">
-            <span class="signal-pill source-${signalSource}">${signalLabels[signalSource] || signalLabels.unknown}</span>
-            ${confidence !== null && confidence !== undefined ? `<span class="confidence-pill">${lang.startsWith("zh") ? "置信度" : "Confidence"} ${(confidence * 100).toFixed(1)}%</span>` : ""}
-            <span>${formatTs(session.last_signal_at)}</span>
-            ${riskGuard ? `<span class="badge bg-warning-subtle text-warning-emphasis">${lang.startsWith("zh") ? "降风险" : "De-risked"} ×${riskGuard.factor ?? 1}</span>` : ""}
-          </div>
-        </div>
-        <div class="paper-detail-box">
-          <div class="fw-semibold">${lang.startsWith("zh") ? "成本假设" : "Cost model"}</div>
-          <div class="text-muted small">${lang.startsWith("zh") ? "滑点" : "Slippage"} ${slippageBps} bps · ${lang.startsWith("zh") ? "佣金" : "Commission"} ${commissionBps} bps</div>
-        </div>
-      </div>
-
-      <div class="paper-detail-section">
-        <p class="fw-semibold mb-2">${labels.positions}</p>
-        <div class="paper-list-grid">
-          ${posList}
-        </div>
-      </div>
-
-      <div class="paper-detail-section">
-        <p class="fw-semibold mb-2">${labels.curve}</p>
-        ${curve && curve.length ? `
-          <ul class="paper-list small">
-            ${curve.slice(-12).map(pt => `<li><span>${formatTs(pt.ts)}</span><span>$${formatMoney(pt.equity)}</span></li>`).join("")}
-          </ul>
-        ` : `<p class="text-muted mb-0">${labels.none}</p>`}
-      </div>
-
-      <div class="paper-detail-section">
-        <p class="fw-semibold mb-2">${labels.trades}</p>
-        <div class="paper-export">
-          <span class="text-muted small">${labels.export}</span>
-          <a class="btn btn-outline-secondary btn-sm" target="_blank" rel="noopener" href="${exportBase}?format=csv">CSV</a>
-          <a class="btn btn-outline-secondary btn-sm" target="_blank" rel="noopener" href="${exportBase}?format=json">JSON</a>
-        </div>
-        <ul class="list-group list-group-flush">
-          ${tradesList}
-        </ul>
+              <div class="label">${item.label}</div>
+              <div class="value">${item.value}</div>
+            </div>`
+          )
+          .join('')}
       </div>
     `;
+    if (alpacaStatusPill) {
+      const status = acc.status || '';
+      alpacaStatusPill.textContent = status || TEXT.statusUnknown;
+      alpacaStatusPill.classList.toggle('is-error', status && status.toLowerCase() === 'blocked');
+      alpacaStatusPill.classList.toggle('is-live', alpacaState.mode === 'live');
+    }
   };
 
-  const renderSessions = (sessions) => {
-    if (!listEl) return;
-    const lang = (window.langPrefix || document.documentElement.lang || "zh").toLowerCase();
-    if (!sessions || !sessions.length) {
-      const emptyText = lang.startsWith("zh") ? "暂无会话，创建你的第一个模拟盘吧。" : "No sessions yet. Create your first paper session.";
-      listEl.innerHTML = `<div class="text-muted small">${emptyText}</div>`;
+  const getEquity = () => {
+    if (!alpacaState.account) return 0;
+    return Number(alpacaState.account.equity || alpacaState.account.portfolio_value || 0);
+  };
+
+  const computeWeight = (marketValue, equity) => {
+    if (!equity) return 0;
+    return (marketValue / equity) * 100;
+  };
+
+  const renderPositions = () => {
+    if (!alpacaPositionsEl) return;
+    if (alpacaState.loading) {
+      alpacaPositionsEl.innerHTML = `<p class="text-muted small mb-0">${isZh ? '加载持仓中…' : 'Loading positions…'}</p>`;
       return;
     }
-    const statusLabel = (st) => {
-      if (lang.startsWith("zh")) {
-        return { running: "运行中", paused: "已暂停", stopped: "已停止", error: "异常", draft: "草稿" }[st] || st;
+    const positions = alpacaState.positions || [];
+    if (!positions.length) {
+      alpacaPositionsEl.innerHTML = `
+        <div class="paper-empty-state">
+          <p class="mb-0">${TEXT.noPositions}</p>
+          <a class="btn btn-outline-primary btn-sm" href="/market/">${TEXT.emptyCta}</a>
+        </div>
+      `;
+      return;
+    }
+    const equity = getEquity();
+    const headers = [
+      isZh ? '标的' : 'Symbol',
+      isZh ? '数量' : 'Qty',
+      isZh ? '成本' : 'Avg Cost',
+      isZh ? '最新' : 'Last',
+      isZh ? '市值' : 'Market Value',
+      isZh ? '浮盈' : 'Unrealized P/L',
+      isZh ? '当前权重' : 'Weight',
+      isZh ? '目标权重' : 'Target',
+      isZh ? '偏差' : 'Delta',
+      isZh ? '操作' : 'Actions',
+    ];
+    const rows = positions
+      .map((pos) => {
+        const marketValue = Number(pos.market_value || 0);
+        const currentWeight = computeWeight(marketValue, equity);
+        const targetValue = currentWeight.toFixed(2);
+        const unrealizedPct = Number(pos.unrealized_plpc || 0);
+        const delta = 0;
+        const deltaClass = delta >= 0 ? 'pill-positive' : 'pill-negative';
+        return `
+          <tr data-symbol="${pos.symbol || ''}">
+            <td><strong>${pos.symbol || '--'}</strong></td>
+            <td class="text-end">${pos.qty ? Number(pos.qty).toFixed(4) : '--'}</td>
+            <td class="text-end">$${formatMoney(pos.avg_entry_price)}</td>
+            <td class="text-end">$${formatMoney(pos.current_price)}</td>
+            <td class="text-end">$${formatMoney(marketValue)}</td>
+            <td class="text-end ${unrealizedPct >= 0 ? 'pill-positive' : 'pill-negative'}">${formatPct(unrealizedPct)}</td>
+            <td class="text-end" data-role="alpaca-current" data-current="${currentWeight.toFixed(4)}">${currentWeight.toFixed(2)}%</td>
+            <td class="text-end">
+              <input class="paper-alpaca-target" data-role="alpaca-target" data-symbol="${pos.symbol || ''}" data-current="${currentWeight.toFixed(4)}" value="${targetValue}" />
+            </td>
+            <td class="text-end" data-role="alpaca-delta" data-symbol="${pos.symbol || ''}">
+              <span class="${deltaClass}">0.00%</span>
+            </td>
+            <td class="text-end">
+              <div class="paper-alpaca-actions">
+                <button type="button" class="paper-alpaca-action-btn" data-role="alpaca-clear" data-symbol="${pos.symbol || ''}">${isZh ? '清零' : 'Clear'}</button>
+                <button type="button" class="paper-alpaca-action-btn" data-role="alpaca-use" data-symbol="${pos.symbol || ''}">${isZh ? '用现值' : 'Use'}</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      })
+      .join('');
+    alpacaPositionsEl.innerHTML = `
+      <table class="paper-alpaca-table">
+        <thead><tr>${headers.map((h) => `<th>${h}</th>`).join('')}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+    panel.querySelectorAll('[data-role="alpaca-target"]').forEach((input) => {
+      updateRowDelta(input.dataset.symbol || '');
+    });
+    updateRebalanceSummary();
+  };
+
+  const updateRebalanceSummary = () => {
+    if (!alpacaRebalanceSummary) return;
+    const { totalWeight, cashRemainder } = computeTargetSummary();
+    alpacaRebalanceSummary.textContent = `${TEXT.sumLabel}: ${totalWeight.toFixed(2)}% · ${TEXT.cashLabel}: $${formatMoney(cashRemainder)}`;
+  };
+
+  const computeTargetSummary = () => {
+    const equity = getEquity();
+    let totalWeight = 0;
+    panel.querySelectorAll('[data-role="alpaca-target"]').forEach((input) => {
+      const val = Number(input.value);
+      if (Number.isNaN(val)) return;
+      totalWeight += val;
+    });
+    const remainderPct = Math.max(0, 100 - totalWeight);
+    const cashRemainder = equity * (remainderPct / 100);
+    return { totalWeight, cashRemainder };
+  };
+
+  const updateRowDelta = (symbol) => {
+    const row = panel.querySelector(`tr[data-symbol="${symbol}"]`);
+    if (!row) return;
+    const currentCell = row.querySelector('[data-role="alpaca-current"]');
+    const targetInput = row.querySelector('[data-role="alpaca-target"]');
+    const deltaCell = row.querySelector('[data-role="alpaca-delta"]');
+    if (!currentCell || !targetInput || !deltaCell) return;
+    const current = Number(currentCell.dataset.current || 0);
+    const target = Number(targetInput.value || 0);
+    const delta = target - current;
+    const span = deltaCell.querySelector('span') || deltaCell;
+    span.textContent = `${delta.toFixed(2)}%`;
+    span.classList.toggle('pill-positive', delta >= 0);
+    span.classList.toggle('pill-negative', delta < 0);
+  };
+
+  const collectTargets = () => {
+    const targets = [];
+    panel.querySelectorAll('[data-role="alpaca-target"]').forEach((input) => {
+      const symbol = input.dataset.symbol;
+      const val = Number(input.value);
+      if (!symbol || Number.isNaN(val)) return;
+      const weight = Math.max(0, val);
+      targets.push({ symbol, target_weight: weight });
+    });
+    return targets;
+  };
+
+  const normalizeTargets = () => {
+    const inputs = Array.from(panel.querySelectorAll('[data-role="alpaca-target"]'));
+    let sum = 0;
+    inputs.forEach((input) => {
+      const val = Number(input.value);
+      if (!Number.isNaN(val)) sum += val;
+    });
+    if (!sum) return;
+    inputs.forEach((input) => {
+      const val = Number(input.value);
+      if (Number.isNaN(val)) return;
+      const normalized = (val / sum) * 100;
+      input.value = normalized.toFixed(2);
+      updateRowDelta(input.dataset.symbol || '');
+    });
+    updateRebalanceSummary();
+  };
+
+  const resetTargets = () => {
+    panel.querySelectorAll('[data-role="alpaca-target"]').forEach((input) => {
+      if (input.dataset.current) {
+        input.value = Number(input.dataset.current).toFixed(2);
+        updateRowDelta(input.dataset.symbol || '');
       }
-      return { running: "Running", paused: "Paused", stopped: "Stopped", error: "Error", draft: "Draft" }[st] || st;
+    });
+    updateRebalanceSummary();
+  };
+
+  const buildPlan = ({ liquidateAll = false } = {}) => {
+    const equity = getEquity();
+    const positions = alpacaState.positions || [];
+    const posMap = new Map();
+    positions.forEach((pos) => {
+      const symbol = (pos.symbol || '').toUpperCase();
+      if (symbol) posMap.set(symbol, pos);
+    });
+    const warnings = [];
+    const orders = [];
+    const minNotional = 10;
+    if (!equity) {
+      warnings.push(isZh ? '账户权益为 0，无法计算目标仓位。' : 'Equity is 0.');
+    }
+    if (liquidateAll) {
+      positions.forEach((pos) => {
+        const qty = Number(pos.qty || 0);
+        if (!qty) return;
+        orders.push({ symbol: pos.symbol, action: qty > 0 ? 'sell' : 'buy', qty: Math.abs(qty) });
+      });
+      return { orders, warnings };
+    }
+    const targets = collectTargets();
+    const targetSymbols = new Set();
+    targets.forEach((t) => {
+      const raw = Number(t.target_weight || 0);
+      const weight = raw > 1 ? raw / 100 : raw;
+      const symbol = (t.symbol || '').toUpperCase();
+      if (!symbol) return;
+      targetSymbols.add(symbol);
+      const targetNotional = equity * weight;
+      const pos = posMap.get(symbol) || {};
+      const currentNotional = Number(pos.market_value || 0);
+      const diff = targetNotional - currentNotional;
+      if (Math.abs(diff) < minNotional) return;
+      if (diff > 0) {
+        orders.push({ symbol, action: 'buy', notional: diff });
+      } else {
+        const price = Number(pos.current_price || 0);
+        if (!price) {
+          warnings.push(isZh ? `${symbol} 缺少价格，无法计算卖出数量。` : `${symbol} missing price for sell.`);
+        } else {
+          orders.push({ symbol, action: 'sell', qty: Math.abs(diff) / price });
+        }
+      }
+    });
+    if (alpacaLiquidateUnlisted && alpacaLiquidateUnlisted.checked) {
+      positions.forEach((pos) => {
+        const symbol = (pos.symbol || '').toUpperCase();
+        if (!symbol || targetSymbols.has(symbol)) return;
+        const qty = Number(pos.qty || 0);
+        if (!qty) return;
+        orders.push({ symbol, action: qty > 0 ? 'sell' : 'buy', qty: Math.abs(qty), reason: 'unlisted' });
+      });
+    }
+    return { orders, warnings };
+  };
+
+  const openModal = ({ title, bodyHtml, requireInput = false, onConfirm, confirmText, cancelText, showCancel = true }) => {
+    if (!modal || !modalTitle || !modalBody || !modalConfirmBtn || !modalCancelBtn) return;
+    modalTitle.textContent = title || '';
+    modalBody.innerHTML = bodyHtml || '';
+    if (modalInputWrap) {
+      modalInputWrap.hidden = !requireInput;
+    }
+    if (modalInput) {
+      modalInput.value = '';
+    }
+    if (modalConfirmBtn) {
+      modalConfirmBtn.textContent = confirmText || (isZh ? '确认' : 'Confirm');
+    }
+    if (modalCancelBtn) {
+      modalCancelBtn.textContent = cancelText || (isZh ? '取消' : 'Cancel');
+      modalCancelBtn.style.display = showCancel ? '' : 'none';
+    }
+    modal.hidden = false;
+    const confirmHandler = () => {
+      if (requireInput && modalInput && modalInput.value.trim().toUpperCase() !== 'LIVE') {
+        modalBody.insertAdjacentHTML('afterbegin', `<div class="alert alert-warning">${TEXT.liveRequired}</div>`);
+        return;
+      }
+      if (onConfirm) onConfirm();
+      closeModal();
     };
-    const signalLabels = lang.startsWith("zh")
-      ? { fresh: "新信号", fallback_cached: "回退", light_cached: "缓存", failure: "失败", unknown: "未知" }
-      : { fresh: "Fresh", fallback_cached: "Fallback", light_cached: "Cached", failure: "Failure", unknown: "Unknown" };
-    listEl.innerHTML = sessions.map((s) => `
-      <article class="paper-card paper-card--peach mb-3" data-session-id="${s.session_id}">
-        <header class="d-flex justify-content-between align-items-start">
-          <div>
-            <p class="paper-name mb-0 fw-semibold">${s.name || s.ticker}</p>
-            <p class="text-muted small mb-0">${s.ticker}${s.benchmark ? ` / ${s.benchmark}` : ""}</p>
-          </div>
-          <span class="paper-badge status-${s.status}">${statusLabel(s.status)}</span>
-        </header>
-        <div class="paper-meta mt-2">
-          <span>${lang.startsWith("zh") ? "权益" : "Equity"} <strong>$${formatMoney(s.last_equity)}</strong></span>
-          <span>${lang.startsWith("zh") ? "现金" : "Cash"} <strong>$${formatMoney(s.current_cash)}</strong></span>
-          <span>${lang.startsWith("zh") ? "收益" : "Return"} <strong>${s.pnl_pct !== null && s.pnl_pct !== undefined ? (s.pnl_pct * 100).toFixed(2) + "%" : "--"}</strong></span>
-          <span>${lang.startsWith("zh") ? "频率" : "Interval"} <strong>${s.interval_seconds}s</strong></span>
-          <span>${lang.startsWith("zh") ? "下次运行" : "Next run"} <strong>${formatTs(s.next_run_at)}</strong></span>
-          <span>${lang.startsWith("zh") ? "信号" : "Signal"} <strong><span class="signal-pill source-${s.signal_source || "unknown"}">${signalLabels[s.signal_source || "unknown"] || signalLabels.unknown}</span></strong></span>
-        </div>
-        <div class="paper-card-chart">
-          <canvas data-role="paper-sparkline" data-series="${encodeURIComponent(JSON.stringify(s.equity_preview || []))}"></canvas>
-          <span class="paper-card-chart-label">${lang.startsWith("zh") ? "权益趋势" : "Equity trend"}</span>
-        </div>
-        <div class="paper-actions mt-2">
-          <button type="button" class="btn btn-outline-secondary btn-sm" data-action="detail">${lang.startsWith("zh") ? "详情" : "Details"}</button>
-          <button type="button" class="btn btn-outline-primary btn-sm" data-action="${s.status === "paused" ? "resume" : "pause"}">
-            ${s.status === "paused" ? (lang.startsWith("zh") ? "恢复" : "Resume") : (lang.startsWith("zh") ? "暂停" : "Pause")}
-          </button>
-          <button type="button" class="btn btn-outline-danger btn-sm" data-action="stop">${lang.startsWith("zh") ? "停止" : "Stop"}</button>
-          <button type="button" class="btn btn-outline-dark btn-sm" data-action="delete">${lang.startsWith("zh") ? "删除" : "Delete"}</button>
-        </div>
-      </article>
-    `).join("");
-    listEl.querySelectorAll('[data-role="paper-sparkline"]').forEach((canvas) => {
-      try {
-        const series = JSON.parse(decodeURIComponent(canvas.dataset.series || "[]"));
-        drawSparkline(canvas, series);
-      } catch (_error) {
-        // ignore parse failures
-      }
-    });
-    listEl.querySelectorAll(".paper-card").forEach((card) => {
-      const sessionId = card.dataset.sessionId;
-      card.addEventListener("click", (evt) => {
-        const actionBtn = evt.target.closest("[data-action]");
-        if (!actionBtn) return loadDetail(sessionId);
-        evt.stopPropagation();
-        const action = actionBtn.dataset.action;
-        if (action === "detail") return loadDetail(sessionId);
-        if (action === "delete") return deleteSession(sessionId);
-        mutateSession(sessionId, action);
-      });
-    });
+    modalConfirmBtn.onclick = confirmHandler;
+    modalCancelBtn.onclick = closeModal;
   };
 
-  const handleError = (msg) => {
-    if (!alertEl) return;
-    alertEl.textContent = msg;
-    alertEl.classList.remove("d-none");
+  const closeModal = () => {
+    if (!modal) return;
+    modal.hidden = true;
+    if (modalBody) modalBody.innerHTML = '';
   };
 
-  const clearError = () => {
-    if (!alertEl) return;
-    alertEl.classList.add("d-none");
-    alertEl.textContent = "";
-  };
+  modalClosers.forEach((btn) => btn.addEventListener('click', closeModal));
 
-  const updatePager = (state) => {
-    if (!countEl) return;
-    const lang = (window.langPrefix || document.documentElement.lang || "zh").toLowerCase();
-    const total = state.total || 0;
-    const start = total ? state.offset + 1 : 0;
-    const end = Math.min(state.offset + state.limit, total);
-    countEl.textContent = lang.startsWith("zh")
-      ? `显示 ${start}-${end} / 共 ${total}`
-      : `Showing ${start}-${end} of ${total}`;
-    if (prevBtn) prevBtn.disabled = !state.hasPrev;
-    if (nextBtn) nextBtn.disabled = !state.hasNext;
-  };
-
-  const loadSessions = async () => {
-    try {
-      const params = new URLSearchParams();
-      params.set("limit", String(listState.limit));
-      params.set("offset", String(listState.offset));
-      if (listState.query) params.set("q", listState.query);
-      if (listState.status && listState.status !== "all") params.set("status", listState.status);
-      if (listState.sort) params.set("sort", listState.sort);
-      const resp = await fetch(`/api/v1/paper/sessions/?${params.toString()}`, {
-        credentials: "include",
-        headers: { "X-Requested-With": "XMLHttpRequest" },
-      });
-      const text = await resp.text();
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch (e) {
-        data = null;
-      }
-      if (!resp.ok) {
-        console.error("Load sessions failed", resp.status, text);
-        handleError(`加载会话失败（${resp.status}），请稍后重试。`);
-        return;
-      }
-      renderSessions((data && data.sessions) || []);
-      listState.total = data.total || 0;
-      listState.hasNext = Boolean(data.has_next);
-      listState.hasPrev = Boolean(data.has_prev);
-      updatePager(listState);
-    } catch (err) {
-      console.error("Load sessions failed", err);
-      handleError("加载模拟盘列表失败，请稍后重试。");
+  const renderPreview = () => {
+    const plan = buildPlan({ liquidateAll: false });
+    const { totalWeight, cashRemainder } = computeTargetSummary();
+    const warnings = plan.warnings || [];
+    if (totalWeight > 100.01) {
+      warnings.push(isZh ? '目标权重合计超过 100%。' : 'Target weights exceed 100%.');
     }
-  };
+    if (totalWeight < 99.0) {
+      warnings.push(isZh ? '目标权重未达到 100%，剩余将保留现金。' : 'Target weights below 100%, remainder kept as cash.');
+    }
+    const orders = plan.orders || [];
+    const warningsHtml = warnings.length
+      ? `<div><strong>${TEXT.previewWarnings}</strong><ul>${warnings.map((w) => `<li>${w}</li>`).join('')}</ul></div>`
+      : '';
+    const ordersHtml = orders.length
+      ? `
+        <table class="paper-preview-table">
+          <thead><tr><th>${isZh ? '标的' : 'Symbol'}</th><th>${isZh ? '动作' : 'Side'}</th><th>${isZh ? '数量/金额' : 'Qty/Notional'}</th></tr></thead>
+          <tbody>
+            ${orders
+              .map((o) => {
+                const qty = o.qty ? Number(o.qty).toFixed(4) : '--';
+                const notional = o.notional ? `$${formatMoney(o.notional)}` : '--';
+                return `<tr><td>${o.symbol}</td><td>${o.action}</td><td>${o.qty ? qty : notional}</td></tr>`;
+              })
+              .join('')}
+          </tbody>
+        </table>`
+      : `<p>${TEXT.previewEmpty}</p>`;
 
-  const loadDetail = async (sessionId) => {
-    try {
-      const resp = await fetch(`/api/v1/paper/sessions/${sessionId}/`, {
-        credentials: "include",
-        headers: { "X-Requested-With": "XMLHttpRequest" },
-      });
-      if (!resp.ok) throw new Error("failed");
-      const data = await resp.json();
-      renderDetail(data);
-    } catch (err) {
-      handleError("加载会话详情失败。");
-    }
-  };
+    const summaryHtml = `
+      <div><strong>${TEXT.previewSummary}:</strong> ${totalWeight.toFixed(2)}%</div>
+      <div><strong>${TEXT.previewCash}:</strong> $${formatMoney(cashRemainder)}</div>
+    `;
 
-  const deleteSession = async (sessionId) => {
-    try {
-      const resp = await fetch(`/api/v1/paper/sessions/${sessionId}/`, {
-        method: "DELETE",
-        credentials: "include",
-        headers: {
-          "X-Requested-With": "XMLHttpRequest",
-          "X-CSRFToken": getCsrfToken(),
-        },
-      });
-      if (!resp.ok) {
-        handleError("删除失败，请稍后重试。");
-        return;
-      }
-      await loadSessions();
-      renderDetail(null);
-    } catch (err) {
-      handleError("删除失败，请稍后重试。");
-    }
-  };
-
-  const mutateSession = async (sessionId, action) => {
-    try {
-      const resp = await fetch(`/api/v1/paper/sessions/${sessionId}/`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRFToken": getCsrfToken(),
-          "X-Requested-With": "XMLHttpRequest",
-        },
-        credentials: "include",
-        body: JSON.stringify({ action }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || "error");
-      await loadSessions();
-      renderDetail(data);
-    } catch (err) {
-      handleError("操作失败，请稍后重试。");
-    }
-  };
-
-  const submitForm = async (evt) => {
-    evt.preventDefault();
-    clearError();
-    const fd = new FormData(form);
-    const today = new Date().toISOString().slice(0, 10);
-    let start = fd.get("start_date");
-    let end = fd.get("end_date") || today;
-    // Clamp future dates to today
-    if (end > today) end = today;
-    if (start && start > today) start = today;
-    // Ensure start < end (fallback to one year back)
-    if (!start) {
-        const d = new Date(end);
-        d.setDate(d.getDate() - 365);
-        start = d.toISOString().slice(0, 10);
-    }
-    if (start >= end) {
-        const d = new Date(end);
-        d.setDate(d.getDate() - 10);
-        start = d.toISOString().slice(0, 10);
-    }
-    const payload = {
-      name: fd.get("name") || "",
-      initial_cash: fd.get("initial_cash"),
-      interval_seconds: fd.get("interval_seconds"),
-      params: {
-        ticker: fd.get("ticker"),
-        benchmark_ticker: fd.get("benchmark") || "",
-        start_date: start,
-        end_date: end,
-        ml_mode: "light",
-        capital: fd.get("capital"),
+    openModal({
+      title: TEXT.previewTitle,
+      bodyHtml: `${warningsHtml}${summaryHtml}${ordersHtml}`,
+      requireInput: alpacaState.mode === 'live',
+      onConfirm: () => {
+        if (!orders.length) return;
+        executeRebalance({ liquidateAll: false });
       },
+    });
+  };
+
+  const executeRebalance = async ({ liquidateAll = false } = {}) => {
+    const payload = {
+      mode: alpacaState.mode,
+      targets: liquidateAll ? [] : collectTargets(),
+      liquidate_unlisted: alpacaLiquidateUnlisted ? alpacaLiquidateUnlisted.checked : false,
+      liquidate_all: liquidateAll,
     };
     try {
-      const resp = await fetch("/api/v1/paper/sessions/", {
-        method: "POST",
+      setLoading(true);
+      const resp = await fetch(alpacaRebalanceEndpoint, {
+        method: 'POST',
+        credentials: 'same-origin',
         headers: {
-          "Content-Type": "application/json",
-          "X-CSRFToken": getCsrfToken(),
-          "X-Requested-With": "XMLHttpRequest",
+          'Content-Type': 'application/json',
+          'X-CSRFToken': getCsrfToken(),
         },
-        credentials: "include",
         body: JSON.stringify(payload),
       });
-      const text = await resp.text();
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch (e) {
-        data = { error: text || "Unknown error" };
-      }
-      if (!resp.ok) {
-        let msg = data.error || "创建失败，请检查表单。";
-        if (data.details) {
-          try {
-            msg += " " + JSON.stringify(data.details);
-          } catch (e) {
-            /* noop */
-          }
-        }
-        handleError(msg);
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.ok) {
+        setError(data.error || TEXT.executeFailed);
+        setStatus(TEXT.executeFailed);
         return;
       }
-      form.reset();
-      await loadSessions();
-      renderDetail(data);
+      setStatus(TEXT.executeSuccess);
+      if (data.orders && Array.isArray(data.orders) && data.orders.length) {
+        const rows = data.orders
+          .map(
+            (order) =>
+              `<li>${order.symbol || '--'} · ${order.side || '--'} · ${order.qty || order.notional || '--'} · ${
+                order.status || '--'
+              }</li>`
+          )
+          .join('');
+        openModal({
+          title: isZh ? '执行结果' : 'Execution result',
+          bodyHtml: `<div class=\"paper-preview-log\"><ul>${rows}</ul></div>`,
+          confirmText: isZh ? '关闭' : 'Close',
+          showCancel: false,
+        });
+      }
+      await loadAlpacaAccount();
     } catch (err) {
-      handleError("创建模拟盘失败，请稍后再试。");
+      setStatus(isZh ? '请求失败，请稍后重试。' : 'Request failed.');
+      setError(TEXT.executeFailed);
+    } finally {
+      setLoading(false);
     }
   };
 
-  if (form) {
-    form.addEventListener("submit", submitForm);
+  const setStatus = (message) => {
+    if (!alpacaRebalanceStatus) return;
+    alpacaRebalanceStatus.textContent = message || '';
+  };
+
+  const loadAlpacaAccount = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const resp = await fetch(`${alpacaAccountEndpoint}?mode=${alpacaState.mode}`, { credentials: 'same-origin' });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.ok) {
+        alpacaState.account = null;
+        alpacaState.positions = [];
+        alpacaState.lastUpdated = null;
+        setError(isZh ? '无法读取 Alpaca 账户，请检查 API Key。' : 'Failed to load Alpaca account.');
+        setLoading(false);
+        renderSummary();
+        renderPositions();
+        return;
+      }
+      alpacaState.account = data.account || null;
+      alpacaState.positions = Array.isArray(data.positions) ? data.positions : [];
+      alpacaState.lastUpdated = data.updated_at || null;
+      setLoading(false);
+      renderSummary();
+      renderPositions();
+      updateUpdatedTime();
+      setError('');
+    } catch (err) {
+      setError(isZh ? '请求失败，请稍后重试。' : 'Request failed.');
+      setLoading(false);
+    } finally {
+      setConnectionState(alpacaState.error ? 'error' : 'ok');
+    }
+  };
+
+  const startAutoRefresh = () => {
+    if (alpacaState.autoTimer) {
+      clearInterval(alpacaState.autoTimer);
+      alpacaState.autoTimer = null;
+    }
+    if (!alpacaState.autoRefreshMs) return;
+    alpacaState.autoTimer = setInterval(() => {
+      if (!alpacaState.loading) loadAlpacaAccount();
+    }, alpacaState.autoRefreshMs);
+  };
+
+  if (envAutoToggle) {
+    envAutoToggle.addEventListener('click', (event) => {
+      const btn = event.target.closest('button[data-interval]');
+      if (!btn) return;
+      const next = Number(btn.dataset.interval);
+      if (!AUTO_REFRESH_OPTIONS.includes(next)) return;
+      alpacaState.autoRefreshMs = next;
+      updateAutoToggle();
+      startAutoRefresh();
+    });
   }
 
-  if (searchInput) {
-    let timer = null;
-    searchInput.addEventListener("input", () => {
-      if (timer) window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        listState.query = (searchInput.value || "").trim();
-        listState.offset = 0;
-        loadSessions();
-      }, 250);
-    });
-  }
-  if (statusSelect) {
-    statusSelect.addEventListener("change", () => {
-      listState.status = statusSelect.value || "all";
-      listState.offset = 0;
-      loadSessions();
-    });
-  }
-  if (sortSelect) {
-    sortSelect.addEventListener("change", () => {
-      listState.sort = sortSelect.value || "updated";
-      listState.offset = 0;
-      loadSessions();
-    });
-  }
-  if (prevBtn) {
-    prevBtn.addEventListener("click", () => {
-      if (!listState.hasPrev) return;
-      listState.offset = Math.max(0, listState.offset - listState.limit);
-      loadSessions();
-    });
-  }
-  if (nextBtn) {
-    nextBtn.addEventListener("click", () => {
-      if (!listState.hasNext) return;
-      listState.offset = listState.offset + listState.limit;
-      loadSessions();
+  if (alpacaModeButtons.length) {
+    alpacaModeButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const nextMode = btn.dataset.mode || 'paper';
+        if (nextMode === alpacaState.mode) return;
+        if (nextMode === 'live') {
+          openModal({
+            title: TEXT.confirmTitle,
+            bodyHtml: `<p>${TEXT.confirmSwitchLive}</p>`,
+            requireInput: true,
+            onConfirm: () => {
+              alpacaState.mode = 'live';
+              updateModeButtons();
+              loadAlpacaAccount();
+            },
+          });
+          return;
+        }
+        alpacaState.mode = nextMode;
+        updateModeButtons();
+        loadAlpacaAccount();
+      });
     });
   }
 
-  loadSessions();
+  if (alpacaRefreshBtn) {
+    alpacaRefreshBtn.addEventListener('click', () => {
+      loadAlpacaAccount();
+    });
+  }
+
+  if (alpacaResetBtn) {
+    alpacaResetBtn.addEventListener('click', () => {
+      resetTargets();
+    });
+  }
+
+  if (alpacaNormalizeBtn) {
+    alpacaNormalizeBtn.addEventListener('click', () => {
+      normalizeTargets();
+    });
+  }
+
+  if (alpacaLiquidateBtn) {
+    alpacaLiquidateBtn.addEventListener('click', () => {
+      openModal({
+        title: TEXT.confirmTitle,
+        bodyHtml: `<p>${TEXT.confirmLiquidate}</p>`,
+        requireInput: alpacaState.mode === 'live',
+        onConfirm: () => executeRebalance({ liquidateAll: true }),
+      });
+    });
+  }
+
+  if (alpacaPreviewBtn) {
+    alpacaPreviewBtn.addEventListener('click', () => {
+      renderPreview();
+    });
+  }
+
+  panel.addEventListener('input', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (!target.matches('[data-role="alpaca-target"]')) return;
+    updateRowDelta(target.dataset.symbol || '');
+    updateRebalanceSummary();
+  });
+
+  panel.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (target.matches('[data-role="alpaca-clear"]')) {
+      const symbol = target.dataset.symbol || '';
+      const input = panel.querySelector(`[data-role="alpaca-target"][data-symbol="${symbol}"]`);
+      if (input) {
+        input.value = '0.00';
+        updateRowDelta(symbol);
+        updateRebalanceSummary();
+      }
+    }
+    if (target.matches('[data-role="alpaca-use"]')) {
+      const symbol = target.dataset.symbol || '';
+      const input = panel.querySelector(`[data-role="alpaca-target"][data-symbol="${symbol}"]`);
+      if (input && input.dataset.current) {
+        input.value = Number(input.dataset.current).toFixed(2);
+        updateRowDelta(symbol);
+        updateRebalanceSummary();
+      }
+    }
+  });
+
+  alpacaState.freshnessTimer = setInterval(updateFreshness, 1000);
+  updateModeButtons();
+  updateAutoToggle();
+  setConnectionState('loading');
+  loadAlpacaAccount();
 })();

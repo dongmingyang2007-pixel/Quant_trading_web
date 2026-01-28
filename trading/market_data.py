@@ -23,7 +23,7 @@ from .alpaca_data import (
     DEFAULT_FEED,
     fetch_stock_bars_frame,
     fetch_stock_snapshots,
-    resolve_alpaca_credentials,
+    resolve_alpaca_data_credentials,
 )
 
 RATE_LIMIT_PER_WINDOW = int(os.environ.get("MARKET_FETCH_RATE_LIMIT", "10000") or 0)
@@ -209,7 +209,7 @@ def fetch_most_actives(
     timeout: int | None = None,
     base_url: str | None = None,
 ) -> list[dict[str, object]]:
-    key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+    key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
     if not key_id or not secret:
         return []
     if not _rate_limited():
@@ -407,7 +407,7 @@ def fetch_market_movers(
     timeout: int | None = None,
     base_url: str | None = None,
 ) -> dict[str, list[dict[str, object]]]:
-    key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+    key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
     if not key_id or not secret:
         return {}
     if not _rate_limited():
@@ -580,7 +580,7 @@ def fetch(
             end=end,
             timeframe=timeframe,
         )
-        key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+        key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
         if key_id and secret:
             for feed in _feed_candidates(DEFAULT_FEED):
                 try:
@@ -663,7 +663,7 @@ def fetch_recent_window(
         if sym and sym not in seen:
             seen.add(sym)
             unique_symbols.append(sym)
-    key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+    key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
     if key_id and secret:
         timeframe = _resolve_alpaca_timeframe(interval)
         data = pd.DataFrame()
@@ -712,7 +712,7 @@ def fetch_latest_quote(
     """Fetch the latest quote for a symbol. Returns {'price': float, 'as_of': datetime}."""
     if not symbol:
         return {}
-    key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+    key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
     if key_id and secret:
         snapshots = fetch_stock_snapshots([symbol], user_id=user_id)
         snap = snapshots.get(symbol.upper()) if isinstance(snapshots, dict) else None

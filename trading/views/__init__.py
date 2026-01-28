@@ -39,8 +39,11 @@ from .account import (
 from .auth import activate, resend_activation, signup
 from .market import (
     market_assets_data,
+    market_chart_data,
     market_insights,
     market_insights_data,
+    market_manual_order,
+    market_trading_mode,
     market_watchlist_snapshot,
     market_screener_data,
 )
@@ -58,7 +61,7 @@ from .account import profile_public
 from .learning import learning_center, learning_module_detail
 from .observability_dashboard import observability_dashboard
 from .history_compare import history_compare
-from .paper import paper_trading
+from .paper import paper_trading, paper_alpaca_account, paper_alpaca_rebalance
 from .screen_analyzer import (
     screen_analyzer,
     screen_analyzer_api,
@@ -70,6 +73,8 @@ from .realtime import realtime_settings, realtime_monitor
 __all__ = [
     "backtest",
     "paper_trading",
+    "paper_alpaca_account",
+    "paper_alpaca_rebalance",
     "screener_snapshot_api",
     "ai_chat",
     "ai_chat_stream",
@@ -103,6 +108,9 @@ __all__ = [
     "market_insights",
     "market_insights_data",
     "market_assets_data",
+    "market_chart_data",
+    "market_manual_order",
+    "market_trading_mode",
     "market_watchlist_snapshot",
     "market_screener_data",
     "community",

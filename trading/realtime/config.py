@@ -60,11 +60,53 @@ class SignalConfig:
 
 
 @dataclass(slots=True)
+class StrategySpec:
+    name: str = "momentum"
+    enabled: bool = True
+    weight: float = 1.0
+    params: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class CombinerConfig:
+    method: str = "weighted_avg"
+    weights: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class RiskConfig:
+    max_position_weight: float = 0.2
+    max_leverage: float = 1.0
+    min_confidence: float | None = None
+
+
+@dataclass(slots=True)
+class ExecutionConfig:
+    enabled: bool = True
+    dry_run: bool = False
+    order_type: str = "market"
+    time_in_force: str = "day"
+    max_orders_per_minute: int = 60
+
+
+@dataclass(slots=True)
+class TradingConfig:
+    enabled: bool = True
+    mode: str = "paper"
+    min_trade_interval_seconds: int = 30
+    strategies: list[StrategySpec] = field(default_factory=lambda: [StrategySpec()])
+    combiner: CombinerConfig = field(default_factory=CombinerConfig)
+    risk: RiskConfig = field(default_factory=RiskConfig)
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+
+
+@dataclass(slots=True)
 class RealtimeConfig:
     universe: UniverseConfig = field(default_factory=UniverseConfig)
     focus: FocusConfig = field(default_factory=FocusConfig)
     engine: EngineConfig = field(default_factory=EngineConfig)
     signals: SignalConfig = field(default_factory=SignalConfig)
+    trading: TradingConfig = field(default_factory=TradingConfig)
 
 
 DEFAULT_CONFIG_NAME = "realtime_profile.json"
@@ -229,6 +271,99 @@ def _merge_signals(config: SignalConfig, payload: Mapping[str, Any]) -> SignalCo
     return config
 
 
+def _parse_strategy_spec(item: Any) -> StrategySpec | None:
+    if isinstance(item, str):
+        name = item.strip()
+        if not name:
+            return None
+        return StrategySpec(name=name)
+    if not isinstance(item, Mapping):
+        return None
+    name = str(item.get("name") or item.get("strategy") or "").strip()
+    if not name:
+        return None
+    enabled = _coerce_bool(item.get("enabled"), True)
+    weight = _coerce_float(item.get("weight"), 1.0, minimum=0.0)
+    params = item.get("params")
+    if not isinstance(params, dict):
+        params = {}
+    return StrategySpec(name=name, enabled=enabled, weight=weight, params=dict(params))
+
+
+def _merge_trading(config: TradingConfig, payload: Mapping[str, Any]) -> TradingConfig:
+    config.enabled = _coerce_bool(payload.get("enabled"), config.enabled)
+    mode = payload.get("mode")
+    if isinstance(mode, str) and mode.strip():
+        config.mode = mode.strip().lower()
+    config.min_trade_interval_seconds = _coerce_int(
+        payload.get("min_trade_interval_seconds"),
+        config.min_trade_interval_seconds,
+        minimum=5,
+        maximum=3600,
+    )
+    raw_strategies = payload.get("strategies")
+    if isinstance(raw_strategies, list):
+        parsed: list[StrategySpec] = []
+        for item in raw_strategies:
+            spec = _parse_strategy_spec(item)
+            if spec:
+                parsed.append(spec)
+        if parsed:
+            config.strategies = parsed
+    combiner = payload.get("combiner")
+    if isinstance(combiner, dict):
+        method = combiner.get("method")
+        if isinstance(method, str) and method.strip():
+            config.combiner.method = method.strip().lower()
+        weights = combiner.get("weights")
+        if isinstance(weights, dict):
+            cleaned: dict[str, float] = {}
+            for key, value in weights.items():
+                try:
+                    cleaned[str(key)] = float(value)
+                except (TypeError, ValueError):
+                    continue
+            if cleaned:
+                config.combiner.weights = cleaned
+    risk = payload.get("risk")
+    if isinstance(risk, dict):
+        config.risk.max_position_weight = _coerce_float(
+            risk.get("max_position_weight"),
+            config.risk.max_position_weight,
+            minimum=0.0,
+            maximum=1.0,
+        )
+        config.risk.max_leverage = _coerce_float(
+            risk.get("max_leverage"),
+            config.risk.max_leverage,
+            minimum=0.1,
+            maximum=10.0,
+        )
+        min_conf = risk.get("min_confidence")
+        if min_conf is None:
+            config.risk.min_confidence = None
+        else:
+            config.risk.min_confidence = _coerce_float(min_conf, config.risk.min_confidence or 0.0, minimum=0.0)
+    execution = payload.get("execution")
+    if isinstance(execution, dict):
+        config.execution.enabled = _coerce_bool(execution.get("enabled"), config.execution.enabled)
+        order_type = execution.get("order_type")
+        if isinstance(order_type, str) and order_type.strip():
+            config.execution.order_type = order_type.strip().lower()
+        time_in_force = execution.get("time_in_force")
+        if isinstance(time_in_force, str) and time_in_force.strip():
+            config.execution.time_in_force = time_in_force.strip().lower()
+        config.execution.max_orders_per_minute = _coerce_int(
+            execution.get("max_orders_per_minute"),
+            config.execution.max_orders_per_minute,
+            minimum=1,
+            maximum=5000,
+        )
+    # Always disable dry-run to execute orders on Alpaca.
+    config.execution.dry_run = False
+    return config
+
+
 def load_realtime_config_from_payload(payload: Mapping[str, Any] | None) -> RealtimeConfig:
     config = RealtimeConfig()
     if not isinstance(payload, Mapping):
@@ -245,6 +380,9 @@ def load_realtime_config_from_payload(payload: Mapping[str, Any] | None) -> Real
     signals_payload = payload.get("signals")
     if isinstance(signals_payload, dict):
         config.signals = _merge_signals(config.signals, signals_payload)
+    trading_payload = payload.get("trading")
+    if isinstance(trading_payload, dict):
+        config.trading = _merge_trading(config.trading, trading_payload)
     return config
 
 

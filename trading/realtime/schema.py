@@ -126,12 +126,75 @@ if PYDANTIC_AVAILABLE:
         max_spread_bps: float = Field(25.0, ge=0.0, le=500.0)
 
 
+    class StrategySpecPayload(BaseModel):
+        model_config = ConfigDict(extra="ignore")
+        name: str = "momentum"
+        enabled: bool = True
+        weight: float = Field(1.0, ge=0.0, le=10.0)
+        params: dict[str, Any] = Field(default_factory=dict)
+
+        @field_validator("name", mode="before")
+        @classmethod
+        def _normalize_name(cls, value):
+            text = str(value or "").strip()
+            if not text:
+                raise ValueError("strategy.name cannot be empty")
+            return text
+
+
+    class CombinerPayload(BaseModel):
+        model_config = ConfigDict(extra="ignore")
+        method: str = "weighted_avg"
+        weights: dict[str, float] = Field(default_factory=dict)
+
+        @field_validator("weights", mode="before")
+        @classmethod
+        def _normalize_weights(cls, value):
+            if not isinstance(value, dict):
+                return {}
+            cleaned: dict[str, float] = {}
+            for key, val in value.items():
+                try:
+                    cleaned[str(key)] = float(val)
+                except (TypeError, ValueError):
+                    continue
+            return cleaned
+
+
+    class RiskPayload(BaseModel):
+        model_config = ConfigDict(extra="ignore")
+        max_position_weight: float = Field(0.2, ge=0.0, le=1.0)
+        max_leverage: float = Field(1.0, ge=0.1, le=10.0)
+        min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+    class ExecutionPayload(BaseModel):
+        model_config = ConfigDict(extra="ignore")
+        enabled: bool = True
+        dry_run: bool = False
+        order_type: str = "market"
+        time_in_force: str = "day"
+        max_orders_per_minute: int = Field(60, ge=1, le=5000)
+
+
+    class TradingPayload(BaseModel):
+        model_config = ConfigDict(extra="ignore")
+        enabled: bool = True
+        mode: str = "paper"
+        min_trade_interval_seconds: int = Field(30, ge=5, le=3600)
+        strategies: list[StrategySpecPayload] = Field(default_factory=lambda: [StrategySpecPayload()])
+        combiner: CombinerPayload = Field(default_factory=CombinerPayload)
+        risk: RiskPayload = Field(default_factory=RiskPayload)
+        execution: ExecutionPayload = Field(default_factory=ExecutionPayload)
+
+
     class RealtimePayload(BaseModel):
         model_config = ConfigDict(extra="ignore")
         universe: UniversePayload = Field(default_factory=UniversePayload)
         focus: FocusPayload = Field(default_factory=FocusPayload)
         engine: EnginePayload = Field(default_factory=EnginePayload)
         signals: SignalPayload = Field(default_factory=SignalPayload)
+        trading: TradingPayload = Field(default_factory=TradingPayload)
 
 
 def _format_pydantic_error(exc: ValidationError) -> str:

@@ -188,6 +188,21 @@ python manage.py realtime_refresh_assets --user-id <你的用户ID>
     "entry_threshold": 0.002,
     "max_spread_bps": 25,
     "min_volume": 10000
+  },
+  "trading": {
+    "enabled": false,
+    "mode": "paper",
+    "min_trade_interval_seconds": 30,
+    "strategies": [
+      {
+        "name": "momentum",
+        "weight": 1.0,
+        "params": { "lookback_bars": 3, "entry_threshold": 0.002 }
+      }
+    ],
+    "combiner": { "method": "weighted_avg" },
+    "risk": { "max_position_weight": 0.2 },
+    "execution": { "enabled": false, "dry_run": true, "max_orders_per_minute": 60 }
   }
 }
 ```

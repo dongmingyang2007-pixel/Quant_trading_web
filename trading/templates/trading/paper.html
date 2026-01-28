@@ -5,153 +5,137 @@
 
 {% block content %}
 <div class="container-xl paper-page">
+    <div class="paper-env-bar" data-role="env-bar">
+        <div class="paper-env-left">
+            <span class="paper-env-pill" data-role="env-mode-pill">PAPER</span>
+            <span class="paper-env-status" data-role="env-connection">
+                {% bilingual "Connecting…" "连接中…" %}
+            </span>
+            <span class="paper-env-updated" data-role="env-updated"></span>
+            <span class="paper-env-freshness" data-role="env-freshness"></span>
+        </div>
+        <div class="paper-env-right">
+            <div class="paper-env-toggle" role="group" aria-label="{% bilingual 'Trading mode' '交易模式' %}">
+                <button type="button" class="paper-env-btn" data-role="alpaca-mode-btn" data-mode="paper">
+                    {% bilingual "PAPER" "模拟" %}
+                </button>
+                <button type="button" class="paper-env-btn" data-role="alpaca-mode-btn" data-mode="live">
+                    {% bilingual "LIVE" "实盘" %}
+                </button>
+            </div>
+            <div class="paper-env-refresh">
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-role="alpaca-refresh">
+                    {% bilingual "Refresh" "刷新" %}
+                </button>
+            </div>
+            <div class="paper-env-auto">
+                <span class="paper-env-label">{% bilingual "Auto" "自动" %}</span>
+                <div class="paper-env-auto-group" data-role="alpaca-auto-toggle">
+                    <button type="button" class="paper-env-auto-btn" data-interval="0">Off</button>
+                    <button type="button" class="paper-env-auto-btn" data-interval="15000">15s</button>
+                    <button type="button" class="paper-env-auto-btn" data-interval="30000">30s</button>
+                    <button type="button" class="paper-env-auto-btn" data-interval="60000">60s</button>
+                </div>
+            </div>
+        </div>
+    </div>
     <div class="paper-hero-shell mb-4">
     <header class="paper-hero glass-panel">
         <div class="paper-hero__left">
-            <p class="paper-hero__kicker">{% bilingual "Live signals with virtual capital" "实时信号＋虚拟资金" %}</p>
+            <p class="paper-hero__kicker">{% bilingual "Alpaca live & paper accounts" "连接 Alpaca 实盘与模拟盘" %}</p>
             <h1 class="paper-hero__title">{% bilingual "Paper Trading" "模拟实盘" %}</h1>
             <p class="paper-hero__desc">
-                {% bilingual "Route your latest backtest signals into a virtual account, auto-rebalancing on schedule." "将最新回测信号接入虚拟账户，按计划自动调仓，验证执行与风控。" %}
+                {% bilingual "Manage Alpaca account equity, positions, and manual rebalancing in one place." "在此查看 Alpaca 账户权益、持仓并进行手动调仓。" %}
             </p>
             <div class="paper-hero__chips">
-                <span class="chip chip-light">{% bilingual "Signals: latest backtest" "信号来源：最新回测" %}</span>
-                <span class="chip chip-light">{% bilingual "Account: virtual cash + positions" "账户：虚拟现金＋持仓" %}</span>
-            </div>
-        </div>
-        <div class="paper-hero__right">
-            <div class="paper-hero__stat">
-                <p class="label">{% bilingual "Rebalance every" "调仓频率" %}</p>
-                <p class="value">{% bilingual "~5 min (default)" "默认约 5 分钟" %}</p>
-            </div>
-            <div class="paper-hero__stat">
-                <p class="label">{% bilingual "Status" "状态" %}</p>
-                <p class="value" data-role="paper-status-pill">{% bilingual "Auto-scheduling on" "自动调度开启" %}</p>
-            </div>
-            <div class="paper-hero__stat">
-                <p class="label">{% bilingual "Risk check" "风险检查" %}</p>
-                <p class="value">{% bilingual "Virtual capital only" "虚拟资金，不触碰真金" %}</p>
+                <span class="chip chip-light">{% bilingual "Source: Alpaca" "数据来源：Alpaca" %}</span>
+                <span class="chip chip-light">{% bilingual "Mode: Paper / Live" "模式：模拟 / 实盘" %}</span>
             </div>
         </div>
     </header>
     </div>
 
-    <div class="row g-4">
-        <div class="col-lg-5">
-            <div class="card shadow-sm h-100 paper-card paper-card--blue">
+    <div class="row g-4 mt-2">
+        <div class="col-lg-4">
+            <div class="card shadow-sm paper-card h-100">
                 <div class="card-body">
-                    <div class="d-flex align-items-start justify-content-between">
-                        <div>
-                            <h2 class="h5 mb-1">{% bilingual "Create session" "创建模拟盘" %}</h2>
-                            <p class="text-muted small mb-0">{% bilingual "Use your backtest params, set virtual cash and rebalance interval." "使用回测参数，设定虚拟资金与调仓间隔。" %}</p>
-                        </div>
-                        <span class="badge bg-info-subtle text-info-emphasis">{% bilingual "Auto rebalance" "自动调仓" %}</span>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h2 class="h5 mb-0">{% bilingual "Account summary" "账户概览" %}</h2>
+                        <span class="paper-status-pill" data-role="alpaca-status-pill">—</span>
                     </div>
-                    <form class="paper-form" data-role="paper-form">
-                        {% csrf_token %}
-                        <div class="mb-3">
-                            <label class="form-label">{% bilingual "Session name" "会话名称" %}</label>
-                            <input type="text" name="name" class="form-control" placeholder="{% bilingual 'e.g. AAPL Demo' '例如：AAPL 模拟盘' %}">
-                        </div>
-                        <div class="row g-3">
-                            <div class="col-sm-6">
-                                <label class="form-label">{% bilingual "Ticker" "标的代码" %}</label>
-                                <input type="text" name="ticker" class="form-control" placeholder="AAPL" required>
-                            </div>
-                            <div class="col-sm-6">
-                                <label class="form-label">{% bilingual "Benchmark (optional)" "对比基准（可选）" %}</label>
-                                <input type="text" name="benchmark" class="form-control" placeholder="SPY">
-                            </div>
-                        </div>
-                        <div class="row g-3 mt-2">
-                            <div class="col-sm-6">
-                                <label class="form-label">{% bilingual "Start date" "开始日期" %}</label>
-                                <input type="date" name="start_date" class="form-control" required value="{{ paper_start_default }}" max="{{ paper_end_default }}">
-                            </div>
-                            <div class="col-sm-6">
-                                <label class="form-label">{% bilingual "End date" "结束日期" %}</label>
-                                <input type="date" name="end_date" class="form-control" required value="{{ paper_end_default }}" max="{{ paper_end_default }}">
-                            </div>
-                        </div>
-                        <div class="row g-3 mt-2">
-                            <div class="col-sm-6">
-                                <label class="form-label">{% bilingual "Capital (for model)" "策略资本" %}</label>
-                                <input type="number" name="capital" class="form-control" value="250000" min="0" step="1000">
-                            </div>
-                            <div class="col-sm-6">
-                                <label class="form-label">{% bilingual "Virtual cash" "虚拟现金" %}</label>
-                                <input type="number" name="initial_cash" class="form-control" value="100000" min="0" step="1000">
-                            </div>
-                        </div>
-                        <div class="row g-3 mt-2">
-                            <div class="col-sm-6">
-                                    <label class="form-label">{% bilingual "Rebalance interval (seconds)" "调仓间隔（秒）" %}</label>
-                                <input type="number" name="interval_seconds" class="form-control" value="300" min="30" step="30">
-                            </div>
-                            <div class="col-sm-6 d-flex align-items-end">
-                                <button type="submit" class="btn btn-primary w-100" data-role="paper-submit">
-                                    {% bilingual "Start paper session" "创建并启动模拟盘" %}
-                                </button>
-                            </div>
-                        </div>
-                        <div class="alert alert-warning mt-3 d-none" data-role="paper-form-alert"></div>
-                    </form>
+                    <div class="paper-alpaca-summary" data-role="alpaca-summary">
+                        <p class="text-muted small mb-0">{% bilingual "Loading account..." "正在加载账户..." %}</p>
+                    </div>
+                    <div class="paper-summary-meta">
+                        <span class="text-muted small" data-role="alpaca-updated"></span>
+                        <span class="text-muted small" data-role="alpaca-error"></span>
+                    </div>
                 </div>
             </div>
         </div>
-        <div class="col-lg-7">
-            <div class="card shadow-sm h-100 paper-card paper-card--peach">
+        <div class="col-lg-8">
+            <div class="card shadow-sm paper-card h-100">
                 <div class="card-body">
-                    <div class="d-flex align-items-center justify-content-between mb-2">
-                        <h2 class="h5 mb-0">{% bilingual "Sessions" "会话列表" %}</h2>
-                        <span class="text-muted small">{% bilingual "Latest first, click for details" "最新优先，点击查看详情" %}</span>
-                    </div>
-                    <div class="paper-session-toolbar">
-                        <div class="paper-session-filters">
-                            <input type="search"
-                                   class="form-control form-control-sm"
-                                   data-role="paper-search"
-                                   placeholder="{% bilingual 'Search ticker or name' '搜索标的或名称' %}">
-                            <select class="form-select form-select-sm" data-role="paper-status">
-                                <option value="all">{% bilingual "All statuses" "全部状态" %}</option>
-                                <option value="running">{% bilingual "Running" "运行中" %}</option>
-                                <option value="paused">{% bilingual "Paused" "已暂停" %}</option>
-                                <option value="stopped">{% bilingual "Stopped" "已停止" %}</option>
-                                <option value="error">{% bilingual "Error" "异常" %}</option>
-                                <option value="draft">{% bilingual "Draft" "草稿" %}</option>
-                            </select>
-                            <select class="form-select form-select-sm" data-role="paper-sort">
-                                <option value="updated">{% bilingual "Sort: latest" "排序：最新" %}</option>
-                                <option value="equity">{% bilingual "Sort: equity" "排序：权益" %}</option>
-                                <option value="cash">{% bilingual "Sort: cash" "排序：现金" %}</option>
-                            </select>
+                    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                        <div>
+                            <h2 class="h5 mb-1">{% bilingual "Positions & rebalance" "持仓与调仓" %}</h2>
+                            <p class="text-muted small mb-0">{% bilingual "Adjust target weights and execute manual rebalance." "填写目标权重并执行手动调仓。" %}</p>
                         </div>
-                        <div class="paper-session-pagination">
-                            <span class="text-muted small" data-role="paper-count"></span>
-                            <div class="btn-group btn-group-sm" role="group">
-                                <button type="button" class="btn btn-outline-secondary" data-role="paper-prev">
-                                    {% bilingual "Prev" "上一页" %}
-                                </button>
-                                <button type="button" class="btn btn-outline-secondary" data-role="paper-next">
-                                    {% bilingual "Next" "下一页" %}
-                                </button>
-                            </div>
+                        <div class="d-flex flex-wrap gap-2">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" data-role="alpaca-reset">
+                                {% bilingual "Reset targets" "重置目标" %}
+                            </button>
+                            <button type="button" class="btn btn-outline-danger btn-sm" data-role="alpaca-liquidate">
+                                {% bilingual "Liquidate" "清仓" %}
+                            </button>
+                            <button type="button" class="btn btn-primary btn-sm" data-role="alpaca-preview">
+                                {% bilingual "Preview rebalance" "预览调仓" %}
+                            </button>
                         </div>
                     </div>
-                    <div class="paper-sessions" data-role="paper-session-list">
-                        <p class="text-muted mb-0">{% bilingual "Loading sessions..." "正在加载会话..." %}</p>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="alpaca-liquidate-unlisted" data-role="alpaca-liquidate-unlisted">
+                        <label class="form-check-label" for="alpaca-liquidate-unlisted">
+                            {% bilingual "Sell positions not listed in targets" "未填目标的持仓也卖出" %}
+                        </label>
                     </div>
+                    <div class="paper-alpaca-positions" data-role="alpaca-positions">
+                        <p class="text-muted small mb-0">{% bilingual "Loading positions..." "正在加载持仓..." %}</p>
+                    </div>
+                    <div class="paper-rebalance-footer">
+                        <div class="paper-rebalance-summary" data-role="alpaca-rebalance-summary"></div>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-role="alpaca-normalize">
+                            {% bilingual "Normalize weights" "归一化权重" %}
+                        </button>
+                    </div>
+                    <div class="text-muted small mt-2" data-role="alpaca-rebalance-status"></div>
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="card shadow-sm mt-4">
-        <div class="card-body">
-            <h2 class="h5">{% bilingual "Session details" "模拟盘详情" %}</h2>
-            <p class="text-muted small mb-3">{% bilingual "Select a session to view equity curve and trades." "点击左侧会话查看权益曲线和成交明细。" %}</p>
-            <div class="paper-detail" data-role="paper-detail">
-                <p class="text-muted mb-0">{% bilingual "No session selected yet." "尚未选择会话。" %}</p>
+    <div class="paper-modal" data-role="paper-modal" hidden>
+        <div class="paper-modal__overlay" data-role="paper-modal-close"></div>
+        <div class="paper-modal__content" role="dialog" aria-modal="true" aria-labelledby="paper-modal-title">
+            <header class="paper-modal__header">
+                <h3 id="paper-modal-title" class="paper-modal__title" data-role="paper-modal-title"></h3>
+                <button type="button" class="paper-modal__close" data-role="paper-modal-close">×</button>
+            </header>
+            <div class="paper-modal__body">
+                <div data-role="paper-modal-body"></div>
+                <div class="paper-modal__input" data-role="paper-modal-input" hidden>
+                    <label for="paper-modal-confirm" class="form-label">{% bilingual "Type LIVE to confirm" "输入 LIVE 以确认" %}</label>
+                    <input id="paper-modal-confirm" class="form-control" type="text" placeholder="LIVE">
+                </div>
             </div>
+            <footer class="paper-modal__footer">
+                <button type="button" class="btn btn-outline-secondary" data-role="paper-modal-cancel">
+                    {% bilingual "Cancel" "取消" %}
+                </button>
+                <button type="button" class="btn btn-primary" data-role="paper-modal-confirm">
+                    {% bilingual "Confirm" "确认" %}
+                </button>
+            </footer>
         </div>
     </div>
 </div>

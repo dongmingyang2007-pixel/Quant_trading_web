@@ -14,6 +14,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <meta name="market-api" content="{% url 'trading:market_insights_data' %}">
+<meta name="market-chart-api" content="{% url 'trading:market_chart_data' %}">
 <meta name="market-assets" content="{% url 'trading:market_assets_data' %}">
 <meta name="market-lang" content="{{ lang_prefix }}">
 <meta name="backtest-base" content="{% url 'trading:backtest' %}">
@@ -419,6 +420,43 @@
                         </div>
                         <p class="detail-meta" data-role="detail-meta"></p>
                     </div>
+                    <div class="detail-trade" data-role="detail-trade">
+                        <div class="detail-trade-head">
+                            <span class="detail-trade-label">
+                                {% if lang_prefix == 'zh' %}快速下单{% else %}Quick order{% endif %}
+                            </span>
+                            <span class="detail-trade-symbol" data-role="trade-symbol">—</span>
+                        </div>
+                        <div class="detail-trade-mode" data-role="trade-mode">
+                            <span class="detail-trade-mode-label">
+                                {% if lang_prefix == 'zh' %}交易模式{% else %}Mode{% endif %}
+                            </span>
+                            <div class="detail-trade-mode-actions">
+                                <button type="button" class="detail-trade-mode-btn" data-role="trade-mode-btn" data-mode="paper">
+                                    {% if lang_prefix == 'zh' %}模拟{% else %}Paper{% endif %}
+                                </button>
+                                <button type="button" class="detail-trade-mode-btn" data-role="trade-mode-btn" data-mode="live">
+                                    {% if lang_prefix == 'zh' %}实盘{% else %}Live{% endif %}
+                                </button>
+                            </div>
+                            <span class="detail-trade-mode-status" data-role="trade-mode-status"></span>
+                        </div>
+                        <div class="detail-trade-row">
+                            <label for="detail-trade-qty">
+                                {% if lang_prefix == 'zh' %}下单数量 (Shares){% else %}Quantity (Shares){% endif %}
+                            </label>
+                            <input id="detail-trade-qty" type="number" min="0.0001" step="0.0001" placeholder="1" data-role="trade-qty">
+                        </div>
+                        <div class="detail-trade-actions">
+                            <button type="button" class="detail-trade-btn detail-trade-buy" data-role="trade-buy">
+                                {% if lang_prefix == 'zh' %}买入{% else %}Buy{% endif %}
+                            </button>
+                            <button type="button" class="detail-trade-btn detail-trade-sell" data-role="trade-sell">
+                                {% if lang_prefix == 'zh' %}卖出{% else %}Sell{% endif %}
+                            </button>
+                        </div>
+                        <p class="detail-trade-status" data-role="trade-status"></p>
+                    </div>
                 </section>
                 <div class="market-detail-grid">
                     <div class="market-panel-card">
@@ -511,6 +549,158 @@
                                     <button type="button" class="detail-timeframe detail-timeframe--quick" data-range="6mo">6M</button>
                                 </div>
                             </div>
+                            <div class="detail-interval-picker" data-role="detail-interval">
+                                <span class="detail-interval-label">{% if lang_prefix == 'zh' %}时间粒度{% else %}Interval{% endif %}</span>
+                                <button type="button" class="detail-interval-trigger" data-role="detail-interval-trigger" aria-haspopup="listbox" aria-expanded="false">
+                                    <span data-role="detail-interval-current">1m</span>
+                                    <span class="detail-interval-caret">▾</span>
+                                </button>
+                                <div class="detail-interval-menu" data-role="detail-interval-menu" hidden>
+                                    <div class="detail-interval-top">
+                                        <button type="button" class="detail-interval-custom-toggle" data-role="detail-interval-custom-toggle">
+                                            {% if lang_prefix == 'zh' %}添加自定义粒度…{% else %}Add custom interval…{% endif %}
+                                        </button>
+                                        <div class="detail-interval-custom" data-role="detail-interval-custom-panel" hidden>
+                                            <input type="number" min="1" max="10000" step="1" inputmode="numeric" data-role="detail-interval-custom-value" placeholder="{% if lang_prefix == 'zh' %}数值{% else %}Value{% endif %}">
+                                            <select data-role="detail-interval-custom-unit">
+                                                <option value="t">{% if lang_prefix == 'zh' %}逐笔{% else %}Ticks{% endif %}</option>
+                                                <option value="s">{% if lang_prefix == 'zh' %}秒{% else %}Seconds{% endif %}</option>
+                                                <option value="m" selected>{% if lang_prefix == 'zh' %}分钟{% else %}Minutes{% endif %}</option>
+                                                <option value="h">{% if lang_prefix == 'zh' %}小时{% else %}Hours{% endif %}</option>
+                                                <option value="d">{% if lang_prefix == 'zh' %}天{% else %}Days{% endif %}</option>
+                                            </select>
+                                            <button type="button" class="detail-interval-custom-apply" data-role="detail-interval-custom-apply">
+                                                {% if lang_prefix == 'zh' %}添加并应用{% else %}Add & apply{% endif %}
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="detail-interval-favorites" data-role="detail-interval-favorites" hidden>
+                                        <p class="detail-interval-label">{% if lang_prefix == 'zh' %}收藏{% else %}Favorites{% endif %}</p>
+                                        <div class="detail-interval-items" data-role="detail-interval-favorites-list"></div>
+                                    </div>
+                                    <div class="detail-interval-group" data-group="ticks">
+                                        <p class="detail-interval-label">{% if lang_prefix == 'zh' %}逐笔{% else %}Ticks{% endif %}</p>
+                                        <div class="detail-interval-items">
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="1t">{% if lang_prefix == 'zh' %}1笔{% else %}1 tick{% endif %}</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="1t" aria-label="favorite 1t">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="10t">{% if lang_prefix == 'zh' %}10笔{% else %}10 ticks{% endif %}</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="10t" aria-label="favorite 10t">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="100t">{% if lang_prefix == 'zh' %}100笔{% else %}100 ticks{% endif %}</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="100t" aria-label="favorite 100t">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="1000t">{% if lang_prefix == 'zh' %}1000笔{% else %}1000 ticks{% endif %}</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="1000t" aria-label="favorite 1000t">☆</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="detail-interval-group" data-group="seconds">
+                                        <p class="detail-interval-label">{% if lang_prefix == 'zh' %}秒{% else %}Seconds{% endif %}</p>
+                                        <div class="detail-interval-items">
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="1s">{% if lang_prefix == 'zh' %}1秒{% else %}1s{% endif %}</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="1s" aria-label="favorite 1s">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="5s">{% if lang_prefix == 'zh' %}5秒{% else %}5s{% endif %}</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="5s" aria-label="favorite 5s">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="10s">{% if lang_prefix == 'zh' %}10秒{% else %}10s{% endif %}</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="10s" aria-label="favorite 10s">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="15s">{% if lang_prefix == 'zh' %}15秒{% else %}15s{% endif %}</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="15s" aria-label="favorite 15s">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="30s">{% if lang_prefix == 'zh' %}30秒{% else %}30s{% endif %}</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="30s" aria-label="favorite 30s">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="45s">{% if lang_prefix == 'zh' %}45秒{% else %}45s{% endif %}</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="45s" aria-label="favorite 45s">☆</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="detail-interval-group" data-group="minutes">
+                                        <p class="detail-interval-label">{% if lang_prefix == 'zh' %}分钟{% else %}Minutes{% endif %}</p>
+                                        <div class="detail-interval-items">
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="1m">1m</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="1m" aria-label="favorite 1m">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="2m">2m</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="2m" aria-label="favorite 2m">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="3m">3m</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="3m" aria-label="favorite 3m">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="5m">5m</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="5m" aria-label="favorite 5m">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="10m">10m</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="10m" aria-label="favorite 10m">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="15m">15m</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="15m" aria-label="favorite 15m">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="30m">30m</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="30m" aria-label="favorite 30m">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="45m">45m</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="45m" aria-label="favorite 45m">☆</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="detail-interval-group" data-group="hours">
+                                        <p class="detail-interval-label">{% if lang_prefix == 'zh' %}小时{% else %}Hours{% endif %}</p>
+                                        <div class="detail-interval-items">
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="1h">1h</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="1h" aria-label="favorite 1h">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="2h">2h</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="2h" aria-label="favorite 2h">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="4h">4h</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="4h" aria-label="favorite 4h">☆</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="detail-interval-group" data-group="days">
+                                        <p class="detail-interval-label">{% if lang_prefix == 'zh' %}天{% else %}Days{% endif %}</p>
+                                        <div class="detail-interval-items">
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="1d">1D</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="1d" aria-label="favorite 1d">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="2d">2D</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="2d" aria-label="favorite 2d">☆</button>
+                                            </div>
+                                            <div class="detail-interval-option">
+                                                <button type="button" class="detail-interval-select" data-role="detail-interval-select" data-interval="5d">5D</button>
+                                                <button type="button" class="detail-interval-fav" data-role="detail-interval-fav" data-interval="5d" aria-label="favorite 5d">☆</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                             <div class="market-detail-indicators">
                                 <div class="indicator-group">
                                     <label for="detail-overlay-select">{% if lang_prefix == 'zh' %}叠加{% else %}Overlay{% endif %}</label>
@@ -535,64 +725,6 @@
                             </button>
                         </div>
                         <div class="market-detail-advanced" data-role="detail-advanced-panel" hidden>
-                            <div class="market-detail-timeframes" data-role="detail-timeframe-wrap">
-                                <button type="button" class="detail-timeframe-trigger" data-role="detail-timeframe-trigger">
-                                    <span data-role="detail-timeframe-current">1D</span>
-                                    <span class="detail-timeframe-caret">▾</span>
-                                </button>
-                                <div class="detail-timeframe-menu" data-role="detail-timeframe-menu" hidden>
-                                    <div class="detail-timeframe-group">
-                                        <p class="detail-timeframe-label">{% if lang_prefix == 'zh' %}逐笔{% else %}Ticks{% endif %}</p>
-                                        <div class="detail-timeframe-items">
-                                            <button type="button" class="detail-timeframe" data-range="1t">{% if lang_prefix == 'zh' %}1笔{% else %}1 tick{% endif %}</button>
-                                            <button type="button" class="detail-timeframe is-disabled" data-range="10t" disabled>{% if lang_prefix == 'zh' %}10笔{% else %}10 ticks{% endif %}</button>
-                                            <button type="button" class="detail-timeframe is-disabled" data-range="100t" disabled>{% if lang_prefix == 'zh' %}100笔{% else %}100 ticks{% endif %}</button>
-                                            <button type="button" class="detail-timeframe is-disabled" data-range="1000t" disabled>{% if lang_prefix == 'zh' %}1000笔{% else %}1000 ticks{% endif %}</button>
-                                        </div>
-                                    </div>
-                                    <div class="detail-timeframe-group">
-                                        <p class="detail-timeframe-label">{% if lang_prefix == 'zh' %}秒{% else %}Seconds{% endif %}</p>
-                                        <div class="detail-timeframe-items">
-                                            <button type="button" class="detail-timeframe" data-range="1s">{% if lang_prefix == 'zh' %}1秒{% else %}1s{% endif %}</button>
-                                            <button type="button" class="detail-timeframe" data-range="5s">{% if lang_prefix == 'zh' %}5秒{% else %}5s{% endif %}</button>
-                                            <button type="button" class="detail-timeframe" data-range="10s">{% if lang_prefix == 'zh' %}10秒{% else %}10s{% endif %}</button>
-                                            <button type="button" class="detail-timeframe" data-range="15s">{% if lang_prefix == 'zh' %}15秒{% else %}15s{% endif %}</button>
-                                            <button type="button" class="detail-timeframe" data-range="30s">{% if lang_prefix == 'zh' %}30秒{% else %}30s{% endif %}</button>
-                                            <button type="button" class="detail-timeframe" data-range="45s">{% if lang_prefix == 'zh' %}45秒{% else %}45s{% endif %}</button>
-                                        </div>
-                                    </div>
-                                    <div class="detail-timeframe-group">
-                                        <p class="detail-timeframe-label">{% if lang_prefix == 'zh' %}分钟{% else %}Minutes{% endif %}</p>
-                                        <div class="detail-timeframe-items">
-                                            <button type="button" class="detail-timeframe" data-range="1m">{% if lang_prefix == 'zh' %}1分{% else %}1m{% endif %}</button>
-                                            <button type="button" class="detail-timeframe" data-range="2m">{% if lang_prefix == 'zh' %}2分{% else %}2m{% endif %}</button>
-                                            <button type="button" class="detail-timeframe" data-range="3m">{% if lang_prefix == 'zh' %}3分{% else %}3m{% endif %}</button>
-                                            <button type="button" class="detail-timeframe" data-range="5m">{% if lang_prefix == 'zh' %}5分{% else %}5m{% endif %}</button>
-                                            <button type="button" class="detail-timeframe" data-range="10m">{% if lang_prefix == 'zh' %}10分{% else %}10m{% endif %}</button>
-                                            <button type="button" class="detail-timeframe" data-range="15m">{% if lang_prefix == 'zh' %}15分{% else %}15m{% endif %}</button>
-                                            <button type="button" class="detail-timeframe" data-range="30m">{% if lang_prefix == 'zh' %}30分{% else %}30m{% endif %}</button>
-                                            <button type="button" class="detail-timeframe" data-range="45m">{% if lang_prefix == 'zh' %}45分{% else %}45m{% endif %}</button>
-                                        </div>
-                                    </div>
-                                    <div class="detail-timeframe-group">
-                                        <p class="detail-timeframe-label">{% if lang_prefix == 'zh' %}小时{% else %}Hours{% endif %}</p>
-                                        <div class="detail-timeframe-items">
-                                            <button type="button" class="detail-timeframe" data-range="1h">{% if lang_prefix == 'zh' %}1小时{% else %}1H{% endif %}</button>
-                                            <button type="button" class="detail-timeframe" data-range="2h">{% if lang_prefix == 'zh' %}2小时{% else %}2H{% endif %}</button>
-                                            <button type="button" class="detail-timeframe" data-range="4h">{% if lang_prefix == 'zh' %}4小时{% else %}4H{% endif %}</button>
-                                        </div>
-                                    </div>
-                                    <div class="detail-timeframe-group">
-                                        <p class="detail-timeframe-label">{% if lang_prefix == 'zh' %}天{% else %}Days{% endif %}</p>
-                                        <div class="detail-timeframe-items">
-                                            <button type="button" class="detail-timeframe is-active" data-range="1d">1D</button>
-                                            <button type="button" class="detail-timeframe" data-range="5d">5D</button>
-                                            <button type="button" class="detail-timeframe" data-range="1mo">1M</button>
-                                            <button type="button" class="detail-timeframe" data-range="6mo">6M</button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
                             <div class="indicator-group indicator-group--draw">
                                 <span class="indicator-label">{% if lang_prefix == 'zh' %}绘制{% else %}Draw{% endif %}</span>
                                 <div class="draw-actions">

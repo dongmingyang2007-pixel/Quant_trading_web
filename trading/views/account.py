@@ -101,6 +101,7 @@ def account(request):
     api_credential_status = []
     for key, meta in API_CREDENTIAL_FIELDS.items():
         value = api_credentials.get(key, "")
+        masked = mask_credential(value) if meta.get("mask", True) else (value or "")
         api_credential_status.append(
             {
                 "key": key,
@@ -108,7 +109,7 @@ def account(request):
                 "help": meta.get("help", ""),
                 "env": meta.get("env", ""),
                 "is_set": bool(value),
-                "masked": mask_credential(value),
+                "masked": masked,
             }
         )
 

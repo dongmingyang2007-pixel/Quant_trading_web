@@ -1,6 +1,8 @@
 (() => {
   const apiMeta = document.querySelector('meta[name="market-api"]');
   const apiUrl = apiMeta ? apiMeta.getAttribute('content') : window.MARKET_API_URL || '/market/api/';
+  const chartApiMeta = document.querySelector('meta[name="market-chart-api"]');
+  const chartApiUrl = chartApiMeta ? chartApiMeta.getAttribute('content') : '/api/market/chart/';
   const assetsMeta = document.querySelector('meta[name="market-assets"]');
   const assetsUrl = assetsMeta ? assetsMeta.getAttribute('content') : '/api/market/assets/';
   const langMeta = document.querySelector('meta[name="market-lang"]');
@@ -77,10 +79,19 @@
   const detailOverlaySelect = detailRoot.querySelector('#detail-overlay-select');
   const detailIndicatorSelect = detailRoot.querySelector('#detail-indicator-select');
   const detailDrawButtons = Array.prototype.slice.call(detailRoot.querySelectorAll('.draw-btn'));
-  const detailTimeframes = Array.prototype.slice.call(detailRoot.querySelectorAll('.detail-timeframe'));
-  const detailTimeframeTrigger = detailRoot.querySelector('[data-role="detail-timeframe-trigger"]');
-  const detailTimeframeMenu = detailRoot.querySelector('[data-role="detail-timeframe-menu"]');
-  const detailTimeframeCurrent = detailRoot.querySelector('[data-role="detail-timeframe-current"]');
+  const detailRangeButtons = Array.prototype.slice.call(detailRoot.querySelectorAll('.detail-timeframe--quick'));
+  const intervalTrigger = detailRoot.querySelector('[data-role="detail-interval-trigger"]');
+  const intervalMenu = detailRoot.querySelector('[data-role="detail-interval-menu"]');
+  const intervalCurrent = detailRoot.querySelector('[data-role="detail-interval-current"]');
+  const intervalSelectButtons = Array.prototype.slice.call(detailRoot.querySelectorAll('[data-role="detail-interval-select"]'));
+  const intervalFavButtons = Array.prototype.slice.call(detailRoot.querySelectorAll('[data-role="detail-interval-fav"]'));
+  const intervalFavoritesWrap = detailRoot.querySelector('[data-role="detail-interval-favorites"]');
+  const intervalFavoritesList = detailRoot.querySelector('[data-role="detail-interval-favorites-list"]');
+  const intervalCustomToggle = detailRoot.querySelector('[data-role="detail-interval-custom-toggle"]');
+  const intervalCustomPanel = detailRoot.querySelector('[data-role="detail-interval-custom-panel"]');
+  const intervalCustomValue = detailRoot.querySelector('[data-role="detail-interval-custom-value"]');
+  const intervalCustomUnit = detailRoot.querySelector('[data-role="detail-interval-custom-unit"]');
+  const intervalCustomApply = detailRoot.querySelector('[data-role="detail-interval-custom-apply"]');
   const detailAdvancedToggle = detailRoot.querySelector('[data-role="detail-advanced-toggle"]');
   const detailAdvancedPanel = detailRoot.querySelector('[data-role="detail-advanced-panel"]');
   const profileSummary = document.querySelector('[data-role="profile-summary"]');
@@ -98,11 +109,22 @@
   const detailPriceEl = document.querySelector('[data-role="detail-price"]');
   const detailChangeEl = document.querySelector('[data-role="detail-change"]');
   const detailMetaEl = document.querySelector('[data-role="detail-meta"]');
+  const tradeSymbolEl = document.querySelector('[data-role="trade-symbol"]');
+  const tradeQtyInput = document.querySelector('[data-role="trade-qty"]');
+  const tradeBuyBtn = document.querySelector('[data-role="trade-buy"]');
+  const tradeSellBtn = document.querySelector('[data-role="trade-sell"]');
+  const tradeStatusEl = document.querySelector('[data-role="trade-status"]');
+  const tradeModeButtons = Array.prototype.slice.call(document.querySelectorAll('[data-role="trade-mode-btn"]'));
+  const tradeModeStatus = document.querySelector('[data-role="trade-mode-status"]');
   const rankingTable = document.querySelector('[data-role="ranking-table"]');
   const marketPage = document.querySelector('.market-page');
   const marketSocketUrl = (() => {
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     return `${protocol}://${window.location.host}/ws/market/`;
+  })();
+  const chartSocketUrl = (() => {
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    return `${protocol}://${window.location.host}/ws/market-chart/`;
   })();
 
   const stateUtils = window.MarketInsightsState || {};
@@ -119,6 +141,8 @@
   const loadPreference = stateUtils.loadPreference || ((key, fallback) => fallback);
   const savePreference = stateUtils.savePreference || (() => {});
   const locale = langPrefix === 'zh' ? 'zh-CN' : 'en-US';
+  const orderEndpoint = '/api/market/order/';
+  const tradeModeEndpoint = '/api/market/trading/';
 
   const initialBtn = document.querySelector('.market-timeframe.is-active');
   let currentTimeframe = (initialBtn && initialBtn.getAttribute('data-timeframe')) || '1mo';
@@ -141,6 +165,7 @@
   let detailManager = null;
   let detailSymbol = '';
   let detailRange = '1d';
+  let detailInterval = '1m';
   let detailBarIntervalSec = null;
   let detailRetryTimer = null;
   let currentView = 'list';
@@ -159,10 +184,17 @@
   let liveQuoteTimer = null;
   let chartInitTimer = null;
   let pendingChartRender = null;
+  let chartSocket = null;
+  let chartSocketRetryTimer = null;
+  let chartSocketReady = false;
+  let chartSocketSymbol = '';
   const DEFAULT_AUTO_REFRESH_MS = 60 * 1000;
   const AUTO_REFRESH_OPTIONS = [0, 15000, 30000, 60000];
   const PREF_TIMEZONE_KEY = 'market.timezone';
   const PREF_AUTO_REFRESH_KEY = 'market.autoRefreshMs';
+  const PREF_INTERVAL_KEY = 'market.chart.interval';
+  const PREF_INTERVAL_FAVORITES_KEY = 'market.chart.intervalFavorites';
+  const PREF_INTERVAL_CUSTOM_KEY = 'market.chart.intervalCustom';
   let timezoneMode = loadPreference(PREF_TIMEZONE_KEY, 'utc');
   if (timezoneMode !== 'utc' && timezoneMode !== 'local') {
     timezoneMode = 'utc';
@@ -171,6 +203,8 @@
   if (!Number.isFinite(autoRefreshMs) || !AUTO_REFRESH_OPTIONS.includes(autoRefreshMs)) {
     autoRefreshMs = DEFAULT_AUTO_REFRESH_MS;
   }
+  let intervalFavorites = [];
+  let customIntervals = [];
   const LIVE_WAIT_MS = 10000;
   const LIVE_QUOTE_POLL_MS = 15000;
   const RANK_PAGE_SIZE = 20;
@@ -194,15 +228,24 @@
   let lastStatusGeneratedAt = '';
   let lastSnapshotMeta = null;
   let lastSnapshotKey = '';
-  let detailCache = {
+  let detailInfoCache = {
     symbol: '',
     range: '',
+    payload: null,
+  };
+  let detailChartCache = {
+    symbol: '',
+    range: '',
+    interval: '',
     bars: [],
     payload: null,
   };
+  let tradeMode = 'paper';
+  let tradeExecutionEnabled = false;
+  let tradeModeBusy = false;
+  let tradeModeError = '';
 
-  const TEXT = langPrefix === 'zh'
-    ? {
+  const TEXT_ZH = {
         timeframes: { '1d': '实时榜', '5d': '近5日', '1mo': '近1月', '6mo': '近6月' },
         listLabels: {
           gainers: '涨幅榜',
@@ -273,6 +316,20 @@
         volumeLabel: '成交量',
         detailLive: '实时流更新中…',
         detailLiveWaiting: '实时流暂未收到更新，请确认实时引擎已启动。',
+        detailWindowLimited: '高频数据仅展示最近窗口。',
+        detailDowngraded: (message) => message || '已自动降级为分钟级行情。',
+        intervalInvalid: '请输入有效的时间粒度。',
+        tradeSubmitting: '提交中…',
+        tradeSuccess: '已提交订单',
+        tradeFailed: '下单失败',
+        tradeMissingSymbol: '请先选择标的',
+        tradeMissingQty: '请输入下单数量',
+        tradeModePaper: '模拟下单',
+        tradeModeLive: '实盘下单',
+        tradeModeExecutionOff: '执行未开启',
+        tradeModeUpdating: '切换中…',
+        tradeModeFailed: '切换失败',
+        tradeModeConfirm: '确认切换到实盘？这会使用 Live 账户。',
         allStocksLoading: '正在加载全部股票…',
         allStocksEmpty: '暂无股票数据',
         allStocksCount: (total, page, totalPages) => `共 ${total} 只 · 第 ${page}/${totalPages} 页`,
@@ -302,8 +359,9 @@
           cache: '缓存',
           unknown: '未知',
         },
-      }
-    : {
+      };
+
+  const TEXT_EN = {
         timeframes: { '1d': 'Realtime', '5d': '5D', '1mo': '1M', '6mo': '6M' },
         listLabels: {
           gainers: 'Gainers',
@@ -374,6 +432,20 @@
         volumeLabel: 'Volume',
         detailLive: 'Live stream updating…',
         detailLiveWaiting: 'No live ticks yet. Check the realtime engine.',
+        detailWindowLimited: 'High-frequency data is window-limited.',
+        detailDowngraded: (message) => message || 'Interval auto-downgraded to minute bars.',
+        intervalInvalid: 'Enter a valid interval value.',
+        tradeSubmitting: 'Submitting…',
+        tradeSuccess: 'Order submitted',
+        tradeFailed: 'Order failed',
+        tradeMissingSymbol: 'Select a symbol first',
+        tradeMissingQty: 'Enter a quantity',
+        tradeModePaper: 'Paper trading',
+        tradeModeLive: 'Live trading',
+        tradeModeExecutionOff: 'Execution disabled',
+        tradeModeUpdating: 'Switching…',
+        tradeModeFailed: 'Switch failed',
+        tradeModeConfirm: 'Switch to live trading? This will use your Live account.',
         allStocksLoading: 'Loading all stocks…',
         allStocksEmpty: 'No stocks found.',
         allStocksCount: (total, page, totalPages) => `${total} symbols · Page ${page}/${totalPages}`,
@@ -405,6 +477,42 @@
         },
       };
 
+  const TEXT = langPrefix === 'zh' ? TEXT_ZH : TEXT_EN;
+
+  const ORDER_ERROR_TRANSLATIONS = [
+    { pattern: /not\s+fractionable/i, zh: '该标的不支持小数股交易' },
+    { pattern: /insufficient\s+buying\s+power/i, zh: '可用资金不足' },
+    { pattern: /insufficient\s+qty/i, zh: '可卖数量不足' },
+    { pattern: /invalid\s+symbol/i, zh: '标的无效' },
+    { pattern: /market\s+is\s+closed/i, zh: '市场已休市' },
+    { pattern: /missing_credentials/i, zh: '缺少 API 密钥' },
+    { pattern: /notional\s+must\s+be/i, zh: '下单金额不合法' },
+    { pattern: /qty\s+must\s+be/i, zh: '下单数量不合法' },
+  ];
+
+  function buildOrderErrorMessage(rawMessage) {
+    const raw = (rawMessage || '').toString().trim();
+    if (!raw) {
+      return TEXT.tradeFailed;
+    }
+    let detail = raw;
+    const splitIndex = raw.indexOf(':');
+    if (splitIndex !== -1) {
+      detail = raw.slice(splitIndex + 1).trim();
+    }
+    let zhDetail = '';
+    for (const item of ORDER_ERROR_TRANSLATIONS) {
+      if (item.pattern.test(detail)) {
+        zhDetail = item.zh;
+        break;
+      }
+    }
+    if (langPrefix === 'zh') {
+      return zhDetail ? `订单提交失败：${zhDetail}` : `订单提交失败：${detail || raw}`;
+    }
+    return detail ? `Order failed: ${detail}` : `Order failed: ${raw}`;
+  }
+
   function ensureSnapshotNode() {
     if (snapshotText || !statusSection || !sourceText) return;
     const wrapper = document.createElement('div');
@@ -426,14 +534,45 @@
     return null;
   }
 
+  function formatAxisTime(epochSeconds, { timezoneMode: mode = 'utc', showSeconds = false } = {}) {
+    if (!Number.isFinite(epochSeconds)) return '';
+    const ms = epochSeconds * 1000;
+    const date = new Date(ms);
+    const options = {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    };
+    if (showSeconds) {
+      options.second = '2-digit';
+    }
+    if (mode === 'utc') {
+      options.timeZone = 'UTC';
+    }
+    const formatted = new Intl.DateTimeFormat(locale || undefined, options).format(date);
+    if (!showSeconds) {
+      return formatted;
+    }
+    const fractional = ms % 1000;
+    if (!fractional) {
+      return formatted;
+    }
+    const frac = String(Math.floor(fractional)).padStart(3, '0');
+    return `${formatted}.${frac}`;
+  }
+
   class ChartManager {
     static registry = [];
 
-    constructor({ container, indicatorContainer, langPrefix, onStatus }) {
+    constructor({ container, indicatorContainer, langPrefix, onStatus, timezoneMode }) {
       this.container = container;
       this.indicatorContainer = indicatorContainer;
       this.langPrefix = langPrefix || 'zh';
       this.onStatus = onStatus;
+      this.timezoneMode = timezoneMode || 'utc';
       this.chart = null;
       this.candleSeries = null;
       this.overlaySeries = [];
@@ -450,12 +589,14 @@
       this.drawMode = 'none';
       this.priceLine = null;
       this.lastLivePrice = null;
-      this.liveMode = null;
-      this.liveIntervalSec = null;
+      this.intervalSpec = null;
+      this.axisShowSeconds = false;
       this.liveBar = null;
-      this.liveTickBase = null;
-      this.liveTickIndex = 0;
-      this.liveMaxBars = 600;
+      this.liveBucket = null;
+      this.liveTickCount = 0;
+      this.liveTickTarget = 0;
+      this.liveMaxBars = 800;
+      this.lastLiveTime = null;
       this._syncing = false;
       this._syncingIndicator = false;
       this._linkedCharts = new Set();
@@ -477,6 +618,11 @@
         grid: { vertLines: { color: 'rgba(148, 163, 184, 0.3)' }, horzLines: { color: 'rgba(148, 163, 184, 0.3)' } },
         rightPriceScale: { borderColor: 'rgba(148, 163, 184, 0.4)' },
         timeScale: { borderColor: 'rgba(148, 163, 184, 0.4)', timeVisible: true, secondsVisible: false },
+        localization: {
+          locale,
+          timeFormatter: (timestamp) =>
+            formatAxisTime(timestamp, { timezoneMode: this.timezoneMode, showSeconds: this.axisShowSeconds }),
+        },
         handleScroll: {
           mouseWheel: true,
           pressedMouseMove: true,
@@ -551,10 +697,14 @@
       this.chart.timeScale().subscribeVisibleTimeRangeChange(syncRange);
     }
 
-    setData(bars) {
-      this.clearLiveMode();
+    setData(bars, options = {}) {
+      const { intervalSpec = null } = options || {};
+      this._resetLiveState();
       this.lastLivePrice = null;
       this.ohlcData = this._sanitizeBars(bars);
+      if (intervalSpec) {
+        this.setIntervalSpec(intervalSpec, { preserveData: true });
+      }
       if (this.candleSeries) {
         this.candleSeries.setData(this.ohlcData);
       }
@@ -570,6 +720,41 @@
         }
       }
       this.renderOverlay();
+    }
+
+    setIntervalSpec(intervalSpec, { preserveData = false } = {}) {
+      this.intervalSpec = intervalSpec;
+      this._resetLiveState();
+      if (intervalSpec && preserveData) {
+        this._syncLiveStateFromData(intervalSpec);
+      }
+      const showSeconds = Boolean(intervalSpec && (intervalSpec.unit === 'tick' || intervalSpec.unit === 'second'));
+      const timeVisible = Boolean(intervalSpec && intervalSpec.unit !== 'day');
+      this.setAxisOptions({ showSeconds, timeVisible });
+    }
+
+    setAxisOptions({ showSeconds = false, timeVisible = true } = {}) {
+      this.axisShowSeconds = Boolean(showSeconds);
+      if (this.chart) {
+        this.chart.timeScale().applyOptions({
+          timeVisible: Boolean(timeVisible),
+          secondsVisible: this.axisShowSeconds,
+        });
+        this._applyLocalization(this.chart);
+      }
+      if (this.indicatorChart) {
+        this._applyLocalization(this.indicatorChart);
+      }
+    }
+
+    setTimezone(mode) {
+      this.timezoneMode = mode || 'utc';
+      if (this.chart) {
+        this._applyLocalization(this.chart);
+      }
+      if (this.indicatorChart) {
+        this._applyLocalization(this.indicatorChart);
+      }
     }
 
     setOverlay(mode) {
@@ -611,66 +796,32 @@
       this.lastLivePrice = price;
     }
 
-    setLiveMode(mode, intervalSec) {
-      if (!mode) {
-        this.clearLiveMode();
-        return;
-      }
-      this.liveMode = mode;
-      this.liveIntervalSec = Math.max(1, Number.parseInt(intervalSec, 10) || 1);
-      this.liveBar = null;
-      this.liveTickBase = null;
-      this.liveTickIndex = 0;
-      this.ohlcData = [];
-      if (this.candleSeries) {
-        this.candleSeries.setData([]);
-      }
-      if (this.indicatorContainer) {
-        this.indicatorContainer.hidden = true;
-      }
-    }
-
-    clearLiveMode() {
-      this.liveMode = null;
-      this.liveIntervalSec = null;
-      this.liveBar = null;
-      this.liveTickBase = null;
-      this.liveTickIndex = 0;
-    }
-
-    updateLivePrice(price, ts) {
+    updateLivePrice(price, ts, size = 0) {
       if (typeof price !== 'number' || Number.isNaN(price)) return;
       const timestamp = Number.isFinite(ts) ? ts : Date.now() / 1000;
-      this.updatePriceLine(price);
-      if (!this.liveMode || !this.candleSeries) return;
+      this.applyTradeUpdate({ price, size, ts: timestamp });
+    }
 
-      if (this.liveMode === 'tick') {
-        if (this.liveTickBase === null) {
-          this.liveTickBase = Math.floor(timestamp);
-        }
-        const time = this.liveTickBase + this.liveTickIndex;
-        this.liveTickIndex += 1;
-        const bar = { time, open: price, high: price, low: price, close: price };
-        this._pushLiveBar(bar);
+    applyTradeUpdate(trade) {
+      if (!trade || typeof trade.price !== 'number' || Number.isNaN(trade.price)) return;
+      if (!this.candleSeries) return;
+      const timestamp = Number.isFinite(trade.ts) ? trade.ts : Date.now() / 1000;
+      const price = trade.price;
+      const size = Number.isFinite(trade.size) ? trade.size : 0;
+      this.updatePriceLine(price);
+      const interval = this.intervalSpec;
+      if (!interval) return;
+      const time = this._ensureMonotonicTime(timestamp);
+      if (interval.unit === 'tick') {
+        this._applyTickTrade({ time, price, size }, interval.value);
         return;
       }
-
-      const interval = this.liveIntervalSec || 1;
-      const bucket = Math.floor(timestamp / interval) * interval;
-      if (!this.liveBar || this.liveBar.time !== bucket) {
-        const bar = { time: bucket, open: price, high: price, low: price, close: price };
-        this.liveBar = bar;
-        this._pushLiveBar(bar);
-      } else {
-        this.liveBar.high = Math.max(this.liveBar.high, price);
-        this.liveBar.low = Math.min(this.liveBar.low, price);
-        this.liveBar.close = price;
-        this.candleSeries.update({ ...this.liveBar });
-      }
+      const intervalSeconds = interval.seconds || 1;
+      this._applyTimeTrade({ time, price, size }, intervalSeconds);
     }
 
     updateCurrentBar(price, ts, intervalSec) {
-      if (this.liveMode || !this.candleSeries) return;
+      if (!this.candleSeries) return;
       if (!Array.isArray(this.ohlcData) || !this.ohlcData.length) return;
       if (typeof price !== 'number' || Number.isNaN(price)) return;
       const interval = Math.max(1, Number.parseInt(intervalSec, 10) || 0);
@@ -710,6 +861,137 @@
       }
       if (this.candleSeries) {
         this.candleSeries.update(bar);
+      }
+    }
+
+    _applyLocalization(chartInstance) {
+      if (!chartInstance) return;
+      chartInstance.applyOptions({
+        localization: {
+          locale,
+          timeFormatter: (timestamp) =>
+            formatAxisTime(timestamp, { timezoneMode: this.timezoneMode, showSeconds: this.axisShowSeconds }),
+        },
+      });
+    }
+
+    _resetLiveState() {
+      this.liveBar = null;
+      this.liveBucket = null;
+      this.liveTickCount = 0;
+      this.liveTickTarget = 0;
+      this.lastLiveTime = null;
+    }
+
+    _syncLiveStateFromData(intervalSpec) {
+      if (!intervalSpec || !Array.isArray(this.ohlcData) || !this.ohlcData.length) return;
+      const last = this.ohlcData[this.ohlcData.length - 1];
+      if (!last || !Number.isFinite(last.time)) return;
+      if (intervalSpec.unit === 'tick') {
+        const count = Number.isFinite(last.trade_count) ? Number(last.trade_count) : 0;
+        if (count > 0 && count < intervalSpec.value) {
+          this.liveBar = { ...last };
+          this.liveTickCount = count;
+          this.liveTickTarget = intervalSpec.value;
+        }
+      } else {
+        const intervalSeconds = intervalSpec.seconds || 1;
+        const bucket = Math.floor(Number(last.time) / intervalSeconds) * intervalSeconds;
+        this.liveBucket = bucket;
+        this.liveBar = { ...last };
+      }
+      this.lastLiveTime = Number(last.time);
+    }
+
+    _ensureMonotonicTime(time) {
+      if (!Number.isFinite(time)) return Date.now() / 1000;
+      if (this.lastLiveTime === null || time > this.lastLiveTime) {
+        this.lastLiveTime = time;
+        return time;
+      }
+      const adjusted = this.lastLiveTime + 1e-3;
+      this.lastLiveTime = adjusted;
+      return adjusted;
+    }
+
+    _applyTickTrade({ time, price, size }, ticksPerBar) {
+      const target = Math.max(1, Number.parseInt(ticksPerBar, 10) || 1);
+      if (!this.liveBar || this.liveTickCount >= target) {
+        const bar = {
+          time,
+          open: price,
+          high: price,
+          low: price,
+          close: price,
+          volume: size,
+          trade_count: 1,
+        };
+        this.liveBar = bar;
+        this.liveTickCount = 1;
+        this._appendOrUpdate(bar, true);
+      } else {
+        this.liveBar.high = Math.max(this.liveBar.high, price);
+        this.liveBar.low = Math.min(this.liveBar.low, price);
+        this.liveBar.close = price;
+        this.liveBar.time = time;
+        this.liveBar.volume = (this.liveBar.volume || 0) + size;
+        this.liveBar.trade_count = (this.liveBar.trade_count || 0) + 1;
+        this.liveTickCount += 1;
+        this._appendOrUpdate(this.liveBar, false);
+      }
+      if (this.liveTickCount >= target) {
+        this.liveTickCount = 0;
+        this.liveBar = null;
+      }
+    }
+
+    _applyTimeTrade({ time, price, size }, intervalSeconds) {
+      const bucket = Math.floor(time / intervalSeconds) * intervalSeconds;
+      if (!this.liveBar || this.liveBucket !== bucket) {
+        const bar = {
+          time: bucket,
+          open: price,
+          high: price,
+          low: price,
+          close: price,
+          volume: size,
+          trade_count: 1,
+        };
+        this.liveBar = bar;
+        this.liveBucket = bucket;
+        this._appendOrUpdate(bar, true);
+      } else {
+        this.liveBar.high = Math.max(this.liveBar.high, price);
+        this.liveBar.low = Math.min(this.liveBar.low, price);
+        this.liveBar.close = price;
+        this.liveBar.volume = (this.liveBar.volume || 0) + size;
+        this.liveBar.trade_count = (this.liveBar.trade_count || 0) + 1;
+        this._appendOrUpdate(this.liveBar, false);
+      }
+    }
+
+    _appendOrUpdate(bar, isNew) {
+      if (!this.candleSeries) return;
+      if (!Array.isArray(this.ohlcData)) {
+        this.ohlcData = [];
+      }
+      const lastIndex = this.ohlcData.length - 1;
+      const last = this.ohlcData[lastIndex];
+      if (isNew || !last) {
+        this.ohlcData.push({ ...bar });
+        this._trimLiveBars();
+        this.candleSeries.update({ ...bar });
+        return;
+      }
+      this.ohlcData[lastIndex] = { ...bar };
+      this.candleSeries.update({ ...bar });
+    }
+
+    _trimLiveBars() {
+      if (this.ohlcData.length <= this.liveMaxBars) return;
+      this.ohlcData = this.ohlcData.slice(-this.liveMaxBars);
+      if (this.candleSeries) {
+        this.candleSeries.setData(this.ohlcData);
       }
     }
 
@@ -865,7 +1147,7 @@
       const cleaned = [];
       bars.forEach((bar) => {
         if (!bar) return;
-        const time = Number.isFinite(bar.time) ? Math.floor(bar.time) : Number.parseInt(bar.time, 10);
+        const time = Number.isFinite(bar.time) ? Number(bar.time) : Number.parseFloat(bar.time);
         const open = Number.isFinite(bar.open) ? bar.open : Number.parseFloat(bar.open);
         const high = Number.isFinite(bar.high) ? bar.high : Number.parseFloat(bar.high);
         const low = Number.isFinite(bar.low) ? bar.low : Number.parseFloat(bar.low);
@@ -873,7 +1155,16 @@
         if (!Number.isFinite(time) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) {
           return;
         }
-        cleaned.push({ time, open, high, low, close });
+        const volume = Number.isFinite(bar.volume) ? bar.volume : Number.parseFloat(bar.volume);
+        const tradeCount = Number.isFinite(bar.trade_count) ? bar.trade_count : Number.parseInt(bar.trade_count, 10);
+        const entry = { time, open, high, low, close };
+        if (Number.isFinite(volume)) {
+          entry.volume = volume;
+        }
+        if (Number.isFinite(tradeCount)) {
+          entry.trade_count = tradeCount;
+        }
+        cleaned.push(entry);
       });
       return cleaned;
     }
@@ -1011,6 +1302,173 @@
 
   if (typeaheadHint) {
     typeaheadHint.textContent = TEXT.typeaheadHint;
+  }
+
+  function setTradeSymbol(symbol) {
+    if (tradeSymbolEl) {
+      tradeSymbolEl.textContent = symbol || '--';
+    }
+  }
+
+  function setTradeStatus(message, tone = 'neutral') {
+    if (!tradeStatusEl) return;
+    tradeStatusEl.textContent = message || '';
+    tradeStatusEl.classList.remove('is-success', 'is-error');
+    if (tone === 'success') {
+      tradeStatusEl.classList.add('is-success');
+    } else if (tone === 'error') {
+      tradeStatusEl.classList.add('is-error');
+    }
+  }
+
+
+  function applyTradeModeState(payload) {
+    if (!payload || typeof payload !== 'object') return;
+    if (typeof payload.mode === 'string') {
+      tradeMode = payload.mode.toLowerCase();
+    }
+    if (typeof payload.execution_enabled === 'boolean') {
+      tradeExecutionEnabled = payload.execution_enabled;
+    }
+    tradeModeError = '';
+    updateTradeModeUI();
+  }
+
+  function updateTradeModeUI() {
+    if (tradeModeError && tradeModeStatus) {
+      tradeModeStatus.textContent = tradeModeError;
+      tradeModeStatus.classList.remove('is-live');
+      return;
+    }
+    if (tradeModeButtons.length) {
+      tradeModeButtons.forEach((btn) => {
+        const btnMode = btn.dataset.mode;
+        const isActive = btnMode === tradeMode;
+        btn.classList.toggle('is-active', isActive);
+        btn.classList.toggle('is-live', isActive && tradeMode === 'live');
+        btn.disabled = tradeModeBusy;
+      });
+    }
+    if (!tradeModeStatus) return;
+    if (!tradeExecutionEnabled) {
+      tradeModeStatus.textContent = TEXT.tradeModeExecutionOff;
+      tradeModeStatus.classList.remove('is-live');
+      return;
+    }
+    const isLive = tradeMode === 'live';
+    tradeModeStatus.textContent = isLive ? TEXT.tradeModeLive : TEXT.tradeModePaper;
+    tradeModeStatus.classList.toggle('is-live', isLive);
+  }
+
+  async function fetchTradeMode() {
+    if (!tradeModeEndpoint || (!tradeModeStatus && !tradeModeButtons.length)) return;
+    try {
+      const response = await fetch(tradeModeEndpoint, {
+        headers: { Accept: 'application/json' },
+        credentials: 'same-origin',
+      });
+      if (!response.ok) return;
+      const payload = await response.json();
+      if (payload && payload.ok) {
+        applyTradeModeState(payload);
+      }
+    } catch (err) {
+      // silent
+    }
+  }
+
+  async function setTradeMode(mode) {
+    if (!mode || tradeModeBusy) return;
+    const normalized = mode.toLowerCase();
+    if (normalized === tradeMode) return;
+    if (normalized === 'live' && !window.confirm(TEXT.tradeModeConfirm)) {
+      return;
+    }
+    tradeModeBusy = true;
+    tradeModeError = '';
+    if (tradeModeStatus) {
+      tradeModeStatus.textContent = TEXT.tradeModeUpdating;
+    }
+    updateTradeModeUI();
+    try {
+      const response = await fetch(tradeModeEndpoint, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-CSRFToken': getCsrfToken(),
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({ mode: normalized }),
+      });
+      let payload = {};
+      try {
+        payload = await response.json();
+      } catch (parseErr) {
+        payload = { message: response.statusText || TEXT.tradeModeFailed };
+      }
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.message || TEXT.tradeModeFailed);
+      }
+      applyTradeModeState(payload);
+    } catch (err) {
+      tradeModeError = err && err.message ? err.message : TEXT.tradeModeFailed;
+    } finally {
+      tradeModeBusy = false;
+      updateTradeModeUI();
+    }
+  }
+
+  async function submitTrade(side) {
+    const symbol = (detailSymbol || (detailSymbolEl && detailSymbolEl.textContent) || '').trim();
+    if (!symbol || symbol === '--') {
+      setTradeStatus(TEXT.tradeMissingSymbol, 'error');
+      return;
+    }
+    const qtyVal = tradeQtyInput ? Number(tradeQtyInput.value) : 0;
+    if (!qtyVal || qtyVal <= 0) {
+      setTradeStatus(TEXT.tradeMissingQty, 'error');
+      return;
+    }
+    setTradeStatus(TEXT.tradeSubmitting);
+    try {
+      const response = await fetch(orderEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': getCsrfToken(),
+        },
+        body: JSON.stringify({
+          symbol,
+          side,
+          qty: qtyVal,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        setTradeStatus(buildOrderErrorMessage(payload && payload.message ? payload.message : ''), 'error');
+        return;
+      }
+      setTradeStatus(TEXT.tradeSuccess, 'success');
+    } catch (err) {
+      setTradeStatus(TEXT.tradeFailed, 'error');
+    }
+  }
+
+  if (tradeBuyBtn) {
+    tradeBuyBtn.addEventListener('click', () => submitTrade('buy'));
+  }
+  if (tradeSellBtn) {
+    tradeSellBtn.addEventListener('click', () => submitTrade('sell'));
+  }
+  if (tradeModeButtons.length) {
+    tradeModeButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.mode;
+        if (!mode) return;
+        setTradeMode(mode);
+      });
+    });
   }
 
   function getCsrfToken() {
@@ -1265,8 +1723,8 @@
     if (lastSnapshotMeta) {
       setSnapshotStatus(lastSnapshotMeta, lastSnapshotKey);
     }
-    if (detailCache && detailCache.payload) {
-      updateDetailTimes(detailCache.payload, { updateSubtitle: !(detailManager && detailManager.liveMode) });
+    if (detailChartCache && detailChartCache.payload) {
+      updateDetailTimes(detailChartCache.payload);
     }
   }
 
@@ -1278,6 +1736,9 @@
     }
     updateTimezoneToggle();
     refreshTimeDisplays();
+    if (detailManager) {
+      detailManager.setTimezone(timezoneMode);
+    }
   }
 
   function setAutoRefreshInterval(nextInterval, { persist = true } = {}) {
@@ -1359,9 +1820,9 @@
       if (ensureDetailChart()) {
         chartInitTimer = null;
         if (pendingChartRender) {
-          const { symbol, rangeKey, payload, bars } = pendingChartRender;
+          const { symbol, rangeKey, payload, bars, chartPayload } = pendingChartRender;
           pendingChartRender = null;
-          applyDetailPayload(symbol, rangeKey, payload, bars, true);
+          applyDetailPayload(symbol, rangeKey, payload, chartPayload || { bars }, true);
         }
         return;
       }
@@ -1724,7 +2185,8 @@
         applyChangeState(changeCell, changePct, meta && meta.invert);
       }
     });
-    if (detailSymbol && detailSymbol === symbol) {
+    const chartRealtimeActive = isChartRealtimeActive();
+    if (detailSymbol && detailSymbol === symbol && !chartRealtimeActive) {
       if (detailPriceEl && Number.isFinite(price)) {
         detailPriceEl.textContent = price.toFixed(2);
       }
@@ -1744,9 +2206,6 @@
         clearTimeout(liveWaitTimer);
         liveWaitTimer = null;
       }
-      if (resolveLiveRange(detailRange)) {
-        setDetailStatus(TEXT.detailLive);
-      }
     }
   }
 
@@ -1760,7 +2219,7 @@
   function scheduleLiveWait() {
     clearLiveWait();
     liveWaitTimer = setTimeout(() => {
-      if (!resolveLiveRange(detailRange)) return;
+      if (!isChartRealtimeActive()) return;
       if (lastLiveUpdateAt) return;
       setDetailStatus(TEXT.detailLiveWaiting);
     }, LIVE_WAIT_MS);
@@ -1863,6 +2322,10 @@
 
     if (chartVisible) {
       resizeDetailChart();
+      connectChartSocket();
+      if (detailSymbol) {
+        setChartSocketSymbol(detailSymbol);
+      }
     }
     if (isListVisible()) {
       scheduleAutoRefresh();
@@ -1870,6 +2333,7 @@
     if (!chartVisible) {
       clearLiveWait();
       stopLiveQuotePolling();
+      disconnectChartSocket();
     }
   }
 
@@ -1877,6 +2341,7 @@
     if (detailSymbolEl) {
       detailSymbolEl.textContent = symbol || '--';
     }
+    setTradeSymbol(symbol || '--');
     if (detailNameEl) {
       const profile = payload && payload.profile;
       const displayName = (profile && (profile.name || profile.shortName)) || symbol || '--';
@@ -1920,20 +2385,40 @@
     }
   }
 
-  function hasCachedDetail(symbol, rangeKey) {
+  function hasCachedDetailInfo(symbol, rangeKey) {
     return (
-      detailCache &&
-      detailCache.symbol === symbol &&
-      detailCache.range === rangeKey &&
-      Array.isArray(detailCache.bars) &&
-      detailCache.bars.length > 0
+      detailInfoCache &&
+      detailInfoCache.symbol === symbol &&
+      detailInfoCache.range === rangeKey &&
+      detailInfoCache.payload &&
+      typeof detailInfoCache.payload === 'object'
     );
   }
 
-  function storeDetailCache(symbol, rangeKey, bars, payload) {
-    detailCache = {
+  function hasCachedChart(symbol, rangeKey, intervalKey) {
+    return (
+      detailChartCache &&
+      detailChartCache.symbol === symbol &&
+      detailChartCache.range === rangeKey &&
+      detailChartCache.interval === intervalKey &&
+      Array.isArray(detailChartCache.bars) &&
+      detailChartCache.bars.length > 0
+    );
+  }
+
+  function storeDetailInfoCache(symbol, rangeKey, payload) {
+    detailInfoCache = {
       symbol,
       range: rangeKey,
+      payload: payload && typeof payload === 'object' ? payload : null,
+    };
+  }
+
+  function storeDetailChartCache(symbol, rangeKey, intervalKey, bars, payload) {
+    detailChartCache = {
+      symbol,
+      range: rangeKey,
+      interval: intervalKey,
       bars: Array.isArray(bars) ? bars : [],
       payload: payload && typeof payload === 'object' ? payload : null,
     };
@@ -1953,6 +2438,7 @@
         container: detailChartEl,
         indicatorContainer: detailIndicatorEl,
         langPrefix,
+        timezoneMode,
         onStatus: setDetailStatus,
       });
       const ready = detailManager.init();
@@ -1967,6 +2453,13 @@
         if (activeDraw && activeDraw.dataset.draw && activeDraw.dataset.draw !== 'clear') {
           detailManager.setDrawMode(activeDraw.dataset.draw);
         }
+      }
+      if (ready) {
+        const spec = resolveIntervalSpec(detailInterval);
+        if (spec) {
+          detailManager.setIntervalSpec(spec, { preserveData: true });
+        }
+        detailManager.setTimezone(timezoneMode);
       }
       return ready;
     } catch (error) {
@@ -2078,77 +2571,82 @@
     renderAiPanel(payload.ai_summary);
   }
 
-  function applyDetailPayload(symbol, rangeKey, payload, bars, renderChart) {
+  function applyDetailPayload(symbol, rangeKey, infoPayload, chartPayload, renderChart) {
+    const payload = infoPayload || {};
+    const chartData = chartPayload || {};
+    const bars = Array.isArray(chartData.bars) ? chartData.bars : [];
     updateDetailHero(symbol, payload, bars);
     updateInsightPanels(payload || {});
-    const effectiveKey =
-      payload && payload.timeframe && payload.timeframe.key ? payload.timeframe.key : rangeKey;
-    detailBarIntervalSec = resolveBarIntervalSeconds(effectiveKey) || inferBarIntervalSeconds(bars);
-    updateDetailTimeScale(effectiveKey);
+    const intervalKey =
+      (chartData.interval && chartData.interval.key) ||
+      (chartData.interval_key ? chartData.interval_key : detailInterval);
+    detailBarIntervalSec = resolveBarIntervalSeconds(intervalKey) || inferBarIntervalSeconds(bars);
+    updateDetailTimeScale(intervalKey);
     if (!renderChart) return;
     if (!ensureDetailChart() || !detailManager) {
-      pendingChartRender = { symbol, rangeKey, payload, bars };
+      pendingChartRender = { symbol, rangeKey, payload, bars, chartPayload: chartData };
       scheduleChartInit();
       return;
     }
-    detailManager.setData(bars);
+    const intervalSpec = resolveIntervalSpec(intervalKey);
+    detailManager.setData(bars, { intervalSpec });
     if (detailSource) {
-      const sourceLabel = TEXT.sourceLabels[payload.data_source] || TEXT.sourceLabels.unknown || '';
-      detailSource.textContent = sourceLabel ? `${TEXT.sourcePrefix || ''}${sourceLabel}` : '';
+      const sourceLabel = TEXT.sourceLabels[chartData.data_source] || TEXT.sourceLabels.unknown || '';
+      const sourceText = sourceLabel ? `${TEXT.sourcePrefix || ''}${sourceLabel}` : '';
+      const rawHint =
+        intervalSpec && (intervalSpec.unit === 'tick' || intervalSpec.unit === 'second')
+          ? langPrefix === 'zh'
+            ? ' · 成交明细为原始数据'
+            : ' · Trades are raw'
+          : '';
+      detailSource.textContent = `${sourceText}${rawHint}`;
     }
-    updateDetailTimes(payload);
-    const tfLabel =
-      payload.timeframe && (langPrefix === 'zh' ? payload.timeframe.label : payload.timeframe.label_en);
+    updateDetailTimes(chartData);
     if (detailTitle) {
-      detailTitle.textContent = tfLabel ? `${symbol} · ${tfLabel}` : symbol;
+      const intervalLabel = getIntervalLabel(intervalKey);
+      detailTitle.textContent = intervalLabel ? `${symbol} · ${intervalLabel}` : symbol;
     }
-    const requested = payload.requested_timeframe
-      ? langPrefix === 'zh'
-        ? payload.requested_timeframe.label
-        : payload.requested_timeframe.label_en
-      : '';
-    const used = tfLabel || '';
-    if (requested && used && requested !== used) {
-      setDetailStatus(TEXT.detailFallback(requested, used));
+    if (chartData.downgrade_message) {
+      setDetailStatus(TEXT.detailDowngraded(chartData.downgrade_message));
+    } else if (chartData.window_limited) {
+      setDetailStatus(TEXT.detailWindowLimited);
     } else {
       setDetailStatus('');
     }
   }
 
+  async function fetchChartBars(symbol, rangeKey, intervalKey) {
+    const endpointBase = chartApiUrl || '/api/market/chart/';
+    const endpoint = endpointBase.endsWith('/') ? endpointBase : `${endpointBase}/`;
+    const params = new URLSearchParams({
+      symbol,
+      range: rangeKey,
+      interval: intervalKey,
+    });
+    const response = await fetch(`${endpoint}?${params.toString()}`, {
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      credentials: 'same-origin',
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || TEXT.detailError);
+    }
+    return payload;
+  }
+
   async function loadDetailData(symbol, rangeKey, options = {}) {
     if (!symbol) return;
     const { renderChart = true, allowCache = true } = options;
-    const liveSpec = resolveLiveRange(rangeKey);
+    const intervalKey = normalizeIntervalKey(detailInterval) || resolveDefaultInterval(rangeKey);
+    if (!intervalKey) {
+      setDetailStatus(TEXT.intervalInvalid, true);
+      return;
+    }
     if (detailRetryTimer) {
       clearTimeout(detailRetryTimer);
       detailRetryTimer = null;
     }
     clearLiveWait();
-    stopLiveQuotePolling();
-    if (liveSpec) {
-      if (renderChart && ensureDetailChart() && detailManager) {
-        detailManager.setLiveMode(liveSpec.mode, liveSpec.interval);
-        setDetailStatus(TEXT.detailLive);
-      }
-      requestLiveSymbol(symbol);
-      startLiveQuotePolling(symbol);
-      lastLiveUpdateAt = 0;
-      scheduleLiveWait();
-      detailBarIntervalSec = null;
-      if (detailChartEl) {
-        detailChartEl.classList.remove('is-loading');
-      }
-      if (detailTitle) {
-        detailTitle.textContent = `${symbol} · ${(rangeKey || '').toUpperCase()}`;
-      }
-      if (detailSubtitle) {
-        detailSubtitle.textContent = TEXT.detailLive;
-      }
-      return;
-    }
-    if (detailManager) {
-      detailManager.clearLiveMode();
-    }
     if (renderChart && detailChartEl) {
       detailChartEl.classList.add('is-loading');
     }
@@ -2162,52 +2660,85 @@
       detailUpdated.textContent = '';
     }
 
-    if (allowCache && hasCachedDetail(symbol, rangeKey)) {
-      const payload = detailCache.payload || {};
-      const bars = detailCache.bars || [];
-      applyDetailPayload(symbol, rangeKey, payload, bars, renderChart);
-      if (renderChart && detailChartEl) {
-        detailChartEl.classList.remove('is-loading');
-      }
-      return;
+    let infoPayload = null;
+    let chartPayload = null;
+
+    if (allowCache && hasCachedDetailInfo(symbol, rangeKey)) {
+      infoPayload = detailInfoCache.payload || null;
+    }
+    if (allowCache && hasCachedChart(symbol, rangeKey, intervalKey)) {
+      chartPayload = detailChartCache.payload || null;
     }
 
-    const endpointBase = apiUrl || '/api/market/';
-    const endpoint = endpointBase.endsWith('/') ? endpointBase : `${endpointBase}/`;
-    const params = new URLSearchParams({
-      detail: '1',
-      symbol,
-      range: rangeKey,
-    });
+    const infoPromise = infoPayload
+      ? Promise.resolve(infoPayload)
+      : (async () => {
+          const endpointBase = apiUrl || '/api/market/';
+          const endpoint = endpointBase.endsWith('/') ? endpointBase : `${endpointBase}/`;
+          const params = new URLSearchParams({
+            detail: '1',
+            symbol,
+            range: rangeKey,
+          });
+          const response = await fetch(`${endpoint}?${params.toString()}`, {
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin',
+          });
+          const payload = await response.json();
+          if (response.status === 429 || payload.rate_limited) {
+            const retryAfter = Math.min(Math.max(parseInt(payload.retry_after_seconds, 10) || 3, 2), 30);
+            setDetailStatus(TEXT.retrying);
+            detailRetryTimer = setTimeout(
+              () => loadDetailData(symbol, rangeKey, { renderChart, allowCache: false }),
+              retryAfter * 1000
+            );
+            throw new Error('rate_limited');
+          }
+          if (!response.ok) {
+            throw new Error(payload.error || TEXT.detailError);
+          }
+          storeDetailInfoCache(symbol, rangeKey, payload);
+          return payload;
+        })();
+
+    const chartPromise = chartPayload
+      ? Promise.resolve(chartPayload)
+      : fetchChartBars(symbol, rangeKey, intervalKey)
+          .then((payload) => {
+            if (payload && payload.downgrade_to) {
+              const normalized = normalizeIntervalKey(payload.downgrade_to);
+              if (normalized && normalized !== detailInterval) {
+                setDetailInterval(normalized, { persist: true, skipReload: true });
+              }
+            }
+            storeDetailChartCache(symbol, rangeKey, intervalKey, payload.bars || [], payload);
+            return payload;
+          });
+
     try {
-      const response = await fetch(`${endpoint}?${params.toString()}`, {
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
-        credentials: 'same-origin',
-      });
-      const payload = await response.json();
-      if (response.status === 429 || payload.rate_limited) {
-        const retryAfter = Math.min(Math.max(parseInt(payload.retry_after_seconds, 10) || 3, 2), 30);
-        setDetailStatus(TEXT.retrying);
-        detailRetryTimer = setTimeout(
-          () => loadDetailData(symbol, rangeKey, { renderChart, allowCache: false }),
-          retryAfter * 1000
-        );
-        return;
-      }
-      if (!response.ok) {
-        setDetailStatus(payload.error || TEXT.detailError, true);
+      const [infoResult, chartResult] = await Promise.allSettled([infoPromise, chartPromise]);
+      if (infoResult.status === 'fulfilled') {
+        infoPayload = infoResult.value;
+      } else if (infoResult.reason && infoResult.reason.message !== 'rate_limited') {
+        setDetailStatus(infoResult.reason.message || TEXT.detailError, true);
         updateInsightPanels({});
-        return;
       }
-      const bars = Array.isArray(payload.bars) ? payload.bars : [];
-      if (!bars.length) {
+      if (chartResult.status === 'fulfilled') {
+        chartPayload = chartResult.value;
+      } else if (chartResult.reason) {
+        setDetailStatus(chartResult.reason.message || TEXT.detailError, true);
+      }
+      if (!chartPayload || !Array.isArray(chartPayload.bars) || !chartPayload.bars.length) {
         setDetailStatus(TEXT.detailEmpty);
-        updateInsightPanels(payload);
+        updateInsightPanels(infoPayload || {});
         return;
       }
-      storeDetailCache(symbol, rangeKey, bars, payload);
-      applyDetailPayload(symbol, rangeKey, payload, bars, renderChart);
+      applyDetailPayload(symbol, rangeKey, infoPayload || {}, chartPayload, renderChart);
+      if (chartVisible) {
+        setChartSocketSymbol(symbol);
+      }
     } catch (error) {
+      if (error && error.message === 'rate_limited') return;
       setDetailStatus(TEXT.detailError, true);
       updateInsightPanels({});
     } finally {
@@ -2219,32 +2750,220 @@
 
   function setDetailRange(rangeKey) {
     detailRange = rangeKey;
-    detailTimeframes.forEach((btn) => {
+    detailRangeButtons.forEach((btn) => {
       btn.classList.toggle('is-active', btn.dataset.range === rangeKey);
     });
-    if (detailTimeframeCurrent) {
-      const active = detailTimeframes.find((btn) => btn.dataset.range === rangeKey);
-      if (active) {
-        detailTimeframeCurrent.textContent = active.textContent || rangeKey.toUpperCase();
-      }
-    }
-    if (detailTimeframeMenu) {
-      detailTimeframeMenu.hidden = true;
-    }
-    updateDetailTimeScale(rangeKey);
+    updateDetailTimeScale(detailInterval);
   }
 
-  function updateDetailTimeScale(rangeKey) {
+  function updateDetailTimeScale(intervalKey) {
     if (!detailManager || !detailManager.chart) return;
-    const key = (rangeKey || '').toString().trim().toLowerCase();
-    const liveSpec = resolveLiveRange(key);
-    const isIntraday =
-      Boolean(liveSpec) || /^(?:\d+)(?:s|m|h)$/.test(key) || /t$/.test(key) || key === '1d' || key === '5d';
-    const showSeconds = Boolean(liveSpec && (liveSpec.mode === 'second' || liveSpec.mode === 'tick'));
-    detailManager.chart.timeScale().applyOptions({
-      timeVisible: isIntraday,
-      secondsVisible: showSeconds,
+    const spec = resolveIntervalSpec(intervalKey);
+    const isIntraday = Boolean(spec && spec.unit !== 'day');
+    const showSeconds = Boolean(spec && (spec.unit === 'second' || spec.unit === 'tick'));
+    detailManager.setAxisOptions({ timeVisible: isIntraday, showSeconds });
+  }
+
+  const intervalLabelMap = new Map();
+
+  function buildIntervalLabelMap() {
+    intervalLabelMap.clear();
+    intervalSelectButtons.forEach((btn) => {
+      const key = normalizeIntervalKey(btn.dataset.interval);
+      if (!key) return;
+      const label = (btn.textContent || '').trim();
+      if (label) {
+        intervalLabelMap.set(key, label);
+      }
     });
+  }
+
+  function formatIntervalLabel(intervalKey) {
+    const spec = resolveIntervalSpec(intervalKey);
+    if (!spec) return (intervalKey || '').toUpperCase();
+    if (langPrefix === 'zh') {
+      const unitLabel = {
+        tick: '笔',
+        second: '秒',
+        minute: '分',
+        hour: '小时',
+        day: '天',
+      }[spec.unit];
+      return `${spec.value}${unitLabel || ''}`;
+    }
+    const suffix = {
+      tick: 't',
+      second: 's',
+      minute: 'm',
+      hour: 'h',
+      day: 'd',
+    }[spec.unit];
+    return `${spec.value}${suffix || ''}`;
+  }
+
+  function getIntervalLabel(intervalKey) {
+    const key = normalizeIntervalKey(intervalKey);
+    if (!key) return formatIntervalLabel(intervalKey);
+    return intervalLabelMap.get(key) || formatIntervalLabel(key);
+  }
+
+  function loadIntervalPrefs() {
+    const rawFav = loadPreference(PREF_INTERVAL_FAVORITES_KEY, '[]');
+    const rawCustom = loadPreference(PREF_INTERVAL_CUSTOM_KEY, '[]');
+    try {
+      const parsed = JSON.parse(rawFav);
+      intervalFavorites = Array.isArray(parsed) ? parsed.map(normalizeIntervalKey).filter(Boolean) : [];
+    } catch (error) {
+      intervalFavorites = [];
+    }
+    try {
+      const parsed = JSON.parse(rawCustom);
+      customIntervals = Array.isArray(parsed) ? parsed.map(normalizeIntervalKey).filter(Boolean) : [];
+    } catch (error) {
+      customIntervals = [];
+    }
+    intervalFavorites = Array.from(new Set(intervalFavorites));
+    customIntervals = Array.from(new Set(customIntervals));
+  }
+
+  function saveIntervalPrefs() {
+    savePreference(PREF_INTERVAL_FAVORITES_KEY, JSON.stringify(intervalFavorites));
+    savePreference(PREF_INTERVAL_CUSTOM_KEY, JSON.stringify(customIntervals));
+  }
+
+  function renderIntervalFavorites() {
+    if (!intervalFavoritesList) return;
+    const merged = Array.from(new Set([...(intervalFavorites || []), ...(customIntervals || [])]));
+    intervalFavoritesList.innerHTML = '';
+    if (!merged.length) {
+      if (intervalFavoritesWrap) {
+        intervalFavoritesWrap.hidden = true;
+      }
+      return;
+    }
+    if (intervalFavoritesWrap) {
+      intervalFavoritesWrap.hidden = false;
+    }
+    merged.forEach((key) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'detail-interval-select';
+      btn.dataset.role = 'detail-interval-select';
+      btn.dataset.interval = key;
+      btn.textContent = getIntervalLabel(key);
+      intervalFavoritesList.appendChild(btn);
+    });
+  }
+
+  function updateIntervalFavButtons() {
+    const favoriteSet = new Set(intervalFavorites || []);
+    intervalFavButtons.forEach((btn) => {
+      const key = normalizeIntervalKey(btn.dataset.interval);
+      const isActive = key && favoriteSet.has(key);
+      btn.classList.toggle('is-active', Boolean(isActive));
+      btn.textContent = isActive ? '★' : '☆';
+    });
+  }
+
+  function setDetailInterval(nextKey, { persist = true, skipReload = false } = {}) {
+    const normalized = normalizeIntervalKey(nextKey);
+    if (!normalized) {
+      setDetailStatus(TEXT.intervalInvalid, true);
+      return;
+    }
+    detailInterval = normalized;
+    if (persist) {
+      savePreference(PREF_INTERVAL_KEY, normalized);
+    }
+    if (intervalCurrent) {
+      intervalCurrent.textContent = getIntervalLabel(normalized);
+    }
+    intervalSelectButtons.forEach((btn) => {
+      btn.classList.toggle('is-active', btn.dataset.interval === normalized);
+    });
+    renderIntervalFavorites();
+    updateIntervalFavButtons();
+    updateDetailTimeScale(normalized);
+    if (detailManager) {
+      const spec = resolveIntervalSpec(normalized);
+      if (spec) {
+        detailManager.setIntervalSpec(spec, { preserveData: true });
+      }
+    }
+    if (!skipReload && detailSymbol) {
+      loadDetailData(detailSymbol, detailRange, { renderChart: true, allowCache: false });
+    }
+  }
+
+  function toggleIntervalFavorite(key) {
+    const normalized = normalizeIntervalKey(key);
+    if (!normalized) return;
+    if (intervalFavorites.includes(normalized)) {
+      intervalFavorites = intervalFavorites.filter((item) => item !== normalized);
+    } else {
+      intervalFavorites.push(normalized);
+    }
+    intervalFavorites = Array.from(new Set(intervalFavorites));
+    saveIntervalPrefs();
+    renderIntervalFavorites();
+    updateIntervalFavButtons();
+  }
+
+  function addCustomInterval(key) {
+    const normalized = normalizeIntervalKey(key);
+    if (!normalized) return false;
+    if (!customIntervals.includes(normalized)) {
+      customIntervals.push(normalized);
+    }
+    customIntervals = Array.from(new Set(customIntervals));
+    saveIntervalPrefs();
+    renderIntervalFavorites();
+    updateIntervalFavButtons();
+    return true;
+  }
+
+  let intervalMenuOpen = false;
+  let intervalMenuIndex = -1;
+
+  function getIntervalMenuOptions() {
+    if (!intervalMenu) return [];
+    return Array.prototype.slice.call(intervalMenu.querySelectorAll('[data-role="detail-interval-select"]'));
+  }
+
+  function focusIntervalOption(index) {
+    const options = getIntervalMenuOptions();
+    if (!options.length) return;
+    const nextIndex = Math.max(0, Math.min(options.length - 1, index));
+    intervalMenuIndex = nextIndex;
+    options[nextIndex].focus({ preventScroll: true });
+  }
+
+  function openIntervalMenu() {
+    if (!intervalMenu || !intervalTrigger) return;
+    intervalMenu.hidden = false;
+    intervalMenuOpen = true;
+    intervalTrigger.setAttribute('aria-expanded', 'true');
+    const options = getIntervalMenuOptions();
+    if (options.length) {
+      const activeIndex = options.findIndex((btn) => btn.dataset.interval === detailInterval);
+      focusIntervalOption(activeIndex >= 0 ? activeIndex : 0);
+    }
+  }
+
+  function closeIntervalMenu() {
+    if (!intervalMenu || !intervalTrigger) return;
+    intervalMenu.hidden = true;
+    intervalMenuOpen = false;
+    intervalMenuIndex = -1;
+    intervalTrigger.setAttribute('aria-expanded', 'false');
+  }
+
+  function toggleIntervalMenu() {
+    if (!intervalMenuOpen) {
+      openIntervalMenu();
+    } else {
+      closeIntervalMenu();
+    }
   }
 
   function highlightSelectedRows(symbol) {
@@ -2272,6 +2991,7 @@
     if (detailSymbolEl) {
       detailSymbolEl.textContent = symbol;
     }
+    setTradeSymbol(symbol);
     if (detailNameEl) {
       detailNameEl.textContent = symbol;
     }
@@ -2297,6 +3017,9 @@
     }
     setView('chart');
     setDetailRange(detailRange);
+    if (!normalizeIntervalKey(detailInterval)) {
+      setDetailInterval(resolveDefaultInterval(detailRange), { persist: true, skipReload: true });
+    }
     if (!isChartContainerReady()) {
       scheduleChartInit();
       return;
@@ -2325,6 +3048,99 @@
     marketSocket.onclose = () => {
       socketRetryTimer = setTimeout(connectMarketSocket, 3000);
     };
+  }
+
+  function isChartRealtimeActive() {
+    return Boolean(chartVisible && detailSymbol && chartSocketReady);
+  }
+
+  function connectChartSocket() {
+    if (!window.WebSocket) return;
+    if (chartSocketRetryTimer) {
+      clearTimeout(chartSocketRetryTimer);
+      chartSocketRetryTimer = null;
+    }
+    if (chartSocket && (chartSocket.readyState === WebSocket.OPEN || chartSocket.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    chartSocket = new WebSocket(chartSocketUrl);
+    chartSocket.onopen = () => {
+      chartSocketReady = true;
+      if (chartSocketSymbol) {
+        chartSocket.send(JSON.stringify({ action: 'subscribe', symbol: chartSocketSymbol }));
+        scheduleLiveWait();
+      }
+    };
+    chartSocket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        applyChartTradeUpdate(payload);
+      } catch (error) {
+        return;
+      }
+    };
+    chartSocket.onclose = () => {
+      chartSocketReady = false;
+      if (chartVisible && detailSymbol) {
+        chartSocketRetryTimer = setTimeout(connectChartSocket, 2500);
+      }
+    };
+  }
+
+  function disconnectChartSocket() {
+    if (chartSocket) {
+      try {
+        chartSocket.close();
+      } catch (error) {
+        // noop
+      }
+    }
+    chartSocket = null;
+    chartSocketReady = false;
+  }
+
+  function setChartSocketSymbol(symbol) {
+    const normalized = normalizeSymbol(symbol);
+    if (!normalized) return;
+    if (chartSocketSymbol && chartSocketSymbol !== normalized && chartSocketReady && chartSocket) {
+      chartSocket.send(JSON.stringify({ action: 'unsubscribe', symbol: chartSocketSymbol }));
+    }
+    chartSocketSymbol = normalized;
+    if (!chartSocketReady) {
+      connectChartSocket();
+      return;
+    }
+    chartSocket.send(JSON.stringify({ action: 'subscribe', symbol: chartSocketSymbol }));
+    lastLiveUpdateAt = 0;
+    scheduleLiveWait();
+  }
+
+  function applyChartTradeUpdate(update) {
+    if (!update || typeof update !== 'object') return;
+    const symbol = normalizeSymbol(update.symbol || '');
+    if (!symbol || symbol !== detailSymbol) return;
+    const price = typeof update.price === 'number' ? update.price : Number.parseFloat(update.price);
+    const size = typeof update.size === 'number' ? update.size : Number.parseFloat(update.size);
+    const ts = typeof update.ts === 'number' ? update.ts : Number.parseFloat(update.ts);
+    if (!Number.isFinite(price)) return;
+    if (detailManager) {
+      detailManager.applyTradeUpdate({ price, size, ts });
+      if (detailPriceEl) {
+        detailPriceEl.textContent = price.toFixed(2);
+      }
+      if (detailChangeEl && detailManager.ohlcData.length > 1) {
+        const last = detailManager.ohlcData[detailManager.ohlcData.length - 1];
+        const prev = detailManager.ohlcData[detailManager.ohlcData.length - 2];
+        const changePct = prev && prev.close ? ((last.close / prev.close) - 1) * 100 : null;
+        detailChangeEl.textContent = typeof changePct === 'number' ? formatChange(changePct) : '--';
+        detailChangeEl.classList.remove('is-up', 'is-down');
+        applyChangeState(detailChangeEl, changePct, false);
+      }
+    }
+    lastLiveUpdateAt = Date.now();
+    if (detailStatus && detailStatus.textContent === TEXT.detailLiveWaiting) {
+      setDetailStatus(TEXT.detailLive);
+    }
   }
 
   function clearListState(container) {
@@ -2993,40 +3809,52 @@
     setTypeaheadVisibility(true);
   }
 
-  function resolveLiveRange(rangeKey) {
-    const raw = (rangeKey || '').toString().trim().toLowerCase();
-    const tickMatch = raw.match(/^(\d+)?t$/);
-    if (tickMatch) {
-      return { mode: 'tick', interval: 1 };
-    }
-    const secMatch = raw.match(/^(\d+)(s)$/);
-    if (secMatch) {
-      const interval = Math.max(1, parseInt(secMatch[1], 10) || 1);
-      return { mode: 'second', interval };
-    }
-    return null;
+  function normalizeIntervalKey(value) {
+    const raw = (value || '').toString().trim().toLowerCase();
+    const match = raw.match(/^(\d+)(t|s|m|h|d)$/);
+    if (!match) return null;
+    const amount = Math.max(1, parseInt(match[1], 10) || 1);
+    const unit = match[2];
+    return `${amount}${unit}`;
   }
 
-  function resolveBarIntervalSeconds(rangeKey) {
-    const key = (rangeKey || '').toString().trim().toLowerCase();
-    const map = {
-      '1m': 60,
-      '2m': 120,
-      '3m': 180,
-      '5m': 300,
-      '10m': 600,
-      '15m': 900,
-      '30m': 1800,
-      '45m': 2700,
-      '1h': 3600,
-      '2h': 7200,
-      '4h': 14400,
-      '1d': 60,
-      '5d': 1800,
-      '1mo': 86400,
-      '6mo': 86400,
+  function resolveIntervalSpec(value) {
+    const key = normalizeIntervalKey(value);
+    if (!key) return null;
+    const match = key.match(/^(\d+)(t|s|m|h|d)$/);
+    if (!match) return null;
+    const amount = Math.max(1, parseInt(match[1], 10) || 1);
+    const unitKey = match[2];
+    const unitMap = {
+      t: 'tick',
+      s: 'second',
+      m: 'minute',
+      h: 'hour',
+      d: 'day',
     };
-    return map[key] || null;
+    const unit = unitMap[unitKey];
+    const secondsMap = { t: null, s: 1, m: 60, h: 3600, d: 86400 };
+    const secondsBase = secondsMap[unitKey];
+    const seconds = secondsBase ? amount * secondsBase : null;
+    return {
+      key,
+      unit,
+      value: amount,
+      seconds,
+    };
+  }
+
+  function resolveDefaultInterval(rangeKey) {
+    const key = (rangeKey || '').toString().trim().toLowerCase();
+    if (key === '1d' || key === '5d') return '1m';
+    if (key === '1mo' || key === '6mo') return '1d';
+    return '1m';
+  }
+
+  function resolveBarIntervalSeconds(intervalKey) {
+    const spec = resolveIntervalSpec(intervalKey);
+    if (!spec) return null;
+    return spec.seconds || null;
   }
 
   function inferBarIntervalSeconds(bars) {
@@ -3994,18 +4822,20 @@
     });
   }
 
-  if (detailTimeframes.length) {
-    const activeRange = detailTimeframes.find((btn) => btn.classList.contains('is-active'));
+  if (detailRangeButtons.length) {
+    const activeRange = detailRangeButtons.find((btn) => btn.classList.contains('is-active'));
     if (activeRange && activeRange.dataset.range) {
       detailRange = activeRange.dataset.range;
     }
     setDetailRange(detailRange);
-    detailTimeframes.forEach((btn) => {
+    detailRangeButtons.forEach((btn) => {
       btn.addEventListener('click', () => {
-        if (btn.disabled || btn.classList.contains('is-disabled')) return;
         const rangeKey = btn.dataset.range || '1d';
         if (rangeKey === detailRange) return;
         setDetailRange(rangeKey);
+        if (!detailInterval || !normalizeIntervalKey(detailInterval)) {
+          setDetailInterval(resolveDefaultInterval(rangeKey), { persist: true, skipReload: true });
+        }
         if (detailSymbol) {
           loadDetailData(detailSymbol, rangeKey, { renderChart: true, allowCache: false });
         }
@@ -4013,24 +4843,87 @@
     });
   }
 
-  if (detailTimeframeTrigger && detailTimeframeMenu) {
-    detailTimeframeTrigger.addEventListener('click', (event) => {
+  buildIntervalLabelMap();
+  loadIntervalPrefs();
+  const savedInterval = normalizeIntervalKey(loadPreference(PREF_INTERVAL_KEY, '')) || resolveDefaultInterval(detailRange);
+  setDetailInterval(savedInterval, { persist: false, skipReload: true });
+
+  if (intervalTrigger && intervalMenu) {
+    intervalTrigger.addEventListener('click', (event) => {
       event.stopPropagation();
-      detailTimeframeMenu.hidden = !detailTimeframeMenu.hidden;
+      toggleIntervalMenu();
     });
     document.addEventListener('click', (event) => {
-      if (detailTimeframeMenu.hidden) return;
+      if (!intervalMenuOpen) return;
       const target = event.target;
-      if (detailTimeframeMenu.contains(target) || detailTimeframeTrigger.contains(target)) {
+      if (intervalMenu.contains(target) || intervalTrigger.contains(target)) {
         return;
       }
-      detailTimeframeMenu.hidden = true;
+      closeIntervalMenu();
     });
     document.addEventListener('keydown', (event) => {
-      if (event.key !== 'Escape') return;
-      if (!detailTimeframeMenu.hidden) {
-        detailTimeframeMenu.hidden = true;
+      if (!intervalMenuOpen) return;
+      if (event.key === 'Escape') {
+        closeIntervalMenu();
+        intervalTrigger.focus({ preventScroll: true });
+        return;
       }
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        focusIntervalOption(intervalMenuIndex + 1);
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        focusIntervalOption(intervalMenuIndex - 1);
+      }
+      if (event.key === 'Enter') {
+        const options = getIntervalMenuOptions();
+        if (intervalMenuIndex >= 0 && options[intervalMenuIndex]) {
+          options[intervalMenuIndex].click();
+        }
+      }
+    });
+  }
+
+  if (intervalMenu) {
+    intervalMenu.addEventListener('click', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (target.matches('[data-role="detail-interval-select"]')) {
+        const intervalKey = target.dataset.interval;
+        if (!intervalKey) return;
+        setDetailInterval(intervalKey);
+        closeIntervalMenu();
+      }
+      if (target.matches('[data-role="detail-interval-fav"]')) {
+        event.stopPropagation();
+        toggleIntervalFavorite(target.dataset.interval);
+      }
+    });
+  }
+
+  if (intervalCustomToggle && intervalCustomPanel) {
+    intervalCustomToggle.addEventListener('click', () => {
+      intervalCustomPanel.hidden = !intervalCustomPanel.hidden;
+    });
+  }
+
+  if (intervalCustomApply && intervalCustomValue && intervalCustomUnit) {
+    intervalCustomApply.addEventListener('click', () => {
+      const value = parseInt(intervalCustomValue.value, 10);
+      const unit = intervalCustomUnit.value;
+      if (!Number.isFinite(value) || value <= 0) {
+        setDetailStatus(TEXT.intervalInvalid, true);
+        return;
+      }
+      const key = `${value}${unit}`;
+      if (!addCustomInterval(key)) {
+        setDetailStatus(TEXT.intervalInvalid, true);
+        return;
+      }
+      setDetailInterval(key);
+      intervalCustomPanel.hidden = true;
+      intervalCustomValue.value = '';
     });
   }
 
@@ -4040,9 +4933,6 @@
       detailAdvancedPanel.hidden = !willOpen;
       detailAdvancedToggle.classList.toggle('is-active', willOpen);
       detailAdvancedToggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
-      if (!willOpen && detailTimeframeMenu) {
-        detailTimeframeMenu.hidden = true;
-      }
     });
   }
 
@@ -4114,9 +5004,11 @@
   updateSortIndicator();
   updateTimezoneToggle();
   updateAutoRefreshToggle();
+  updateTradeModeUI();
   setView(currentView || 'list');
 
   setupRankObserver();
   loadData();
+  fetchTradeMode();
   connectMarketSocket();
 })();

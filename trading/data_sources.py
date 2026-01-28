@@ -14,7 +14,6 @@ from django.conf import settings
 from .alpaca_data import (
     fetch_stock_bars_frame,
     fetch_stock_snapshots,
-    resolve_alpaca_credentials,
 )
 from .cache_utils import build_cache_key, cache_memoize
 from .security import sanitize_html_fragment

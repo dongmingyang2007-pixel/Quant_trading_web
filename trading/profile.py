@@ -17,6 +17,32 @@ DEFAULT_PROFILE = {
 }
 
 API_CREDENTIAL_FIELDS = {
+    "alpaca_trading_mode": {
+        "label": "Alpaca Trading Mode",
+        "env": "ALPACA_TRADING_MODE",
+        "help": "选择 live 或 paper 作为默认交易环境。",
+        "mask": False,
+    },
+    "alpaca_paper_api_key_id": {
+        "label": "Alpaca Paper API Key ID",
+        "env": "ALPACA_PAPER_API_KEY_ID",
+        "help": "用于 Alpaca Paper 交易环境的 Key ID。",
+    },
+    "alpaca_paper_api_secret_key": {
+        "label": "Alpaca Paper API Secret",
+        "env": "ALPACA_PAPER_API_SECRET_KEY",
+        "help": "用于 Alpaca Paper 交易环境的 Secret Key。",
+    },
+    "alpaca_live_api_key_id": {
+        "label": "Alpaca Live API Key ID",
+        "env": "ALPACA_LIVE_API_KEY_ID",
+        "help": "用于 Alpaca Live 交易环境的 Key ID。",
+    },
+    "alpaca_live_api_secret_key": {
+        "label": "Alpaca Live API Secret",
+        "env": "ALPACA_LIVE_API_SECRET_KEY",
+        "help": "用于 Alpaca Live 交易环境的 Secret Key。",
+    },
     "alpaca_api_key_id": {
         "label": "Alpaca API Key ID",
         "env": "ALPACA_API_KEY_ID",

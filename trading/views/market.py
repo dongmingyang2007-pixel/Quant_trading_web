@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import time
 from typing import Callable, Iterable, Mapping
 import re
@@ -27,12 +27,25 @@ from .. import market_data
 from ..observability import ensure_request_id, record_metric, track_latency
 from ..network import get_requests_session, resolve_retry_config, retry_call_result
 from ..rate_limit import check_rate_limit, rate_limit_key
-from ..models import UserProfile
-from ..alpaca_data import DEFAULT_FEED, resolve_alpaca_credentials, fetch_news, fetch_stock_snapshots
+from ..models import UserProfile, RealtimeProfile
+from ..alpaca_data import (
+    DEFAULT_FEED,
+    resolve_alpaca_data_credentials,
+    fetch_news,
+    fetch_stock_snapshots,
+    fetch_stock_trades,
+)
 from ..realtime.alpaca import fetch_assets as fetch_alpaca_assets
 from ..realtime.market_stream import request_symbol as request_market_symbol, request_symbols as request_market_symbols
 from ..realtime.lock import InstanceLock
 from ..realtime.storage import read_state, write_state, resolve_state_dir
+from ..realtime.manual_orders import submit_manual_order
+from ..realtime.config import DEFAULT_CONFIG_NAME, load_realtime_config_from_payload
+from ..realtime.schema import RealtimePayloadError, validate_realtime_payload
+from ..market_aggregation import (
+    aggregate_trades_to_tick_bars,
+    aggregate_trades_to_time_bars,
+)
 
 
 @dataclass(slots=True)
@@ -53,6 +66,14 @@ class DetailTimeframe:
     interval: str
     resample: str | None = None
     limit: int = 360
+
+
+@dataclass(slots=True)
+class ChartInterval:
+    key: str
+    unit: str
+    value: int
+    label: str
 
 
 TIMEFRAMES: dict[str, Timeframe] = {
@@ -130,6 +151,13 @@ MARKET_MAX_WORKERS = max(1, getattr(settings, "MARKET_DATA_MAX_WORKERS", 20))
 MARKET_RATE_WINDOW = max(10, getattr(settings, "MARKET_DATA_RATE_WINDOW_SECONDS", 90))
 MARKET_RATE_MAX_CALLS = max(1, getattr(settings, "MARKET_DATA_RATE_MAX_CALLS", 45))
 MARKET_RATE_CACHE_ALIAS = getattr(settings, "MARKET_DATA_RATE_CACHE_ALIAS", "default")
+
+CHART_MAX_TICK_RANGE_SECONDS = _setting_int("MARKET_CHART_MAX_TICK_RANGE_SECONDS", 2 * 3600)
+CHART_MAX_SECOND_RANGE_SECONDS = _setting_int("MARKET_CHART_MAX_SECOND_RANGE_SECONDS", 24 * 3600)
+CHART_MAX_TICK_BARS = _setting_int("MARKET_CHART_MAX_TICK_BARS", 1000)
+CHART_MAX_TIME_BARS = _setting_int("MARKET_CHART_MAX_TIME_BARS", 1600)
+CHART_TRADES_PAGE_LIMIT = _setting_int("MARKET_CHART_TRADES_PAGE_LIMIT", 1000)
+CHART_TRADES_MAX_PAGES = _setting_int("MARKET_CHART_TRADES_MAX_PAGES", 6)
 MARKET_PROFILE_CACHE_TTL = max(120, getattr(settings, "MARKET_PROFILE_CACHE_TTL", 900))
 MARKET_NEWS_CACHE_TTL = max(120, getattr(settings, "MARKET_NEWS_CACHE_TTL", 300))
 MARKET_ASSETS_CACHE_TTL = max(300, getattr(settings, "MARKET_ASSETS_CACHE_TTL", 6 * 3600))
@@ -255,7 +283,7 @@ def _parse_offset(value: object) -> int:
 
 
 def _fetch_market_clock(user_id: str | None) -> bool | None:
-    key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+    key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
     if not key_id or not secret:
         return None
     headers = {
@@ -334,6 +362,49 @@ def _resolve_list_type(value: object) -> str:
 def _resolve_detail_timeframe(value: object) -> DetailTimeframe:
     text = str(value or "").strip().lower()
     return DETAIL_TIMEFRAMES.get(text, DEFAULT_DETAIL_TIMEFRAME)
+
+
+_CHART_INTERVAL_PATTERN = re.compile(r"^(\d+)(t|s|m|h|d)$")
+
+
+def _resolve_chart_interval(value: object) -> ChartInterval | None:
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    match = _CHART_INTERVAL_PATTERN.match(text)
+    if not match:
+        return None
+    amount = int(match.group(1))
+    unit = match.group(2)
+    if amount <= 0:
+        return None
+    unit_map = {
+        "t": ("tick", "ticks"),
+        "s": ("second", "seconds"),
+        "m": ("minute", "minutes"),
+        "h": ("hour", "hours"),
+        "d": ("day", "days"),
+    }
+    unit_name, unit_label = unit_map.get(unit, ("", ""))
+    if not unit_name:
+        return None
+    label = f"{amount} {unit_label}" if amount != 1 else f"{amount} {unit_name}"
+    return ChartInterval(key=f"{amount}{unit}", unit=unit_name, value=amount, label=label)
+
+
+def _resolve_range_window(range_key: str) -> tuple[datetime, datetime, float]:
+    key = (range_key or "").strip().lower()
+    now = datetime.now(timezone.utc)
+    if key.endswith("mo") and key[:-2].isdigit():
+        months = int(key[:-2])
+        days = max(1, months) * 30
+    elif key.endswith("d") and key[:-1].isdigit():
+        days = int(key[:-1])
+    else:
+        days = 1
+    delta_seconds = float(days * 86400)
+    start = now - timedelta(seconds=delta_seconds)
+    return start, now, delta_seconds
 
 
 def _parse_json_list(value: object) -> list[dict[str, object]]:
@@ -764,7 +835,7 @@ def refresh_snapshot_rankings(*, user_id: str | None = None) -> dict[str, object
     write_state(SNAPSHOT_RANKINGS_PROGRESS_STATE, progress_payload)
 
     try:
-        key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+        key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
         if not (key_id and secret):
             error_payload = {
                 "status": "error",
@@ -1775,7 +1846,7 @@ def market_insights(request: HttpRequest) -> HttpResponse:
 @require_http_methods(["GET", "POST"])
 def market_insights_data(request: HttpRequest) -> JsonResponse:
     request_id = ensure_request_id(request)
-    key_id, secret = resolve_alpaca_credentials(user=request.user)
+    key_id, secret = resolve_alpaca_data_credentials(user=request.user)
     if not (key_id and secret):
         record_metric(
             "market.insights.error",
@@ -2446,6 +2517,276 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         losers=len(losers),
     )
     return JsonResponse(response, json_dumps_params={"ensure_ascii": False})
+
+
+@login_required
+@require_http_methods(["GET"])
+def market_chart_data(request: HttpRequest) -> JsonResponse:
+    request_id = ensure_request_id(request)
+    key_id, secret = resolve_alpaca_data_credentials(user=request.user)
+    if not (key_id and secret):
+        return JsonResponse(
+            {"error": _("当前环境缺少可用的市场数据源。"), "request_id": request_id},
+            status=503,
+            json_dumps_params={"ensure_ascii": False},
+        )
+
+    params = request.GET
+    symbol = _normalize_query(params.get("symbol") or params.get("ticker"))
+    if not symbol:
+        return JsonResponse(
+            {"error": _("缺少股票代码。"), "request_id": request_id},
+            status=400,
+            json_dumps_params={"ensure_ascii": False},
+        )
+    range_key = str(params.get("range") or "1d").strip().lower()
+    interval_key = str(params.get("interval") or params.get("interval_key") or "1m").strip().lower()
+    interval = _resolve_chart_interval(interval_key) or _resolve_chart_interval("1m")
+    if interval is None:
+        return JsonResponse(
+            {"error": _("无效的时间粒度。"), "request_id": request_id},
+            status=400,
+            json_dumps_params={"ensure_ascii": False},
+        )
+
+    cache_alias = getattr(settings, "MARKET_HISTORY_CACHE_ALIAS", None)
+    cache_ttl = 10 if interval.unit in {"tick", "second"} else 60 if interval.unit == "minute" else 300
+    cache_key = build_cache_key("market-chart", symbol, range_key, interval.key, DEFAULT_FEED, request.user.id)
+    cached = cache_get_object(cache_key, cache_alias=cache_alias)
+    if isinstance(cached, dict) and cached.get("bars"):
+        cached["request_id"] = request_id
+        return JsonResponse(cached, json_dumps_params={"ensure_ascii": False})
+
+    start, end, range_seconds = _resolve_range_window(range_key)
+    downgrade_to: str | None = None
+    downgrade_message: str | None = None
+    window_limited = False
+
+    if interval.unit in {"tick", "second"}:
+        max_range = CHART_MAX_TICK_RANGE_SECONDS if interval.unit == "tick" else CHART_MAX_SECOND_RANGE_SECONDS
+        if range_seconds > max_range:
+            downgrade_to = "1m"
+            downgrade_message = _("高频粒度仅支持近期窗口，已自动切换为 1m K 线。")
+            interval = _resolve_chart_interval(downgrade_to) or interval
+        else:
+            trades, next_token = fetch_stock_trades(
+                symbol,
+                start=start,
+                end=end,
+                feed=DEFAULT_FEED,
+                limit=CHART_TRADES_PAGE_LIMIT,
+                max_pages=CHART_TRADES_MAX_PAGES,
+                user=request.user,
+                timeout=MARKET_REQUEST_TIMEOUT,
+            )
+            window_limited = True
+            if interval.unit == "tick":
+                bars = aggregate_trades_to_tick_bars(
+                    trades,
+                    ticks_per_bar=interval.value,
+                    max_bars=CHART_MAX_TICK_BARS,
+                )
+            else:
+                bars = aggregate_trades_to_time_bars(
+                    trades,
+                    interval_seconds=interval.value,
+                    max_bars=CHART_MAX_TIME_BARS,
+                )
+            if not bars:
+                return JsonResponse(
+                    {"error": _("未能获取 %(symbol)s 的逐笔成交。") % {"symbol": symbol}, "request_id": request_id},
+                    status=404,
+                    json_dumps_params={"ensure_ascii": False},
+                )
+            response = {
+                "symbol": symbol,
+                "range": range_key,
+                "interval": {
+                    "key": interval.key,
+                    "unit": interval.unit,
+                    "value": interval.value,
+                    "label": interval.label,
+                },
+                "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+                "data_source": "alpaca",
+                "bars": bars,
+                "window_limited": window_limited,
+                "next_page_token": next_token,
+            }
+            if downgrade_to:
+                response["downgrade_to"] = downgrade_to
+                response["downgrade_message"] = downgrade_message
+            cache_set_object(cache_key, response, cache_ttl, cache_alias=cache_alias)
+            response["request_id"] = request_id
+            return JsonResponse(response, json_dumps_params={"ensure_ascii": False})
+
+    interval_unit = interval.unit
+    value = interval.value
+    base_interval = "1m"
+    resample_rule = None
+    if interval_unit == "minute":
+        if value in {1, 5, 15, 30}:
+            base_interval = f"{value}m"
+        else:
+            base_interval = "1m"
+            resample_rule = f"{value}min"
+    elif interval_unit == "hour":
+        base_interval = "1h"
+        if value > 1:
+            resample_rule = f"{value}h"
+    elif interval_unit == "day":
+        base_interval = "1d"
+        if value > 1:
+            resample_rule = f"{value}d"
+
+    frame = market_data.fetch(
+        [symbol],
+        period=range_key,
+        interval=base_interval,
+        cache=True,
+        timeout=MARKET_REQUEST_TIMEOUT,
+        ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
+        cache_alias=cache_alias,
+        user_id=str(request.user.id),
+    )
+    bar_frame = frame
+    if resample_rule:
+        bar_frame = _resample_ohlc_frame(frame, symbol, resample_rule)
+    bars = _extract_ohlc(bar_frame, symbol, limit=CHART_MAX_TIME_BARS)
+    if not bars:
+        return JsonResponse(
+            {"error": _("未能获取 %(symbol)s 的行情数据。") % {"symbol": symbol}, "request_id": request_id},
+            status=404,
+            json_dumps_params={"ensure_ascii": False},
+        )
+
+    response = {
+        "symbol": symbol,
+        "range": range_key,
+        "interval": {
+            "key": interval.key,
+            "unit": interval.unit,
+            "value": interval.value,
+            "label": interval.label,
+        },
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "data_source": _infer_market_source(frame),
+        "bars": bars,
+        "window_limited": window_limited,
+    }
+    if downgrade_to:
+        response["downgrade_to"] = downgrade_to
+        response["downgrade_message"] = downgrade_message
+    cache_set_object(cache_key, response, cache_ttl, cache_alias=cache_alias)
+    response["request_id"] = request_id
+    return JsonResponse(response, json_dumps_params={"ensure_ascii": False})
+
+
+@login_required
+@require_http_methods(["POST"])
+def market_manual_order(request: HttpRequest) -> JsonResponse:
+    request_id = ensure_request_id(request)
+    try:
+        payload = json.loads(request.body.decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({"ok": False, "message": _("请求体解析失败。"), "request_id": request_id}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({"ok": False, "message": _("请求体解析失败。"), "request_id": request_id}, status=400)
+    symbol = str(payload.get("symbol") or "").strip()
+    side = str(payload.get("side") or "").strip()
+    try:
+        qty = float(payload.get("qty") or 0)
+    except (TypeError, ValueError):
+        qty = 0.0
+    try:
+        notional = float(payload.get("notional") or 0)
+    except (TypeError, ValueError):
+        notional = 0.0
+    result = submit_manual_order(user=request.user, symbol=symbol, side=side, qty=qty, notional=notional)
+    result["request_id"] = request_id
+    if not result.get("ok"):
+        return JsonResponse(result, status=400)
+    return JsonResponse(result)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def market_trading_mode(request: HttpRequest) -> JsonResponse:
+    request_id = ensure_request_id(request)
+    profile = RealtimeProfile.objects.filter(user=request.user, is_active=True).first()
+    if not profile:
+        normalized = validate_realtime_payload({})
+        profile = RealtimeProfile.objects.create(
+            user=request.user,
+            name="Realtime Profile",
+            description="",
+            payload=normalized,
+            is_active=True,
+        )
+        write_state(DEFAULT_CONFIG_NAME, normalized)
+
+    payload = profile.payload if isinstance(profile.payload, dict) else {}
+    config = load_realtime_config_from_payload(payload)
+
+    if request.method == "GET":
+        return JsonResponse(
+            {
+                "ok": True,
+                "mode": config.trading.mode,
+                "trading_enabled": config.trading.enabled,
+                "execution_enabled": config.trading.execution.enabled,
+                "request_id": request_id,
+            }
+        )
+
+    try:
+        body = json.loads(request.body.decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({"ok": False, "message": _("请求体解析失败。"), "request_id": request_id}, status=400)
+    if not isinstance(body, dict):
+        return JsonResponse({"ok": False, "message": _("请求体解析失败。"), "request_id": request_id}, status=400)
+    mode = str(body.get("mode") or body.get("value") or "").strip().lower()
+    if mode not in {"paper", "live"}:
+        return JsonResponse({"ok": False, "message": _("交易模式无效。"), "request_id": request_id}, status=400)
+
+    trading_payload = payload.get("trading")
+    if not isinstance(trading_payload, dict):
+        trading_payload = {}
+    payload["trading"] = trading_payload
+    execution_payload = trading_payload.get("execution")
+    if not isinstance(execution_payload, dict):
+        execution_payload = {}
+    trading_payload["execution"] = execution_payload
+
+    trading_payload["enabled"] = True
+    execution_payload["enabled"] = True
+    if mode == "live":
+        trading_payload["mode"] = "live"
+        execution_payload["dry_run"] = False
+    else:
+        trading_payload["mode"] = "paper"
+        execution_payload["dry_run"] = False
+
+    try:
+        normalized = validate_realtime_payload(payload)
+    except RealtimePayloadError as exc:
+        return JsonResponse({"ok": False, "message": f"{exc}", "request_id": request_id}, status=400)
+
+    profile.payload = normalized
+    profile.save(update_fields=["payload", "updated_at"])
+    write_state(DEFAULT_CONFIG_NAME, normalized)
+    config = load_realtime_config_from_payload(normalized)
+
+    return JsonResponse(
+        {
+            "ok": True,
+            "mode": config.trading.mode,
+            "trading_enabled": config.trading.enabled,
+            "execution_enabled": config.trading.execution.enabled,
+            "message": _("交易模式已更新。"),
+            "request_id": request_id,
+        }
+    )
 
 
 @login_required

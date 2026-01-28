@@ -17,7 +17,7 @@ from ..data_sources import AuxiliaryData
 from ..rl_agents import build_rl_agent
 from ..http_client import http_client, HttpClientError
 from ..network import get_requests_session, resolve_retry_config, retry_call_result
-from ..alpaca_data import fetch_stock_bars_frame, resolve_alpaca_credentials
+from ..alpaca_data import fetch_stock_bars_frame, resolve_alpaca_data_credentials
 from .config import (
     QuantStrategyError,
     StrategyInput,
@@ -299,7 +299,7 @@ def fetch_price_data(
         return message
     download_error: Exception | None = None
     data = pd.DataFrame()
-    key_id, secret = resolve_alpaca_credentials(user_id=user_id)
+    key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
     if key_id and secret:
         try:
             alpaca_end = end + timedelta(days=1)

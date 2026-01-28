@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -10,16 +11,19 @@ import pandas as pd
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
+from ..file_utils import update_json_file
 from ..observability import record_metric, track_latency
 from ..alpaca_data import fetch_stock_snapshots
 from .alpaca import fetch_bars_frame
 from .bars import BarsProcessor
-from .config import RealtimeConfig
+from .config import RealtimeConfig, DEFAULT_CONFIG_NAME, load_realtime_config
 from .focus import update_focus
 from .signals import SignalEngine
+from .trading_pipeline import build_trading_pipeline
 from .stream_registry import acquire_stream, release_stream
 from .subscriptions import read_subscription_state
 from .storage import append_ndjson, write_state
+from .storage import resolve_state_dir
 from .universe import build_universe
 
 
@@ -86,24 +90,85 @@ class RealtimeEngine:
         self._extra_symbols: list[str] = []
         self._extra_symbols_ts: float = 0.0
         self._stream_symbols: list[str] = []
+        self.trading_pipeline = None
+        self._last_trade_ts: dict[str, float] = {}
+        self._trade_signal_limit = 20
+        self._trade_order_limit = 20
+        self._last_config_check_ts: float = 0.0
+        self._config_mtime: float | None = None
+        self._config_reload_every: float = 5.0
 
     def run_once(self) -> None:
         now = time.time()
+        self._maybe_reload_config(now)
         self._maybe_refresh_universe(now)
         self._refresh_extra_symbols(now)
         self._maybe_refresh_focus(now, force=True)
         self._maybe_fetch_bars(now, force=True)
+        self._ensure_trading_pipeline()
 
     def run(self) -> None:
         self._ensure_stream()
+        self._ensure_trading_pipeline()
         while True:
             now = time.time()
+            self._maybe_reload_config(now)
             self._maybe_refresh_universe(now)
             self._refresh_extra_symbols(now)
             self._maybe_refresh_focus(now)
             self._maybe_fetch_bars(now)
             self._maybe_log(now)
             time.sleep(1.0)
+
+    def _maybe_reload_config(self, now: float) -> None:
+        if now - self._last_config_check_ts < self._config_reload_every:
+            return
+        self._last_config_check_ts = now
+        path = resolve_state_dir() / DEFAULT_CONFIG_NAME
+        if not path.exists():
+            return
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            return
+        if self._config_mtime is not None and mtime <= self._config_mtime:
+            return
+        new_config = load_realtime_config(path)
+        self._config_mtime = mtime
+        self._apply_config(new_config)
+
+    def _apply_config(self, new_config: RealtimeConfig) -> None:
+        old = self.config
+        self.config = new_config
+        stream_changed = (
+            old.engine.stream_enabled != new_config.engine.stream_enabled
+            or old.engine.feed != new_config.engine.feed
+            or old.engine.stream_trades != new_config.engine.stream_trades
+            or old.engine.stream_quotes != new_config.engine.stream_quotes
+            or old.engine.bar_interval_seconds != new_config.engine.bar_interval_seconds
+            or old.engine.bar_aggregate_seconds != new_config.engine.bar_aggregate_seconds
+            or old.engine.stale_seconds != new_config.engine.stale_seconds
+        )
+        if stream_changed:
+            self._stop_stream()
+            if new_config.engine.stream_enabled:
+                self._ensure_stream()
+                self._apply_stream_symbols()
+        if old.trading != new_config.trading:
+            self.trading_pipeline = None
+            self._ensure_trading_pipeline()
+
+    def _stop_stream(self) -> None:
+        if self.stream_client:
+            try:
+                self.stream_client.stop()
+            except Exception:
+                pass
+            self.stream_client = None
+            release_stream("engine")
+        self.bars_processor = None
+        self.signal_engine = None
+        self._stream_symbols = []
 
     def _resolve_stream_symbols(self) -> list[str]:
         combined: list[str] = []
@@ -257,6 +322,42 @@ class RealtimeEngine:
             release_stream("engine")
             record_metric("realtime.stream.disabled", reason="credentials_missing")
 
+    def _ensure_trading_pipeline(self) -> None:
+        if self.trading_pipeline or not self.config.trading.enabled:
+            if not self.config.trading.enabled:
+                write_state(
+                    "trading_state.json",
+                    {
+                        "updated_at": time.time(),
+                        "enabled": False,
+                    },
+                )
+            return
+        pipeline = build_trading_pipeline(self.config, user_id=self.user_id)
+        if pipeline:
+            self.trading_pipeline = pipeline
+            write_state(
+                "trading_state.json",
+                {
+                    "updated_at": time.time(),
+                    "enabled": True,
+                    "mode": pipeline.metadata.get("mode"),
+                    "combiner": pipeline.metadata.get("combiner"),
+                    "strategy_count": pipeline.metadata.get("strategy_count"),
+                    "strategies": [strategy.name for strategy in pipeline.strategies],
+                    "execution_enabled": self.config.trading.execution.enabled,
+                },
+            )
+        else:
+            write_state(
+                "trading_state.json",
+                {
+                    "updated_at": time.time(),
+                    "enabled": False,
+                    "reason": "missing_strategies",
+                },
+            )
+
     def _handle_stream_status(self, status: str, detail: str) -> None:
         record_metric("realtime.stream.status", status=status, detail=detail)
         write_state(
@@ -273,6 +374,35 @@ class RealtimeEngine:
         if self.signal_engine:
             self.signal_engine.on_bar(bar)
         self._broadcast_market_update(bar)
+        self._maybe_run_trading(bar)
+
+    def _maybe_run_trading(self, bar: dict[str, Any]) -> None:
+        if not self.config.trading.enabled:
+            return
+        if bar.get("stale"):
+            return
+        if not self.trading_pipeline:
+            self._ensure_trading_pipeline()
+        if not self.trading_pipeline:
+            return
+        signals = self.trading_pipeline.on_market_data(bar)
+        if not signals:
+            return
+        now = time.time()
+        self._record_trade_signals(signals, now)
+        symbol = str(bar.get("symbol") or "").upper()
+        if symbol:
+            last_ts = self._last_trade_ts.get(symbol, 0.0)
+            if now - last_ts < self.config.trading.min_trade_interval_seconds:
+                self._record_trade_orders(signals, status="throttled", now=now)
+                return
+        if not self.config.trading.execution.enabled:
+            self._record_trade_orders(signals, status="disabled", now=now)
+            return
+        results = self.trading_pipeline.execute_signals(signals)
+        if symbol:
+            self._last_trade_ts[symbol] = now
+        self._record_trade_order_results(results, now=now)
 
     def _maybe_refresh_prev_close(self, symbols: list[str], now: float) -> None:
         if not symbols:
@@ -336,6 +466,112 @@ class RealtimeEngine:
             )
         except Exception as exc:
             record_metric("realtime.ws.broadcast_error", error=str(exc), symbol=symbol)
+
+    def _record_trade_signals(self, signals: list[Any], now: float) -> None:
+        rows: list[dict[str, Any]] = []
+        for signal in signals:
+            rows.append(
+                {
+                    "timestamp": datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
+                    "symbol": getattr(signal, "symbol", ""),
+                    "action": getattr(signal, "action", ""),
+                    "weight": getattr(signal, "weight", 0.0),
+                    "confidence": getattr(signal, "confidence", None),
+                    "components": [
+                        {
+                            "strategy": (getattr(comp, "metadata", {}) or {}).get("strategy"),
+                            "weight": getattr(comp, "weight", 0.0),
+                            "action": getattr(comp, "action", ""),
+                            "confidence": getattr(comp, "confidence", None),
+                        }
+                        for comp in (getattr(signal, "components", []) or [])
+                    ],
+                }
+            )
+        if not rows:
+            return
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+        append_ndjson(f"trade_signals_{stamp}.ndjson", rows)
+
+        def updater(current: Any) -> Any:
+            if not isinstance(current, dict):
+                current = {}
+            entries = current.get("signals")
+            if not isinstance(entries, list):
+                entries = []
+            entries.extend(rows)
+            current["signals"] = entries[-self._trade_signal_limit :]
+            current["updated_at"] = now
+            return current
+
+        update_json_file(self._trade_state_path("trade_signals_latest.json"), default={"signals": []}, update_fn=updater)
+
+    def _record_trade_orders(self, signals: list[Any], *, status: str, now: float) -> None:
+        rows = [
+            {
+                "timestamp": datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
+                "symbol": getattr(signal, "symbol", ""),
+                "action": getattr(signal, "action", ""),
+                "weight": getattr(signal, "weight", 0.0),
+                "status": status,
+            }
+            for signal in signals
+        ]
+        if not rows:
+            return
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+        append_ndjson(f"trade_orders_{stamp}.ndjson", rows)
+
+        def updater(current: Any) -> Any:
+            if not isinstance(current, dict):
+                current = {}
+            entries = current.get("orders")
+            if not isinstance(entries, list):
+                entries = []
+            entries.extend(rows)
+            current["orders"] = entries[-self._trade_order_limit :]
+            current["updated_at"] = now
+            return current
+
+        update_json_file(self._trade_state_path("trade_orders_latest.json"), default={"orders": []}, update_fn=updater)
+
+    def _record_trade_order_results(self, results: list[dict[str, Any]], *, now: float) -> None:
+        rows: list[dict[str, Any]] = []
+        for item in results:
+            signal = item.get("signal")
+            order = item.get("order")
+            rows.append(
+                {
+                    "timestamp": datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
+                    "symbol": getattr(signal, "symbol", ""),
+                    "action": getattr(signal, "action", ""),
+                    "weight": getattr(signal, "weight", 0.0),
+                    "order_id": getattr(order, "order_id", None),
+                    "status": getattr(order, "status", None),
+                }
+            )
+        if not rows:
+            return
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+        append_ndjson(f"trade_orders_{stamp}.ndjson", rows)
+
+        def updater(current: Any) -> Any:
+            if not isinstance(current, dict):
+                current = {}
+            entries = current.get("orders")
+            if not isinstance(entries, list):
+                entries = []
+            entries.extend(rows)
+            current["orders"] = entries[-self._trade_order_limit :]
+            current["updated_at"] = now
+            return current
+
+        update_json_file(self._trade_state_path("trade_orders_latest.json"), default={"orders": []}, update_fn=updater)
+
+    def _trade_state_path(self, filename: str):
+        from .storage import state_path
+
+        return state_path(filename)
 
     def _maybe_log(self, now: float) -> None:
         if now - self.state.last_log_ts < self.config.engine.log_every_seconds:

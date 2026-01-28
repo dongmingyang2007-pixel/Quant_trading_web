@@ -657,6 +657,132 @@
                                                 {% csrf_token %}
                                                 <div class="row g-3">
                                                     <div class="col-12">
+                                                        <label class="form-label" for="{{ api_form.alpaca_trading_mode.id_for_label }}">
+                                                            {% bilingual "Alpaca trading mode" "Alpaca 交易环境" %}
+                                                        </label>
+                                                        {{ api_form.alpaca_trading_mode }}
+                                                        {% if api_form.alpaca_trading_mode.help_text %}
+                                                            <div class="form-text">{{ api_form.alpaca_trading_mode.help_text }}</div>
+                                                        {% endif %}
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <div class="small text-muted fw-semibold mt-1">{% bilingual "Paper trading keys" "模拟交易凭证" %}</div>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="{{ api_form.alpaca_paper_api_key_id.id_for_label }}">Alpaca Paper API Key ID</label>
+                                                        <div class="input-group api-secret-field" data-role="api-secret-field">
+                                                            {{ api_form.alpaca_paper_api_key_id }}
+                                                            <button class="btn btn-outline-secondary" type="button" data-role="api-secret-toggle" aria-label="{% bilingual 'Show API key' '显示密钥' %}" aria-pressed="false">
+                                                                <span class="api-secret-icon" data-role="api-secret-icon-show" aria-hidden="true">
+                                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                                                        <path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6z"></path>
+                                                                        <circle cx="12" cy="12" r="3.2"></circle>
+                                                                    </svg>
+                                                                </span>
+                                                                <span class="api-secret-icon d-none" data-role="api-secret-icon-hide" aria-hidden="true">
+                                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                                                        <path d="M17.94 17.94C16.19 19.27 14.16 20 12 20 6 20 2 12 2 12c1.17-1.83 2.6-3.3 4.2-4.42"></path>
+                                                                        <path d="M9.88 9.88a3.5 3.5 0 0 0 4.24 4.24"></path>
+                                                                        <path d="M3 3l18 18"></path>
+                                                                    </svg>
+                                                                </span>
+                                                            </button>
+                                                            <button class="btn btn-outline-secondary" type="button" data-role="api-secret-copy" data-copy-feedback="{% bilingual 'Copied!' '已复制' %}" aria-live="polite">
+                                                                {% bilingual "Copy" "复制" %}
+                                                            </button>
+                                                        </div>
+                                                        {% if api_form.alpaca_paper_api_key_id.help_text %}
+                                                            <div class="form-text">{{ api_form.alpaca_paper_api_key_id.help_text }}</div>
+                                                        {% endif %}
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="{{ api_form.alpaca_paper_api_secret_key.id_for_label }}">Alpaca Paper API Secret</label>
+                                                        <div class="input-group api-secret-field" data-role="api-secret-field">
+                                                            {{ api_form.alpaca_paper_api_secret_key }}
+                                                            <button class="btn btn-outline-secondary" type="button" data-role="api-secret-toggle" aria-label="{% bilingual 'Show API secret' '显示密钥' %}" aria-pressed="false">
+                                                                <span class="api-secret-icon" data-role="api-secret-icon-show" aria-hidden="true">
+                                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                                                        <path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6z"></path>
+                                                                        <circle cx="12" cy="12" r="3.2"></circle>
+                                                                    </svg>
+                                                                </span>
+                                                                <span class="api-secret-icon d-none" data-role="api-secret-icon-hide" aria-hidden="true">
+                                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                                                        <path d="M17.94 17.94C16.19 19.27 14.16 20 12 20 6 20 2 12 2 12c1.17-1.83 2.6-3.3 4.2-4.42"></path>
+                                                                        <path d="M9.88 9.88a3.5 3.5 0 0 0 4.24 4.24"></path>
+                                                                        <path d="M3 3l18 18"></path>
+                                                                    </svg>
+                                                                </span>
+                                                            </button>
+                                                            <button class="btn btn-outline-secondary" type="button" data-role="api-secret-copy" data-copy-feedback="{% bilingual 'Copied!' '已复制' %}" aria-live="polite">
+                                                                {% bilingual "Copy" "复制" %}
+                                                            </button>
+                                                        </div>
+                                                        {% if api_form.alpaca_paper_api_secret_key.help_text %}
+                                                            <div class="form-text">{{ api_form.alpaca_paper_api_secret_key.help_text }}</div>
+                                                        {% endif %}
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <div class="small text-muted fw-semibold mt-1">{% bilingual "Live trading keys" "实盘交易凭证" %}</div>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="{{ api_form.alpaca_live_api_key_id.id_for_label }}">Alpaca Live API Key ID</label>
+                                                        <div class="input-group api-secret-field" data-role="api-secret-field">
+                                                            {{ api_form.alpaca_live_api_key_id }}
+                                                            <button class="btn btn-outline-secondary" type="button" data-role="api-secret-toggle" aria-label="{% bilingual 'Show API key' '显示密钥' %}" aria-pressed="false">
+                                                                <span class="api-secret-icon" data-role="api-secret-icon-show" aria-hidden="true">
+                                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                                                        <path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6z"></path>
+                                                                        <circle cx="12" cy="12" r="3.2"></circle>
+                                                                    </svg>
+                                                                </span>
+                                                                <span class="api-secret-icon d-none" data-role="api-secret-icon-hide" aria-hidden="true">
+                                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                                                        <path d="M17.94 17.94C16.19 19.27 14.16 20 12 20 6 20 2 12 2 12c1.17-1.83 2.6-3.3 4.2-4.42"></path>
+                                                                        <path d="M9.88 9.88a3.5 3.5 0 0 0 4.24 4.24"></path>
+                                                                        <path d="M3 3l18 18"></path>
+                                                                    </svg>
+                                                                </span>
+                                                            </button>
+                                                            <button class="btn btn-outline-secondary" type="button" data-role="api-secret-copy" data-copy-feedback="{% bilingual 'Copied!' '已复制' %}" aria-live="polite">
+                                                                {% bilingual "Copy" "复制" %}
+                                                            </button>
+                                                        </div>
+                                                        {% if api_form.alpaca_live_api_key_id.help_text %}
+                                                            <div class="form-text">{{ api_form.alpaca_live_api_key_id.help_text }}</div>
+                                                        {% endif %}
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="{{ api_form.alpaca_live_api_secret_key.id_for_label }}">Alpaca Live API Secret</label>
+                                                        <div class="input-group api-secret-field" data-role="api-secret-field">
+                                                            {{ api_form.alpaca_live_api_secret_key }}
+                                                            <button class="btn btn-outline-secondary" type="button" data-role="api-secret-toggle" aria-label="{% bilingual 'Show API secret' '显示密钥' %}" aria-pressed="false">
+                                                                <span class="api-secret-icon" data-role="api-secret-icon-show" aria-hidden="true">
+                                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                                                        <path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6z"></path>
+                                                                        <circle cx="12" cy="12" r="3.2"></circle>
+                                                                    </svg>
+                                                                </span>
+                                                                <span class="api-secret-icon d-none" data-role="api-secret-icon-hide" aria-hidden="true">
+                                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                                                        <path d="M17.94 17.94C16.19 19.27 14.16 20 12 20 6 20 2 12 2 12c1.17-1.83 2.6-3.3 4.2-4.42"></path>
+                                                                        <path d="M9.88 9.88a3.5 3.5 0 0 0 4.24 4.24"></path>
+                                                                        <path d="M3 3l18 18"></path>
+                                                                    </svg>
+                                                                </span>
+                                                            </button>
+                                                            <button class="btn btn-outline-secondary" type="button" data-role="api-secret-copy" data-copy-feedback="{% bilingual 'Copied!' '已复制' %}" aria-live="polite">
+                                                                {% bilingual "Copy" "复制" %}
+                                                            </button>
+                                                        </div>
+                                                        {% if api_form.alpaca_live_api_secret_key.help_text %}
+                                                            <div class="form-text">{{ api_form.alpaca_live_api_secret_key.help_text }}</div>
+                                                        {% endif %}
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <div class="small text-muted fw-semibold mt-1">{% bilingual "Legacy Alpaca keys" "兼容 Alpaca 凭证" %}</div>
+                                                    </div>
+                                                    <div class="col-12">
                                                         <label class="form-label" for="{{ api_form.alpaca_api_key_id.id_for_label }}">Alpaca API Key ID</label>
                                                         <div class="input-group api-secret-field" data-role="api-secret-field">
                                                             {{ api_form.alpaca_api_key_id }}
