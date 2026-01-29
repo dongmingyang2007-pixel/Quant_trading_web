@@ -42,6 +42,7 @@ from ..realtime.storage import read_state, write_state, resolve_state_dir
 from ..realtime.manual_orders import submit_manual_order
 from ..realtime.config import DEFAULT_CONFIG_NAME, load_realtime_config_from_payload
 from ..realtime.schema import RealtimePayloadError, validate_realtime_payload
+from ..realtime.chart_store import get_trades as chart_get_trades, get_latest_trade as chart_get_latest_trade
 from ..market_aggregation import (
     aggregate_trades_to_tick_bars,
     aggregate_trades_to_time_bars,
@@ -2550,25 +2551,48 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
         )
 
     cache_alias = getattr(settings, "MARKET_HISTORY_CACHE_ALIAS", None)
-    cache_ttl = 10 if interval.unit in {"tick", "second"} else 60 if interval.unit == "minute" else 300
+    chart_cache_ttl = getattr(settings, "MARKET_CHART_CACHE_TTL", None)
+    if chart_cache_ttl is None:
+        if interval.unit in {"tick", "second"}:
+            chart_cache_ttl = 0
+        elif interval.unit == "minute":
+            chart_cache_ttl = 5
+        elif interval.unit == "hour":
+            chart_cache_ttl = 10
+        else:
+            chart_cache_ttl = 30
+    cache_enabled = chart_cache_ttl > 0 and interval.unit not in {"tick", "second"}
     cache_key = build_cache_key("market-chart", symbol, range_key, interval.key, DEFAULT_FEED, request.user.id)
-    cached = cache_get_object(cache_key, cache_alias=cache_alias)
-    if isinstance(cached, dict) and cached.get("bars"):
-        cached["request_id"] = request_id
-        return JsonResponse(cached, json_dumps_params={"ensure_ascii": False})
+    if cache_enabled:
+        cached = cache_get_object(cache_key, cache_alias=cache_alias)
+        if isinstance(cached, dict) and cached.get("bars"):
+            cached["request_id"] = request_id
+            return JsonResponse(cached, json_dumps_params={"ensure_ascii": False})
 
     start, end, range_seconds = _resolve_range_window(range_key)
     downgrade_to: str | None = None
     downgrade_message: str | None = None
     window_limited = False
 
+    server_ts = time.time()
     if interval.unit in {"tick", "second"}:
         max_range = CHART_MAX_TICK_RANGE_SECONDS if interval.unit == "tick" else CHART_MAX_SECOND_RANGE_SECONDS
         if range_seconds > max_range:
-            downgrade_to = "1m"
-            downgrade_message = _("高频粒度仅支持近期窗口，已自动切换为 1m K 线。")
-            interval = _resolve_chart_interval(downgrade_to) or interval
-        else:
+            start = end - timedelta(seconds=max_range)
+            range_seconds = max_range
+            window_limited = True
+        start_ts = start.timestamp() if start else None
+        end_ts = end.timestamp() if end else None
+        cached_trades = chart_get_trades(
+            symbol,
+            start=start_ts,
+            end=end_ts,
+            limit=CHART_TRADES_PAGE_LIMIT * CHART_TRADES_MAX_PAGES,
+        )
+        trades = cached_trades
+        next_token = None
+        data_origin = "realtime"
+        if not trades:
             trades, next_token = fetch_stock_trades(
                 symbol,
                 start=start,
@@ -2579,46 +2603,59 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
                 user=request.user,
                 timeout=MARKET_REQUEST_TIMEOUT,
             )
-            window_limited = True
-            if interval.unit == "tick":
-                bars = aggregate_trades_to_tick_bars(
-                    trades,
-                    ticks_per_bar=interval.value,
-                    max_bars=CHART_MAX_TICK_BARS,
-                )
-            else:
-                bars = aggregate_trades_to_time_bars(
-                    trades,
-                    interval_seconds=interval.value,
-                    max_bars=CHART_MAX_TIME_BARS,
-                )
-            if not bars:
-                return JsonResponse(
-                    {"error": _("未能获取 %(symbol)s 的逐笔成交。") % {"symbol": symbol}, "request_id": request_id},
-                    status=404,
-                    json_dumps_params={"ensure_ascii": False},
-                )
-            response = {
-                "symbol": symbol,
-                "range": range_key,
-                "interval": {
-                    "key": interval.key,
-                    "unit": interval.unit,
-                    "value": interval.value,
-                    "label": interval.label,
-                },
-                "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-                "data_source": "alpaca",
-                "bars": bars,
-                "window_limited": window_limited,
-                "next_page_token": next_token,
-            }
-            if downgrade_to:
-                response["downgrade_to"] = downgrade_to
-                response["downgrade_message"] = downgrade_message
-            cache_set_object(cache_key, response, cache_ttl, cache_alias=cache_alias)
-            response["request_id"] = request_id
-            return JsonResponse(response, json_dumps_params={"ensure_ascii": False})
+            data_origin = "alpaca"
+        window_limited = True
+        if interval.unit == "tick":
+            bars = aggregate_trades_to_tick_bars(
+                trades,
+                ticks_per_bar=interval.value,
+                max_bars=CHART_MAX_TICK_BARS,
+            )
+        else:
+            bars = aggregate_trades_to_time_bars(
+                trades,
+                interval_seconds=interval.value,
+                max_bars=CHART_MAX_TIME_BARS,
+            )
+        if not bars:
+            return JsonResponse(
+                {"error": _("未能获取 %(symbol)s 的逐笔成交。") % {"symbol": symbol}, "request_id": request_id},
+                status=404,
+                json_dumps_params={"ensure_ascii": False},
+            )
+        latest_trade_ts = None
+        if trades:
+            last_trade = trades[-1]
+            if isinstance(last_trade, dict):
+                latest_trade_ts = last_trade.get("ts") or last_trade.get("t") or last_trade.get("timestamp")
+        if latest_trade_ts is None:
+            latest_trade = chart_get_latest_trade(symbol)
+            latest_trade_ts = latest_trade.get("ts") if latest_trade else None
+        response = {
+            "symbol": symbol,
+            "range": range_key,
+            "interval": {
+                "key": interval.key,
+                "unit": interval.unit,
+                "value": interval.value,
+                "label": interval.label,
+            },
+            "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            "data_source": "alpaca",
+            "data_origin": data_origin,
+            "bars": bars,
+            "window_limited": window_limited,
+            "next_page_token": next_token,
+            "latest_trade_ts": latest_trade_ts,
+            "server_ts": server_ts,
+        }
+        if downgrade_to:
+            response["downgrade_to"] = downgrade_to
+            response["downgrade_message"] = downgrade_message
+        if cache_enabled:
+            cache_set_object(cache_key, response, chart_cache_ttl, cache_alias=cache_alias)
+        response["request_id"] = request_id
+        return JsonResponse(response, json_dumps_params={"ensure_ascii": False})
 
     interval_unit = interval.unit
     value = interval.value
@@ -2673,11 +2710,14 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
         "data_source": _infer_market_source(frame),
         "bars": bars,
         "window_limited": window_limited,
+        "latest_trade_ts": bars[-1]["time"] if bars else None,
+        "server_ts": server_ts,
     }
     if downgrade_to:
         response["downgrade_to"] = downgrade_to
         response["downgrade_message"] = downgrade_message
-    cache_set_object(cache_key, response, cache_ttl, cache_alias=cache_alias)
+    if cache_enabled:
+        cache_set_object(cache_key, response, chart_cache_ttl, cache_alias=cache_alias)
     response["request_id"] = request_id
     return JsonResponse(response, json_dumps_params={"ensure_ascii": False})
 

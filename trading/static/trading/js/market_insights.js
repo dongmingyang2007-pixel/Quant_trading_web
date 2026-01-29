@@ -73,6 +73,7 @@
   const detailSubtitle = detailRoot.querySelector('[data-role="detail-subtitle"]');
   const detailSource = detailRoot.querySelector('[data-role="detail-source"]');
   const detailUpdated = detailRoot.querySelector('[data-role="detail-updated"]');
+  const detailLatency = detailRoot.querySelector('[data-role="detail-latency"]');
   const detailStatus = detailRoot.querySelector('[data-role="detail-status"]');
   const detailChartEl = detailRoot.querySelector('#market-detail-chart');
   const detailIndicatorEl = detailRoot.querySelector('#market-detail-indicator');
@@ -292,6 +293,8 @@
         errorHint: '请检查网络或稍后再试。',
         retryAction: '重试',
         updatedLabel: '更新：',
+        latencyLabel: '延迟',
+        latencyUnit: 'ms',
         partialData: '部分数据尚未就绪',
         partialDetail: '快照已完成，但部分标的仍在后台补齐或校验。',
         emptyChips: '暂无推荐',
@@ -408,6 +411,8 @@
         errorHint: 'Check your network connection and try again.',
         retryAction: 'Retry',
         updatedLabel: 'Updated:',
+        latencyLabel: 'Latency',
+        latencyUnit: 'ms',
         partialData: 'Partial data pending',
         partialDetail: 'Snapshot is complete, but some instruments are still being backfilled or validated.',
         emptyChips: 'No suggestions available.',
@@ -575,11 +580,14 @@
       this.timezoneMode = timezoneMode || 'utc';
       this.chart = null;
       this.candleSeries = null;
+      this.lineSeries = null;
       this.overlaySeries = [];
       this.indicatorChart = null;
       this.indicatorSeries = [];
+      this.volumeSeries = null;
       this.overlayMode = 'none';
       this.indicatorMode = 'none';
+      this.priceSeriesMode = 'candlestick';
       this.ohlcData = [];
       this.overlayCanvas = null;
       this.overlayCtx = null;
@@ -647,6 +655,13 @@
         wickUpColor: '#16a34a',
         wickDownColor: '#ef4444',
       });
+      this.lineSeries = this.chart.addLineSeries({
+        color: '#2563eb',
+        lineWidth: 2,
+      });
+      if (this.lineSeries) {
+        this.lineSeries.applyOptions({ visible: false });
+      }
 
       if (this.indicatorContainer) {
         const indicatorWidth = this.indicatorContainer.clientWidth || this.container.clientWidth || 680;
@@ -708,6 +723,9 @@
       if (this.candleSeries) {
         this.candleSeries.setData(this.ohlcData);
       }
+      if (this.lineSeries) {
+        this.lineSeries.setData(this._mapLineSeries());
+      }
       this.updateOverlay();
       this.updateIndicator();
       if (this.chart) {
@@ -728,6 +746,8 @@
       if (intervalSpec && preserveData) {
         this._syncLiveStateFromData(intervalSpec);
       }
+      // Use line series for all intervals to match TradingView-style line + volume layout.
+      this.setSeriesMode('line');
       const showSeconds = Boolean(intervalSpec && (intervalSpec.unit === 'tick' || intervalSpec.unit === 'second'));
       const timeVisible = Boolean(intervalSpec && intervalSpec.unit !== 'day');
       this.setAxisOptions({ showSeconds, timeVisible });
@@ -779,10 +799,11 @@
     }
 
     updatePriceLine(price) {
-      if (!this.candleSeries || typeof price !== 'number' || Number.isNaN(price)) return;
+      const series = this.priceSeriesMode === 'line' ? this.lineSeries : this.candleSeries;
+      if (!series || typeof price !== 'number' || Number.isNaN(price)) return;
       const color = this.lastLivePrice !== null && price < this.lastLivePrice ? '#ef4444' : '#16a34a';
       if (!this.priceLine) {
-        this.priceLine = this.candleSeries.createPriceLine({
+        this.priceLine = series.createPriceLine({
           price,
           color,
           lineWidth: 1,
@@ -804,7 +825,7 @@
 
     applyTradeUpdate(trade) {
       if (!trade || typeof trade.price !== 'number' || Number.isNaN(trade.price)) return;
-      if (!this.candleSeries) return;
+      if (!this.candleSeries && !this.lineSeries) return;
       const timestamp = Number.isFinite(trade.ts) ? trade.ts : Date.now() / 1000;
       const price = trade.price;
       const size = Number.isFinite(trade.size) ? trade.size : 0;
@@ -821,7 +842,7 @@
     }
 
     updateCurrentBar(price, ts, intervalSec) {
-      if (!this.candleSeries) return;
+      if (!this.candleSeries && !this.lineSeries) return;
       if (!Array.isArray(this.ohlcData) || !this.ohlcData.length) return;
       if (typeof price !== 'number' || Number.isNaN(price)) return;
       const interval = Math.max(1, Number.parseInt(intervalSec, 10) || 0);
@@ -842,12 +863,24 @@
         updated.low = nextLow;
         updated.close = price;
         this.ohlcData[lastIndex] = updated;
-        this.candleSeries.update(updated);
+        if (this.candleSeries) {
+          this.candleSeries.update(updated);
+        }
+        if (this.lineSeries) {
+          this.lineSeries.update({ time: updated.time, value: updated.close });
+        }
+        this._updateVolumeSeriesEntry(updated);
         return;
       }
       const bar = { time: bucket, open: price, high: price, low: price, close: price };
       this.ohlcData.push(bar);
-      this.candleSeries.update(bar);
+      if (this.candleSeries) {
+        this.candleSeries.update(bar);
+      }
+      if (this.lineSeries) {
+        this.lineSeries.update({ time: bar.time, value: bar.close });
+      }
+      this._updateVolumeSeriesEntry(bar);
     }
 
     _pushLiveBar(bar) {
@@ -971,7 +1004,7 @@
     }
 
     _appendOrUpdate(bar, isNew) {
-      if (!this.candleSeries) return;
+      if (!this.candleSeries && !this.lineSeries) return;
       if (!Array.isArray(this.ohlcData)) {
         this.ohlcData = [];
       }
@@ -980,11 +1013,23 @@
       if (isNew || !last) {
         this.ohlcData.push({ ...bar });
         this._trimLiveBars();
-        this.candleSeries.update({ ...bar });
+        if (this.candleSeries) {
+          this.candleSeries.update({ ...bar });
+        }
+        if (this.lineSeries) {
+          this.lineSeries.update({ time: bar.time, value: bar.close });
+        }
+        this._updateVolumeSeriesEntry(bar);
         return;
       }
       this.ohlcData[lastIndex] = { ...bar };
-      this.candleSeries.update({ ...bar });
+      if (this.candleSeries) {
+        this.candleSeries.update({ ...bar });
+      }
+      if (this.lineSeries) {
+        this.lineSeries.update({ time: bar.time, value: bar.close });
+      }
+      this._updateVolumeSeriesEntry(bar);
     }
 
     _trimLiveBars() {
@@ -993,6 +1038,10 @@
       if (this.candleSeries) {
         this.candleSeries.setData(this.ohlcData);
       }
+      if (this.lineSeries) {
+        this.lineSeries.setData(this._mapLineSeries());
+      }
+      this._updateVolumeSeries();
     }
 
     resize() {
@@ -1051,12 +1100,25 @@
       if (!this.indicatorChart || !this.indicatorContainer) return;
       this.indicatorSeries.forEach((series) => this.indicatorChart.removeSeries(series));
       this.indicatorSeries = [];
-      if (!this.ohlcData.length || this.indicatorMode === 'none') {
+      this.volumeSeries = null;
+      if (!this.ohlcData.length) {
         this.indicatorContainer.hidden = true;
         return;
       }
       this.indicatorContainer.hidden = false;
       this.resize();
+      if (this.indicatorMode === 'none') {
+        this.volumeSeries = this.indicatorChart.addHistogramSeries({
+          color: 'rgba(148, 163, 184, 0.6)',
+          priceFormat: { type: 'volume' },
+        });
+        this._updateVolumeSeries();
+        if (this.volumeSeries) {
+          this.indicatorSeries.push(this.volumeSeries);
+        }
+        this.indicatorChart.timeScale().fitContent();
+        return;
+      }
       const indicatorLib = getIndicatorLib();
       if (!indicatorLib || !indicatorLib.RSI) return;
       const closes = this._getCloses();
@@ -1119,6 +1181,27 @@
       return this.ohlcData.map((bar) => bar.close).filter((val) => Number.isFinite(val));
     }
 
+    setSeriesMode(mode) {
+      const nextMode = mode === 'line' ? 'line' : 'candlestick';
+      this.priceSeriesMode = nextMode;
+      if (this.candleSeries) {
+        this.candleSeries.applyOptions({ visible: nextMode === 'candlestick' });
+      }
+      if (this.lineSeries) {
+        this.lineSeries.applyOptions({ visible: nextMode === 'line' });
+      }
+      this.priceLine = null;
+      if (this.lastLivePrice !== null) {
+        this.updatePriceLine(this.lastLivePrice);
+      }
+    }
+
+    _mapLineSeries() {
+      return this.ohlcData
+        .filter((bar) => Number.isFinite(bar.time) && Number.isFinite(bar.close))
+        .map((bar) => ({ time: bar.time, value: bar.close }));
+    }
+
     _mapSeries(values, period) {
       const offset = Math.max(0, period - 1);
       const points = [];
@@ -1140,6 +1223,34 @@
         points.push({ time: bar.time, value: bandValue });
       });
       return points;
+    }
+
+    _updateVolumeSeries() {
+      if (!this.volumeSeries) return;
+      const data = [];
+      this.ohlcData.forEach((bar) => {
+        const volume = Number.isFinite(bar.volume) ? bar.volume : Number.parseFloat(bar.volume);
+        if (!Number.isFinite(bar.time) || !Number.isFinite(volume)) return;
+        const isUp = Number.isFinite(bar.close) && Number.isFinite(bar.open) ? bar.close >= bar.open : true;
+        data.push({
+          time: bar.time,
+          value: volume,
+          color: isUp ? 'rgba(16, 185, 129, 0.55)' : 'rgba(239, 68, 68, 0.55)',
+        });
+      });
+      this.volumeSeries.setData(data);
+    }
+
+    _updateVolumeSeriesEntry(bar) {
+      if (!this.volumeSeries || !bar) return;
+      const volume = Number.isFinite(bar.volume) ? bar.volume : Number.parseFloat(bar.volume);
+      if (!Number.isFinite(bar.time) || !Number.isFinite(volume)) return;
+      const isUp = Number.isFinite(bar.close) && Number.isFinite(bar.open) ? bar.close >= bar.open : true;
+      this.volumeSeries.update({
+        time: bar.time,
+        value: volume,
+        color: isUp ? 'rgba(16, 185, 129, 0.55)' : 'rgba(239, 68, 68, 0.55)',
+      });
     }
 
     _sanitizeBars(bars) {
@@ -2201,6 +2312,7 @@
           detailManager.updateCurrentBar(price, serverTs, detailBarIntervalSec);
         }
       }
+      stopLiveQuotePolling();
       lastLiveUpdateAt = Date.now();
       if (liveWaitTimer) {
         clearTimeout(liveWaitTimer);
@@ -2219,9 +2331,10 @@
   function scheduleLiveWait() {
     clearLiveWait();
     liveWaitTimer = setTimeout(() => {
-      if (!isChartRealtimeActive()) return;
+      if (!chartVisible || !detailSymbol) return;
       if (lastLiveUpdateAt) return;
       setDetailStatus(TEXT.detailLiveWaiting);
+      startLiveQuotePolling(detailSymbol);
     }, LIVE_WAIT_MS);
   }
 
@@ -2383,6 +2496,22 @@
         detailSubtitle.textContent = '';
       }
     }
+  }
+
+  function setDetailLatencyText(text) {
+    if (!detailLatency) return;
+    detailLatency.textContent = text || '';
+  }
+
+  function updateDetailLatencyFromTs(ts) {
+    if (!detailLatency) return;
+    const numeric = Number(ts);
+    if (!Number.isFinite(numeric)) {
+      setDetailLatencyText('');
+      return;
+    }
+    const latencyMs = Math.max(0, Math.round(Date.now() - numeric * 1000));
+    setDetailLatencyText(`${TEXT.latencyLabel} ${latencyMs}${TEXT.latencyUnit}`);
   }
 
   function hasCachedDetailInfo(symbol, rangeKey) {
@@ -2602,6 +2731,9 @@
       detailSource.textContent = `${sourceText}${rawHint}`;
     }
     updateDetailTimes(chartData);
+    if (chartData) {
+      updateDetailLatencyFromTs(chartData.latest_trade_ts || chartData.server_ts);
+    }
     if (detailTitle) {
       const intervalLabel = getIntervalLabel(intervalKey);
       detailTitle.textContent = intervalLabel ? `${symbol} · ${intervalLabel}` : symbol;
@@ -2890,6 +3022,11 @@
         detailManager.setIntervalSpec(spec, { preserveData: true });
       }
     }
+    lastLiveUpdateAt = 0;
+    clearLiveWait();
+    if (chartVisible && detailSymbol) {
+      scheduleLiveWait();
+    }
     if (!skipReload && detailSymbol) {
       loadDetailData(detailSymbol, detailRange, { renderChart: true, allowCache: false });
     }
@@ -3004,6 +3141,9 @@
     }
     if (detailMetaEl) {
       detailMetaEl.textContent = '';
+    }
+    if (detailLatency) {
+      detailLatency.textContent = '';
     }
     setDetailRange(detailRange);
     loadDetailData(symbol, detailRange, { renderChart: false, allowCache: true });
@@ -3137,6 +3277,12 @@
         applyChangeState(detailChangeEl, changePct, false);
       }
     }
+    if (Number.isFinite(ts)) {
+      updateDetailLatencyFromTs(ts);
+    } else if (Number.isFinite(update.server_ts)) {
+      updateDetailLatencyFromTs(update.server_ts);
+    }
+    stopLiveQuotePolling();
     lastLiveUpdateAt = Date.now();
     if (detailStatus && detailStatus.textContent === TEXT.detailLiveWaiting) {
       setDetailStatus(TEXT.detailLive);

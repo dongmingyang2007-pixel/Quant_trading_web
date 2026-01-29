@@ -9,7 +9,8 @@ from channels.layers import get_channel_layer
 
 from .alpaca.stream import AlpacaStreamClient
 from .config import load_realtime_config
-from .stream_registry import acquire_stream, release_stream
+from .stream_registry import acquire_stream, current_owner, release_stream
+from .chart_store import add_trade as chart_store_add_trade
 from ..observability import record_metric
 
 GROUP_NAME = "market-chart"
@@ -22,6 +23,7 @@ _USER_ID: str | None = None
 _SYMBOL_REFS: dict[str, int] = {}
 _SYMBOL_ORDER: list[str] = []
 _CURRENT_SYMBOLS: list[str] = []
+_LOCK_HELD = False
 
 
 def _normalize_symbol(value: str | None) -> str | None:
@@ -57,12 +59,17 @@ def _apply_symbols(symbols: list[str]) -> None:
 
 
 def _ensure_stream(user_id: str | None) -> None:
-    global _CLIENT, _USER_ID
+    global _CLIENT, _USER_ID, _LOCK_HELD
     symbols = _resolve_active_symbols()
     if _CLIENT is None:
         if not acquire_stream("market_chart_stream"):
-            record_metric("market.chart.stream_locked")
-            return
+            # Allow chart stream to run alongside the market stream in the same process.
+            if current_owner() != "market_stream":
+                record_metric("market.chart.stream_locked")
+                return
+            _LOCK_HELD = False
+        else:
+            _LOCK_HELD = True
         config = load_realtime_config()
         _USER_ID = user_id
         _CLIENT = AlpacaStreamClient(
@@ -91,16 +98,18 @@ def subscribe(user_id: str | None) -> None:
 
 
 def unsubscribe() -> None:
-    global _REF_COUNT, _CLIENT
+    global _REF_COUNT, _CLIENT, _LOCK_HELD
     with _LOCK:
         _REF_COUNT = max(0, _REF_COUNT - 1)
         if _REF_COUNT == 0 and _CLIENT:
             _CLIENT.stop()
             _CLIENT = None
-            release_stream("market_chart_stream")
+            if _LOCK_HELD:
+                release_stream("market_chart_stream")
             _SYMBOL_REFS.clear()
             _SYMBOL_ORDER.clear()
             _CURRENT_SYMBOLS.clear()
+            _LOCK_HELD = False
 
 
 def add_symbol(symbol: str | None, *, user_id: str | None = None) -> None:
@@ -146,14 +155,17 @@ def _handle_trade(symbol: str, price: float | None, size: float | None, ts: floa
         except (TypeError, ValueError):
             size_val = None
     timestamp = float(ts) if ts is not None else time.time()
+    chart_store_add_trade(sym, price_val, size_val, timestamp)
     channel_layer = get_channel_layer()
     if not channel_layer:
         return
+    server_ts = time.time()
     payload = {
         "symbol": sym,
         "price": price_val,
         "size": size_val,
         "ts": timestamp,
+        "server_ts": server_ts,
         "source": "trade",
     }
     async_to_sync(channel_layer.group_send)(GROUP_NAME, {"type": "chart_trade", **payload})
