@@ -9,12 +9,14 @@ from channels.layers import get_channel_layer
 
 from .alpaca.stream import AlpacaStreamClient
 from .config import load_realtime_config
-from .stream_registry import acquire_stream, current_owner, release_stream
+from .stream_registry import acquire_stream, release_stream
 from .chart_store import add_trade as chart_store_add_trade
 from ..observability import record_metric
 
-GROUP_NAME = "market-chart"
+GROUP_PREFIX = "market-chart"
 MAX_STREAM_SYMBOLS = 20
+AGGREGATE_SECONDS = 0.1
+MAX_BATCH_SIZE = 200
 
 _LOCK = threading.Lock()
 _CLIENT: AlpacaStreamClient | None = None
@@ -24,6 +26,7 @@ _SYMBOL_REFS: dict[str, int] = {}
 _SYMBOL_ORDER: list[str] = []
 _CURRENT_SYMBOLS: list[str] = []
 _LOCK_HELD = False
+_BATCH: dict[str, dict[str, object]] = {}
 
 
 def _normalize_symbol(value: str | None) -> str | None:
@@ -63,10 +66,9 @@ def _ensure_stream(user_id: str | None) -> None:
     symbols = _resolve_active_symbols()
     if _CLIENT is None:
         if not acquire_stream("market_chart_stream"):
-            # Allow chart stream to run alongside the market stream in the same process.
-            if current_owner() != "market_stream":
-                record_metric("market.chart.stream_locked")
-                return
+            # Allow chart stream to run even if another process holds the stream lock.
+            # This keeps chart realtime active when market stream runs separately.
+            record_metric("market.chart.stream_shared")
             _LOCK_HELD = False
         else:
             _LOCK_HELD = True
@@ -135,6 +137,7 @@ def remove_symbol(symbol: str | None) -> None:
         _SYMBOL_REFS[sym] = max(0, _SYMBOL_REFS[sym] - 1)
         if _SYMBOL_REFS[sym] <= 0:
             _SYMBOL_REFS.pop(sym, None)
+            _BATCH.pop(sym, None)
         _apply_symbols(_resolve_active_symbols())
 
 
@@ -159,13 +162,29 @@ def _handle_trade(symbol: str, price: float | None, size: float | None, ts: floa
     channel_layer = get_channel_layer()
     if not channel_layer:
         return
-    server_ts = time.time()
+    now = time.monotonic()
+    bucket = _BATCH.get(sym)
+    if not bucket:
+        bucket = {"trades": [], "last_flush": now}
+        _BATCH[sym] = bucket
+    trades = bucket["trades"]
+    if isinstance(trades, list):
+        trades.append({"price": price_val, "size": size_val, "ts": timestamp})
+    last_flush = float(bucket.get("last_flush") or now)
+    should_flush = False
+    if isinstance(trades, list) and len(trades) >= MAX_BATCH_SIZE:
+        should_flush = True
+    if now - last_flush >= AGGREGATE_SECONDS:
+        should_flush = True
+    if not should_flush:
+        return
+    bucket["last_flush"] = now
     payload = {
         "symbol": sym,
-        "price": price_val,
-        "size": size_val,
-        "ts": timestamp,
-        "server_ts": server_ts,
-        "source": "trade",
+        "trades": trades,
+        "server_ts": time.time(),
+        "source": "trade_batch",
     }
-    async_to_sync(channel_layer.group_send)(GROUP_NAME, {"type": "chart_trade", **payload})
+    bucket["trades"] = []
+    group_name = f"{GROUP_PREFIX}-{sym}"
+    async_to_sync(channel_layer.group_send)(group_name, {"type": "chart_trade", **payload})

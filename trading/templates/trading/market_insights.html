@@ -721,6 +721,9 @@
                                     </select>
                                 </div>
                             </div>
+                            <button type="button" class="detail-reset-zoom" data-role="detail-reset-zoom">
+                                {% if lang_prefix == 'zh' %}重置缩放{% else %}Reset zoom{% endif %}
+                            </button>
                             <button type="button" class="detail-advanced-toggle" data-role="detail-advanced-toggle" aria-expanded="false">
                                 {% if lang_prefix == 'zh' %}高级工具{% else %}Advanced{% endif %}
                             </button>
@@ -739,6 +742,9 @@
                     <div class="market-detail-chart-stack">
                         <div class="market-detail-chart" id="market-detail-chart"></div>
                         <div class="market-detail-indicator" id="market-detail-indicator" hidden></div>
+                    </div>
+                    <div class="market-detail-lazy" data-role="detail-lazy" hidden>
+                        {% if lang_prefix == 'zh' %}懒加载中…{% else %}Loading older data…{% endif %}
                     </div>
                     <div class="market-detail-status" data-role="detail-status" hidden></div>
                 </section>

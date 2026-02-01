@@ -75,11 +75,13 @@
   const detailUpdated = detailRoot.querySelector('[data-role="detail-updated"]');
   const detailLatency = detailRoot.querySelector('[data-role="detail-latency"]');
   const detailStatus = detailRoot.querySelector('[data-role="detail-status"]');
+  const detailLazy = detailRoot.querySelector('[data-role="detail-lazy"]');
   const detailChartEl = detailRoot.querySelector('#market-detail-chart');
   const detailIndicatorEl = detailRoot.querySelector('#market-detail-indicator');
   const detailOverlaySelect = detailRoot.querySelector('#detail-overlay-select');
   const detailIndicatorSelect = detailRoot.querySelector('#detail-indicator-select');
   const detailDrawButtons = Array.prototype.slice.call(detailRoot.querySelectorAll('.draw-btn'));
+  const detailResetZoom = detailRoot.querySelector('[data-role="detail-reset-zoom"]');
   const detailRangeButtons = Array.prototype.slice.call(detailRoot.querySelectorAll('.detail-timeframe--quick'));
   const intervalTrigger = detailRoot.querySelector('[data-role="detail-interval-trigger"]');
   const intervalMenu = detailRoot.querySelector('[data-role="detail-interval-menu"]');
@@ -189,6 +191,13 @@
   let chartSocketRetryTimer = null;
   let chartSocketReady = false;
   let chartSocketSymbol = '';
+  let chartHeartbeatTimer = null;
+  let chartHeartbeatLastPong = 0;
+  let chartTradeBuffer = [];
+  let chartTradeFlushHandle = null;
+  let chartPollTimer = null;
+  let chartPollInFlight = false;
+  const MAX_CHART_TRADE_BUFFER = 2000;
   const DEFAULT_AUTO_REFRESH_MS = 60 * 1000;
   const AUTO_REFRESH_OPTIONS = [0, 15000, 30000, 60000];
   const PREF_TIMEZONE_KEY = 'market.timezone';
@@ -206,8 +215,10 @@
   }
   let intervalFavorites = [];
   let customIntervals = [];
-  const LIVE_WAIT_MS = 10000;
-  const LIVE_QUOTE_POLL_MS = 15000;
+  const LIVE_WAIT_MS = 2000;
+  const LIVE_QUOTE_POLL_MS = 5000;
+  const LIVE_CHART_STALE_MS = 15000;
+  const CHART_POLL_MS = 1000;
   const RANK_PAGE_SIZE = 20;
   const RANKING_COLUMNS =
     rankingTable && rankingTable.querySelectorAll('th').length
@@ -224,6 +235,9 @@
   let rankItems = [];
   let rankSort = 'default';
   let chartVisible = false;
+  let chartLazyLoading = false;
+  let chartLazyExhausted = false;
+  let chartLazyCursor = null;
   let lastRankingTimeframe = null;
   let lastRankingListType = null;
   let lastStatusGeneratedAt = '';
@@ -241,6 +255,8 @@
     bars: [],
     payload: null,
   };
+  let lastTradeAgeSeconds = null;
+  let lastTradeStaleLabel = '';
   let tradeMode = 'paper';
   let tradeExecutionEnabled = false;
   let tradeModeBusy = false;
@@ -295,6 +311,13 @@
         updatedLabel: '更新：',
         latencyLabel: '延迟',
         latencyUnit: 'ms',
+        chartTooltipTime: '时间',
+        chartTooltipTick: 'T',
+        chartTooltipOpen: '开',
+        chartTooltipHigh: '高',
+        chartTooltipLow: '低',
+        chartTooltipClose: '收',
+        chartTooltipVolume: '量',
         partialData: '部分数据尚未就绪',
         partialDetail: '快照已完成，但部分标的仍在后台补齐或校验。',
         emptyChips: '暂无推荐',
@@ -319,8 +342,10 @@
         volumeLabel: '成交量',
         detailLive: '实时流更新中…',
         detailLiveWaiting: '实时流暂未收到更新，请确认实时引擎已启动。',
+        detailStale: (age) => (age ? `行情已延迟（${age}前）` : '行情已延迟'),
         detailWindowLimited: '高频数据仅展示最近窗口。',
         detailDowngraded: (message) => message || '已自动降级为分钟级行情。',
+        detailLazyLoading: '懒加载中…',
         intervalInvalid: '请输入有效的时间粒度。',
         tradeSubmitting: '提交中…',
         tradeSuccess: '已提交订单',
@@ -413,6 +438,13 @@
         updatedLabel: 'Updated:',
         latencyLabel: 'Latency',
         latencyUnit: 'ms',
+        chartTooltipTime: 'Time',
+        chartTooltipTick: 'T',
+        chartTooltipOpen: 'O',
+        chartTooltipHigh: 'H',
+        chartTooltipLow: 'L',
+        chartTooltipClose: 'C',
+        chartTooltipVolume: 'Vol',
         partialData: 'Partial data pending',
         partialDetail: 'Snapshot is complete, but some instruments are still being backfilled or validated.',
         emptyChips: 'No suggestions available.',
@@ -437,8 +469,10 @@
         volumeLabel: 'Volume',
         detailLive: 'Live stream updating…',
         detailLiveWaiting: 'No live ticks yet. Check the realtime engine.',
+        detailStale: (age) => (age ? `Stale data (${age} ago)` : 'Stale data'),
         detailWindowLimited: 'High-frequency data is window-limited.',
         detailDowngraded: (message) => message || 'Interval auto-downgraded to minute bars.',
+        detailLazyLoading: 'Loading older data…',
         intervalInvalid: 'Enter a valid interval value.',
         tradeSubmitting: 'Submitting…',
         tradeSuccess: 'Order submitted',
@@ -539,18 +573,48 @@
     return null;
   }
 
-  function formatAxisTime(epochSeconds, { timezoneMode: mode = 'utc', showSeconds = false } = {}) {
-    if (!Number.isFinite(epochSeconds)) return '';
-    const ms = epochSeconds * 1000;
+  function formatAxisTime(
+    epochSeconds,
+    { timezoneMode: mode = 'utc', showSeconds = false, includeDate = true, fullDate = false } = {}
+  ) {
+    const normalized = normalizeEpochSeconds(epochSeconds);
+    if (!Number.isFinite(normalized)) return '';
+    if (fullDate) {
+      const parts = getDateParts(normalized, mode);
+      if (!parts) return '';
+      if (langPrefix === 'zh') {
+        const dateText = `${parts.year}/${String(parts.month).padStart(2, '0')}/${String(parts.day).padStart(2, '0')}`;
+        const timeText = `${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}${
+          showSeconds ? `:${String(parts.second).padStart(2, '0')}` : ''
+        }`;
+        return `${dateText} ${timeText}`;
+      }
+      const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const weekday = weekdayNames[parts.weekday] || '';
+      const month = monthNames[parts.month - 1] || '';
+      const yearShort = String(parts.year).slice(-2);
+      const timeText = `${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}${
+        showSeconds ? `:${String(parts.second).padStart(2, '0')}` : ''
+      }`;
+      return `${weekday} ${String(parts.day).padStart(2, '0')} ${month} '${yearShort} ${timeText}`.trim();
+    }
+    const ms = normalized * 1000;
     const date = new Date(ms);
-    const options = {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    };
+    const options = includeDate
+      ? {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        }
+      : {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        };
     if (showSeconds) {
       options.second = '2-digit';
     }
@@ -567,6 +631,113 @@
     }
     const frac = String(Math.floor(fractional)).padStart(3, '0');
     return `${formatted}.${frac}`;
+  }
+
+  function getDateParts(epochSeconds, mode) {
+    const ms = epochSeconds * 1000;
+    const date = new Date(ms);
+    if (Number.isNaN(date.getTime())) return null;
+    if (mode === 'utc') {
+      return {
+        year: date.getUTCFullYear(),
+        month: date.getUTCMonth() + 1,
+        day: date.getUTCDate(),
+        weekday: date.getUTCDay(),
+        hour: date.getUTCHours(),
+        minute: date.getUTCMinutes(),
+        second: date.getUTCSeconds(),
+      };
+    }
+    return {
+      year: date.getFullYear(),
+      month: date.getMonth() + 1,
+      day: date.getDate(),
+      weekday: date.getDay(),
+      hour: date.getHours(),
+      minute: date.getMinutes(),
+      second: date.getSeconds(),
+    };
+  }
+
+  function normalizeEpochSeconds(value) {
+    if (value == null) return null;
+    if (value instanceof Date) {
+      const ms = value.getTime();
+      return Number.isFinite(ms) ? ms / 1000 : null;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) return null;
+      if (value > 1e15) return value / 1e9;
+      if (value > 1e12) return value / 1e3;
+      return value;
+    }
+    if (typeof value === 'string') {
+      const raw = value.trim();
+      if (!raw) return null;
+      if (/^\d+(\.\d+)?$/.test(raw)) {
+        return normalizeEpochSeconds(Number.parseFloat(raw));
+      }
+      let normalized = raw;
+      if (normalized.endsWith('UTC')) {
+        normalized = normalized.replace(' UTC', 'Z');
+      }
+      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(normalized) && !normalized.includes('T')) {
+        normalized = normalized.replace(' ', 'T');
+      }
+      if (/^\d{4}\/\d{2}\/\d{2}/.test(normalized)) {
+        normalized = normalized.replace(/\//g, '-');
+      }
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(normalized)) {
+        normalized = `${normalized}Z`;
+      }
+      const parsed = Date.parse(normalized);
+      if (!Number.isNaN(parsed)) {
+        return parsed / 1000;
+      }
+      const fallback = Number.parseFloat(raw);
+      return Number.isFinite(fallback) ? normalizeEpochSeconds(fallback) : null;
+    }
+    const numeric = Number.parseFloat(value);
+    if (!Number.isFinite(numeric)) return null;
+    if (numeric > 1e15) return numeric / 1e9;
+    if (numeric > 1e12) return numeric / 1e3;
+    return numeric;
+  }
+
+  function formatLatencyValue(ms) {
+    if (!Number.isFinite(ms)) return '';
+    const absMs = Math.max(0, ms);
+    if (absMs < 1000) {
+      return `${Math.round(absMs)}ms`;
+    }
+    const seconds = absMs / 1000;
+    if (seconds < 60) {
+      return `${seconds.toFixed(1)}s`;
+    }
+    const minutes = seconds / 60;
+    if (minutes < 60) {
+      return langPrefix === 'zh' ? `${minutes.toFixed(1)}分` : `${minutes.toFixed(1)}m`;
+    }
+    const hours = minutes / 60;
+    return langPrefix === 'zh' ? `${hours.toFixed(1)}小时` : `${hours.toFixed(1)}h`;
+  }
+
+  function formatAge(seconds) {
+    if (!Number.isFinite(seconds)) return '';
+    const abs = Math.max(0, seconds);
+    if (abs < 60) {
+      return langPrefix === 'zh' ? `${Math.round(abs)}秒` : `${Math.round(abs)}s`;
+    }
+    const minutes = abs / 60;
+    if (minutes < 60) {
+      return langPrefix === 'zh' ? `${minutes.toFixed(1)}分` : `${minutes.toFixed(1)}m`;
+    }
+    const hours = minutes / 60;
+    if (hours < 24) {
+      return langPrefix === 'zh' ? `${hours.toFixed(1)}小时` : `${hours.toFixed(1)}h`;
+    }
+    const days = hours / 24;
+    return langPrefix === 'zh' ? `${days.toFixed(1)}天` : `${days.toFixed(1)}d`;
   }
 
   class ChartManager {
@@ -596,14 +767,23 @@
       this.activeDrawing = null;
       this.drawMode = 'none';
       this.priceLine = null;
+      this.tooltipEl = null;
       this.lastLivePrice = null;
       this.intervalSpec = null;
       this.axisShowSeconds = false;
+      this.axisIncludeDate = true;
+      this.axisMode = 'time';
+      this.tickEpochBase = 0;
+      this.tickIndex = 0;
+      this.tickIndexMap = new Map();
+      this.tickTimeMap = new Map();
+      this.tickIndexCounter = 0;
       this.liveBar = null;
       this.liveBucket = null;
       this.liveTickCount = 0;
       this.liveTickTarget = 0;
       this.liveMaxBars = 800;
+      this.historyMaxBars = 4000;
       this.lastLiveTime = null;
       this._syncing = false;
       this._syncingIndicator = false;
@@ -625,11 +805,15 @@
         layout: { background: { color: '#ffffff' }, textColor: '#0f172a' },
         grid: { vertLines: { color: 'rgba(148, 163, 184, 0.3)' }, horzLines: { color: 'rgba(148, 163, 184, 0.3)' } },
         rightPriceScale: { borderColor: 'rgba(148, 163, 184, 0.4)' },
-        timeScale: { borderColor: 'rgba(148, 163, 184, 0.4)', timeVisible: true, secondsVisible: false },
+        timeScale: {
+          borderColor: 'rgba(148, 163, 184, 0.4)',
+          timeVisible: true,
+          secondsVisible: false,
+          tickMarkFormatter: (timestamp) => this._formatAxisTime(timestamp),
+        },
         localization: {
           locale,
-          timeFormatter: (timestamp) =>
-            formatAxisTime(timestamp, { timezoneMode: this.timezoneMode, showSeconds: this.axisShowSeconds }),
+          timeFormatter: (timestamp) => this._formatAxisTime(timestamp),
         },
         handleScroll: {
           mouseWheel: true,
@@ -641,6 +825,21 @@
           axisPressedMouseMove: true,
           mouseWheel: true,
           pinch: true,
+        },
+        crosshair: {
+          mode: 1,
+          vertLine: {
+            color: 'rgba(59, 130, 246, 0.35)',
+            width: 1,
+            style: 1,
+            labelBackgroundColor: '#1e293b',
+          },
+          horzLine: {
+            color: 'rgba(59, 130, 246, 0.35)',
+            width: 1,
+            style: 1,
+            labelBackgroundColor: '#1e293b',
+          },
         },
       };
       this.chart = chartLib.createChart(this.container, {
@@ -675,6 +874,7 @@
       }
 
       this._initOverlay();
+      this._initTooltip();
       this._bindResize();
       this._bindTimeSync();
       ChartManager.register(this);
@@ -720,6 +920,7 @@
       if (intervalSpec) {
         this.setIntervalSpec(intervalSpec, { preserveData: true });
       }
+      this._rebuildTickIndexMap();
       if (this.candleSeries) {
         this.candleSeries.setData(this.ohlcData);
       }
@@ -740,6 +941,87 @@
       this.renderOverlay();
     }
 
+    mergeData(bars) {
+      const cleaned = this._sanitizeBars(bars);
+      if (!cleaned.length) return false;
+      if (!Array.isArray(this.ohlcData) || !this.ohlcData.length) {
+        this.setData(cleaned);
+        return true;
+      }
+      const timeScale = this.chart && this.chart.timeScale ? this.chart.timeScale() : null;
+      const logicalRange = timeScale && timeScale.getVisibleLogicalRange ? timeScale.getVisibleLogicalRange() : null;
+      const added = filtered.length;
+      const merged = [];
+      let i = 0;
+      let j = 0;
+      const existing = this.ohlcData;
+      while (i < existing.length && j < cleaned.length) {
+        const left = existing[i];
+        const right = cleaned[j];
+        if (!left || !right) {
+          if (left) {
+            merged.push(left);
+            i += 1;
+          } else if (right) {
+            merged.push(right);
+            j += 1;
+          } else {
+            i += 1;
+            j += 1;
+          }
+          continue;
+        }
+        if (left.time < right.time - 1e-6) {
+          merged.push(left);
+          i += 1;
+        } else if (right.time < left.time - 1e-6) {
+          merged.push(right);
+          j += 1;
+        } else {
+          merged.push(right);
+          i += 1;
+          j += 1;
+        }
+      }
+      while (i < existing.length) {
+        merged.push(existing[i]);
+        i += 1;
+      }
+      while (j < cleaned.length) {
+        merged.push(cleaned[j]);
+        j += 1;
+      }
+      this.ohlcData = merged;
+      if (this.historyMaxBars > 0 && this.ohlcData.length > this.historyMaxBars) {
+        this.ohlcData = this.ohlcData.slice(-this.historyMaxBars);
+      }
+      if (this.candleSeries) {
+        this.candleSeries.setData(this.ohlcData);
+      }
+      if (this.lineSeries) {
+        this.lineSeries.setData(this._mapLineSeries());
+      }
+      this._updateVolumeSeries();
+      if (this.intervalSpec && this.intervalSpec.unit === 'tick') {
+        this._rebuildTickIndexMap();
+      }
+      this.updateOverlay();
+      this.updateIndicator();
+      if (this.ohlcData.length) {
+        const last = this.ohlcData[this.ohlcData.length - 1];
+        if (last && typeof last.close === 'number') {
+          this.updatePriceLine(last.close);
+        }
+      }
+      if (logicalRange && timeScale && timeScale.setVisibleLogicalRange && Number.isFinite(added) && added > 0) {
+        timeScale.setVisibleLogicalRange({
+          from: logicalRange.from + added,
+          to: logicalRange.to + added,
+        });
+      }
+      return true;
+    }
+
     setIntervalSpec(intervalSpec, { preserveData = false } = {}) {
       this.intervalSpec = intervalSpec;
       this._resetLiveState();
@@ -748,13 +1030,27 @@
       }
       // Use line series for all intervals to match TradingView-style line + volume layout.
       this.setSeriesMode('line');
-      const showSeconds = Boolean(intervalSpec && (intervalSpec.unit === 'tick' || intervalSpec.unit === 'second'));
+      const isTick = Boolean(intervalSpec && intervalSpec.unit === 'tick');
+      const isSecond = Boolean(intervalSpec && intervalSpec.unit === 'second');
+      this.liveMaxBars = isTick || isSecond ? this.historyMaxBars : 800;
+      this.axisMode = isTick ? 'tick' : 'time';
+      const showSeconds = Boolean(intervalSpec && (isTick || isSecond));
       const timeVisible = Boolean(intervalSpec && intervalSpec.unit !== 'day');
       this.setAxisOptions({ showSeconds, timeVisible });
+      if (isTick) {
+        this._rebuildTickIndexMap();
+      }
+      if (this.chart) {
+        this._applyLocalization(this.chart);
+      }
+      if (this.indicatorChart) {
+        this._applyLocalization(this.indicatorChart);
+      }
     }
 
     setAxisOptions({ showSeconds = false, timeVisible = true } = {}) {
       this.axisShowSeconds = Boolean(showSeconds);
+      this.axisIncludeDate = !timeVisible;
       if (this.chart) {
         this.chart.timeScale().applyOptions({
           timeVisible: Boolean(timeVisible),
@@ -819,24 +1115,26 @@
 
     updateLivePrice(price, ts, size = 0) {
       if (typeof price !== 'number' || Number.isNaN(price)) return;
-      const timestamp = Number.isFinite(ts) ? ts : Date.now() / 1000;
+      const normalizedTs = normalizeEpochSeconds(ts);
+      const timestamp = Number.isFinite(normalizedTs) ? normalizedTs : Date.now() / 1000;
       this.applyTradeUpdate({ price, size, ts: timestamp });
     }
 
     applyTradeUpdate(trade) {
       if (!trade || typeof trade.price !== 'number' || Number.isNaN(trade.price)) return;
       if (!this.candleSeries && !this.lineSeries) return;
-      const timestamp = Number.isFinite(trade.ts) ? trade.ts : Date.now() / 1000;
+      const normalizedTs = normalizeEpochSeconds(trade.ts);
+      const timestamp = Number.isFinite(normalizedTs) ? normalizedTs : Date.now() / 1000;
       const price = trade.price;
       const size = Number.isFinite(trade.size) ? trade.size : 0;
       this.updatePriceLine(price);
       const interval = this.intervalSpec;
       if (!interval) return;
-      const time = this._ensureMonotonicTime(timestamp);
       if (interval.unit === 'tick') {
-        this._applyTickTrade({ time, price, size }, interval.value);
+        this._applyTickTrade({ price, size, ts: timestamp }, interval.value);
         return;
       }
+      const time = this._ensureMonotonicTime(timestamp);
       const intervalSeconds = interval.seconds || 1;
       this._applyTimeTrade({ time, price, size }, intervalSeconds);
     }
@@ -847,7 +1145,8 @@
       if (typeof price !== 'number' || Number.isNaN(price)) return;
       const interval = Math.max(1, Number.parseInt(intervalSec, 10) || 0);
       if (!interval) return;
-      const timestamp = Number.isFinite(ts) ? ts : Date.now() / 1000;
+      const normalizedTs = normalizeEpochSeconds(ts);
+      const timestamp = Number.isFinite(normalizedTs) ? normalizedTs : Date.now() / 1000;
       const bucket = Math.floor(timestamp / interval) * interval;
       const lastIndex = this.ohlcData.length - 1;
       const last = this.ohlcData[lastIndex];
@@ -903,9 +1202,40 @@
         localization: {
           locale,
           timeFormatter: (timestamp) =>
-            formatAxisTime(timestamp, { timezoneMode: this.timezoneMode, showSeconds: this.axisShowSeconds }),
+            this._formatAxisTime(timestamp, {
+              includeDate: true,
+              fullDate: true,
+            }),
+        },
+        timeScale: {
+          tickMarkFormatter: (timestamp) => this._formatAxisTime(timestamp),
         },
       });
+    }
+
+    _formatAxisTime(timestamp, overrides = {}) {
+      const normalized = normalizeEpochSeconds(timestamp);
+      if (!Number.isFinite(normalized)) return '';
+      const options = {
+        timezoneMode: this.timezoneMode,
+        showSeconds: this.axisShowSeconds,
+        includeDate: this.axisIncludeDate,
+        fullDate: false,
+        ...overrides,
+      };
+      if (this.axisMode !== 'tick') {
+        return formatAxisTime(normalized, options);
+      }
+      const tickIndex = this._resolveTickIndex(normalized);
+      const tickTime = this._resolveTickTime(normalized);
+      const timeLabel = formatAxisTime(tickTime, {
+        ...options,
+        showSeconds: true,
+      });
+      if (tickIndex === null) {
+        return timeLabel;
+      }
+      return timeLabel ? `${timeLabel} · T${tickIndex}` : `T${tickIndex}`;
     }
 
     _resetLiveState() {
@@ -914,6 +1244,102 @@
       this.liveTickCount = 0;
       this.liveTickTarget = 0;
       this.lastLiveTime = null;
+    }
+
+    _tickKey(time) {
+      const normalized = normalizeEpochSeconds(time);
+      if (!Number.isFinite(normalized)) return '';
+      return normalized.toFixed(6);
+    }
+
+    _rebuildTickIndexMap() {
+      this.tickIndexMap.clear();
+      this.tickTimeMap.clear();
+      this.tickIndexCounter = 0;
+      if (!Array.isArray(this.ohlcData) || !this.ohlcData.length) return;
+      this.ohlcData.forEach((bar, idx) => {
+        const key = this._tickKey(bar.time);
+        if (!key) return;
+        this.tickIndexMap.set(key, idx);
+        this.tickTimeMap.set(idx, bar.time);
+        this.tickIndexCounter = idx + 1;
+      });
+    }
+
+    _assignTickIndex(bar) {
+      if (!bar) return null;
+      const key = this._tickKey(bar.time);
+      if (!key) return null;
+      if (!this.tickIndexMap.has(key)) {
+        this.tickIndexMap.set(key, this.tickIndexCounter);
+        this.tickTimeMap.set(this.tickIndexCounter, bar.time);
+        this.tickIndexCounter += 1;
+      }
+      const idx = this.tickIndexMap.get(key);
+      if (idx !== undefined) {
+        this.tickTimeMap.set(idx, bar.time);
+        return idx;
+      }
+      return null;
+    }
+
+    _resolveTickIndex(time) {
+      const key = this._tickKey(time);
+      if (key && this.tickIndexMap.has(key)) {
+        return this.tickIndexMap.get(key);
+      }
+      if (Number.isFinite(time) && time >= 0 && time < this.ohlcData.length) {
+        return Math.round(time);
+      }
+      if (!Array.isArray(this.ohlcData) || !this.ohlcData.length) return null;
+      if (Number.isFinite(time)) {
+        const bucket = Math.floor(time);
+        for (let i = this.ohlcData.length - 1; i >= 0; i -= 1) {
+          const bar = this.ohlcData[i];
+          if (!bar || typeof bar.time !== 'number') continue;
+          if (Math.floor(bar.time) === bucket) {
+            return i;
+          }
+          if (bar.time < time - 1) {
+            break;
+          }
+        }
+      }
+      for (let i = this.ohlcData.length - 1; i >= 0; i -= 1) {
+        const bar = this.ohlcData[i];
+        if (!bar || typeof bar.time !== 'number') continue;
+        if (bar.time <= time + 1e-6) {
+          return i;
+        }
+      }
+      return null;
+    }
+
+    _resolveTickTime(time) {
+      const idx = this._resolveTickIndex(time);
+      if (idx !== null && this.tickTimeMap.has(idx)) {
+        return this.tickTimeMap.get(idx);
+      }
+      if (idx !== null && this.ohlcData[idx] && Number.isFinite(this.ohlcData[idx].time)) {
+        return this.ohlcData[idx].time;
+      }
+      return time;
+    }
+
+    _resetTickAxis() {
+      this.tickIndex = 0;
+      this.tickEpochBase = Math.floor(Date.now() / 1000);
+    }
+
+    _applyTickTimeIndex() {
+      if (!this.ohlcData.length) return;
+      const base = Math.floor(Date.now() / 1000) - this.ohlcData.length;
+      this.tickEpochBase = base;
+      this.tickIndex = this.ohlcData.length;
+      this.ohlcData = this.ohlcData.map((bar, idx) => ({
+        ...bar,
+        time: base + idx,
+      }));
     }
 
     _syncLiveStateFromData(intervalSpec) {
@@ -927,6 +1353,7 @@
           this.liveTickCount = count;
           this.liveTickTarget = intervalSpec.value;
         }
+        this.tickIndex = this.ohlcData.length;
       } else {
         const intervalSeconds = intervalSpec.seconds || 1;
         const bucket = Math.floor(Number(last.time) / intervalSeconds) * intervalSeconds;
@@ -947,9 +1374,11 @@
       return adjusted;
     }
 
-    _applyTickTrade({ time, price, size }, ticksPerBar) {
+    _applyTickTrade({ price, size, ts }, ticksPerBar) {
       const target = Math.max(1, Number.parseInt(ticksPerBar, 10) || 1);
+      const timeSource = Number.isFinite(ts) ? ts : Date.now() / 1000;
       if (!this.liveBar || this.liveTickCount >= target) {
+        const time = this._ensureMonotonicTime(timeSource);
         const bar = {
           time,
           open: price,
@@ -966,7 +1395,6 @@
         this.liveBar.high = Math.max(this.liveBar.high, price);
         this.liveBar.low = Math.min(this.liveBar.low, price);
         this.liveBar.close = price;
-        this.liveBar.time = time;
         this.liveBar.volume = (this.liveBar.volume || 0) + size;
         this.liveBar.trade_count = (this.liveBar.trade_count || 0) + 1;
         this.liveTickCount += 1;
@@ -976,6 +1404,15 @@
         this.liveTickCount = 0;
         this.liveBar = null;
       }
+    }
+
+    _nextTickTime() {
+      if (!Number.isFinite(this.tickEpochBase)) {
+        this.tickEpochBase = Math.floor(Date.now() / 1000);
+      }
+      const time = this.tickEpochBase + this.tickIndex;
+      this.tickIndex += 1;
+      return time;
     }
 
     _applyTimeTrade({ time, price, size }, intervalSeconds) {
@@ -1013,6 +1450,9 @@
       if (isNew || !last) {
         this.ohlcData.push({ ...bar });
         this._trimLiveBars();
+        if (this.intervalSpec && this.intervalSpec.unit === 'tick') {
+          this._assignTickIndex(bar);
+        }
         if (this.candleSeries) {
           this.candleSeries.update({ ...bar });
         }
@@ -1023,6 +1463,9 @@
         return;
       }
       this.ohlcData[lastIndex] = { ...bar };
+      if (this.intervalSpec && this.intervalSpec.unit === 'tick') {
+        this._assignTickIndex(bar);
+      }
       if (this.candleSeries) {
         this.candleSeries.update({ ...bar });
       }
@@ -1042,6 +1485,45 @@
         this.lineSeries.setData(this._mapLineSeries());
       }
       this._updateVolumeSeries();
+      if (this.intervalSpec && this.intervalSpec.unit === 'tick') {
+        this._rebuildTickIndexMap();
+      }
+    }
+
+    prependData(bars) {
+      if (!Array.isArray(bars) || !bars.length) return false;
+      const cleaned = this._sanitizeBars(bars);
+      if (!cleaned.length) return false;
+      const earliest = this.ohlcData && this.ohlcData.length ? this.ohlcData[0].time : null;
+      const filtered =
+        Number.isFinite(earliest) ? cleaned.filter((bar) => bar.time < earliest - 1e-6) : cleaned;
+      if (!filtered.length) return false;
+      const timeScale = this.chart ? this.chart.timeScale() : null;
+      const logicalRange = timeScale && timeScale.getVisibleLogicalRange ? timeScale.getVisibleLogicalRange() : null;
+      this.ohlcData = filtered.concat(this.ohlcData || []);
+      if (this.historyMaxBars > 0 && this.ohlcData.length > this.historyMaxBars) {
+        this.ohlcData = this.ohlcData.slice(-this.historyMaxBars);
+      }
+      if (this.candleSeries) {
+        this.candleSeries.setData(this.ohlcData);
+      }
+      if (this.lineSeries) {
+        this.lineSeries.setData(this._mapLineSeries());
+      }
+      this._updateVolumeSeries();
+      if (this.intervalSpec && this.intervalSpec.unit === 'tick') {
+        this._rebuildTickIndexMap();
+      }
+      if (this.overlayMode && this.overlayMode !== 'none') {
+        this.updateOverlay();
+      }
+      if (this.indicatorMode && this.indicatorMode !== 'none') {
+        this.updateIndicator();
+      }
+      if (logicalRange && timeScale && timeScale.setVisibleLogicalRange) {
+        timeScale.setVisibleLogicalRange(logicalRange);
+      }
+      return true;
     }
 
     resize() {
@@ -1190,9 +1672,34 @@
       if (this.lineSeries) {
         this.lineSeries.applyOptions({ visible: nextMode === 'line' });
       }
+      if (this.priceLine) {
+        try {
+          if (this.candleSeries && this.candleSeries.removePriceLine) {
+            this.candleSeries.removePriceLine(this.priceLine);
+          }
+        } catch (error) {
+          // noop
+        }
+        try {
+          if (this.lineSeries && this.lineSeries.removePriceLine) {
+            this.lineSeries.removePriceLine(this.priceLine);
+          }
+        } catch (error) {
+          // noop
+        }
+      }
       this.priceLine = null;
       if (this.lastLivePrice !== null) {
         this.updatePriceLine(this.lastLivePrice);
+      }
+    }
+
+    resetZoom() {
+      if (this.chart) {
+        this.chart.timeScale().fitContent();
+      }
+      if (this.indicatorChart) {
+        this.indicatorChart.timeScale().fitContent();
       }
     }
 
@@ -1258,7 +1765,7 @@
       const cleaned = [];
       bars.forEach((bar) => {
         if (!bar) return;
-        const time = Number.isFinite(bar.time) ? Number(bar.time) : Number.parseFloat(bar.time);
+        const time = normalizeEpochSeconds(bar.time);
         const open = Number.isFinite(bar.open) ? bar.open : Number.parseFloat(bar.open);
         const high = Number.isFinite(bar.high) ? bar.high : Number.parseFloat(bar.high);
         const low = Number.isFinite(bar.low) ? bar.low : Number.parseFloat(bar.low);
@@ -1277,7 +1784,72 @@
         }
         cleaned.push(entry);
       });
+      cleaned.sort((a, b) => a.time - b.time);
       return cleaned;
+    }
+
+    _initTooltip() {
+      if (!this.container || !this.chart) return;
+      this.tooltipEl = document.createElement('div');
+      this.tooltipEl.className = 'market-chart-tooltip';
+      this.tooltipEl.hidden = true;
+      this.container.appendChild(this.tooltipEl);
+      this.chart.subscribeCrosshairMove((param) => this._handleCrosshairMove(param));
+    }
+
+    _findBarByTime(time) {
+      if (!Array.isArray(this.ohlcData) || !this.ohlcData.length) return null;
+      for (let i = this.ohlcData.length - 1; i >= 0; i -= 1) {
+        const bar = this.ohlcData[i];
+        if (bar && bar.time === time) return bar;
+      }
+      return null;
+    }
+
+    _handleCrosshairMove(param) {
+      if (!this.tooltipEl) return;
+      if (!param || !param.time || !param.point) {
+        this.tooltipEl.hidden = true;
+        return;
+      }
+      const seriesData = param.seriesData;
+      let ohlc = seriesData.get(this.candleSeries);
+      if (!ohlc || typeof ohlc.open !== 'number') {
+        const linePoint = seriesData.get(this.lineSeries);
+        if (linePoint && typeof linePoint.value === 'number') {
+          ohlc = { open: linePoint.value, high: linePoint.value, low: linePoint.value, close: linePoint.value };
+        }
+      }
+      if (!ohlc || typeof ohlc.open !== 'number') {
+        this.tooltipEl.hidden = true;
+        return;
+      }
+      const tickIndex = this.axisMode === 'tick' ? this._resolveTickIndex(param.time) : null;
+      const volumeBar = this._findBarByTime(param.time);
+      const volume = volumeBar && Number.isFinite(volumeBar.volume) ? volumeBar.volume : null;
+      const timeLabel = this._formatAxisTime(param.time, { includeDate: true, fullDate: true });
+      const parts = [
+        `${TEXT.chartTooltipTime || 'Time'}: ${timeLabel}`,
+        `${TEXT.chartTooltipOpen || 'O'}: ${ohlc.open.toFixed(2)}`,
+        `${TEXT.chartTooltipHigh || 'H'}: ${ohlc.high.toFixed(2)}`,
+        `${TEXT.chartTooltipLow || 'L'}: ${ohlc.low.toFixed(2)}`,
+        `${TEXT.chartTooltipClose || 'C'}: ${ohlc.close.toFixed(2)}`,
+      ];
+      if (tickIndex !== null) {
+        parts.unshift(`${TEXT.chartTooltipTick || 'T'}: ${tickIndex}`);
+      }
+      if (volume !== null) {
+        parts.push(`${TEXT.chartTooltipVolume || 'Vol'}: ${formatCompactNumber(volume)}`);
+      }
+      this.tooltipEl.textContent = parts.join(' · ');
+      const margin = 8;
+      const x = Math.min(
+        Math.max(param.point.x + margin, margin),
+        (this.container.clientWidth || 0) - margin
+      );
+      const y = Math.max(param.point.y - 10, margin);
+      this.tooltipEl.style.transform = `translate(${x}px, ${y}px)`;
+      this.tooltipEl.hidden = false;
     }
 
     _initOverlay() {
@@ -1835,7 +2407,11 @@
       setSnapshotStatus(lastSnapshotMeta, lastSnapshotKey);
     }
     if (detailChartCache && detailChartCache.payload) {
-      updateDetailTimes(detailChartCache.payload);
+      const intervalSpec = resolveIntervalSpec(detailChartCache.interval || detailInterval);
+      updateDetailTimes(detailChartCache.payload, {
+        intervalSpec,
+        bars: detailChartCache.bars,
+      });
     }
   }
 
@@ -2330,18 +2906,162 @@
 
   function scheduleLiveWait() {
     clearLiveWait();
+    const waitMs = isHighFreqInterval(detailInterval) ? Math.min(4000, LIVE_WAIT_MS) : LIVE_WAIT_MS;
+    if (isHighFreqInterval(detailInterval)) {
+      startChartPolling();
+    }
     liveWaitTimer = setTimeout(() => {
       if (!chartVisible || !detailSymbol) return;
       if (lastLiveUpdateAt) return;
       setDetailStatus(TEXT.detailLiveWaiting);
       startLiveQuotePolling(detailSymbol);
-    }, LIVE_WAIT_MS);
+      if (isHighFreqInterval(detailInterval)) {
+        startChartPolling();
+      }
+    }, waitMs);
   }
 
   function stopLiveQuotePolling() {
     if (liveQuoteTimer) {
       clearInterval(liveQuoteTimer);
       liveQuoteTimer = null;
+    }
+  }
+
+  function isHighFreqInterval(intervalKey) {
+    const spec = resolveIntervalSpec(intervalKey);
+    return Boolean(spec && (spec.unit === 'tick' || spec.unit === 'second'));
+  }
+
+  function stopChartPolling() {
+    if (chartPollTimer) {
+      clearInterval(chartPollTimer);
+      chartPollTimer = null;
+    }
+    chartPollInFlight = false;
+  }
+
+  function startChartPolling() {
+    if (chartPollTimer) return;
+    chartPollTimer = setInterval(() => {
+      refreshChartBarsOnly();
+    }, CHART_POLL_MS);
+    refreshChartBarsOnly();
+  }
+
+  async function refreshChartBarsOnly() {
+    if (chartPollInFlight) return;
+    if (!chartVisible || !detailSymbol) return;
+    if (!isHighFreqInterval(detailInterval)) return;
+    if (chartSocketReady && isChartRealtimeActive()) return;
+    chartPollInFlight = true;
+    try {
+      const intervalKey = normalizeIntervalKey(detailInterval) || resolveDefaultInterval(detailRange);
+      if (!intervalKey) return;
+      const payload = await fetchChartBars(detailSymbol, detailRange, intervalKey);
+      if (!payload || !Array.isArray(payload.bars) || !payload.bars.length) return;
+      const intervalSpec = resolveIntervalSpec(intervalKey);
+      if (detailManager) {
+        const merged = detailManager.mergeData(payload.bars);
+        if (!merged) {
+          detailManager.setData(payload.bars, { intervalSpec });
+        }
+        chartLazyCursor = detailManager.ohlcData[0] ? detailManager.ohlcData[0].time : chartLazyCursor;
+        chartLazyExhausted = false;
+      }
+      updateDetailTimes(payload, {
+        updateSubtitle: true,
+        intervalSpec,
+        bars: detailManager && detailManager.ohlcData ? detailManager.ohlcData : payload.bars,
+      });
+      updateDetailLatencyFromTs(payload.latest_trade_ts || payload.server_ts);
+      if (payload.window_limited) {
+        setDetailStatus(TEXT.detailWindowLimited);
+      } else if (payload.downgrade_message) {
+        setDetailStatus(TEXT.detailDowngraded(payload.downgrade_message));
+      } else {
+        setDetailStatus('');
+      }
+    } catch (error) {
+      // keep silent; status is handled by live stream
+    } finally {
+      chartPollInFlight = false;
+    }
+  }
+
+  async function loadOlderChartBars() {
+    if (chartLazyLoading || chartLazyExhausted) return;
+    if (!detailSymbol || !detailManager) return;
+    if (!isHighFreqInterval(detailInterval)) return;
+    const intervalKey = normalizeIntervalKey(detailInterval) || resolveDefaultInterval(detailRange);
+    const intervalSpec = resolveIntervalSpec(intervalKey);
+    if (!intervalSpec) return;
+    const earliest =
+      Number.isFinite(chartLazyCursor) ? chartLazyCursor : detailManager.ohlcData[0] && detailManager.ohlcData[0].time;
+    if (!Number.isFinite(earliest)) return;
+    chartLazyLoading = true;
+    setDetailLazy(true);
+    try {
+      const step = intervalSpec.unit === 'tick' ? 0.000001 : Math.max(1, intervalSpec.seconds || 1);
+      const endTs = earliest - step;
+      const payload = await fetchChartBars(detailSymbol, detailRange, intervalKey, { endTs });
+      const bars = payload && Array.isArray(payload.bars) ? payload.bars : [];
+      if (!bars.length) {
+        chartLazyExhausted = true;
+        return;
+      }
+      const inserted = detailManager.prependData(bars);
+      if (!inserted) {
+        chartLazyExhausted = true;
+        return;
+      }
+      chartLazyCursor = detailManager.ohlcData[0] ? detailManager.ohlcData[0].time : chartLazyCursor;
+      if (payload.latest_trade_ts) {
+        updateDetailLatencyFromTs(payload.latest_trade_ts, { intervalSpec });
+      }
+    } catch (error) {
+      // Ignore lazy load failures.
+    } finally {
+      chartLazyLoading = false;
+      setDetailLazy(false);
+    }
+  }
+
+  function bindChartLazyLoad() {
+    if (!detailManager || !detailManager.chart) return;
+    if (detailManager._lazyLoadBound) return;
+    const timeScale = detailManager.chart.timeScale();
+    if (!timeScale || typeof timeScale.subscribeVisibleTimeRangeChange !== 'function') return;
+    detailManager._lazyLoadBound = true;
+    const handleMaybeLoad = (range) => {
+      if (!chartVisible || !detailSymbol) return;
+      if (!isHighFreqInterval(detailInterval)) return;
+      if (chartLazyLoading || chartLazyExhausted) return;
+      const intervalSpec = detailManager.intervalSpec;
+      if (intervalSpec && intervalSpec.unit === 'tick') {
+        if (range && Number.isFinite(range.from) && range.from <= 2) {
+          loadOlderChartBars();
+          return;
+        }
+        const logicalRange =
+          typeof timeScale.getVisibleLogicalRange === 'function' ? timeScale.getVisibleLogicalRange() : null;
+        if (logicalRange && Number.isFinite(logicalRange.from) && logicalRange.from <= 2) {
+          loadOlderChartBars();
+        }
+        return;
+      }
+      const earliest =
+        Number.isFinite(chartLazyCursor) ? chartLazyCursor : detailManager.ohlcData[0] && detailManager.ohlcData[0].time;
+      if (!Number.isFinite(earliest)) return;
+      if (!range || !Number.isFinite(range.from)) return;
+      const threshold = Math.max(1, intervalSpec && intervalSpec.seconds ? intervalSpec.seconds * 2 : 2);
+      if (range.from <= earliest + threshold) {
+        loadOlderChartBars();
+      }
+    };
+    timeScale.subscribeVisibleTimeRangeChange((range) => handleMaybeLoad(range));
+    if (typeof timeScale.subscribeVisibleLogicalRangeChange === 'function') {
+      timeScale.subscribeVisibleLogicalRangeChange((range) => handleMaybeLoad(range));
     }
   }
 
@@ -2446,6 +3166,7 @@
     if (!chartVisible) {
       clearLiveWait();
       stopLiveQuotePolling();
+      stopChartPolling();
       disconnectChartSocket();
     }
   }
@@ -2476,11 +3197,10 @@
         detailChangeEl.textContent = '--';
       }
     }
-    updateDetailTimes(payload);
   }
 
   function updateDetailTimes(payload, options = {}) {
-    const { updateSubtitle = true } = options;
+    const { updateSubtitle = true, intervalSpec = null, bars = null } = options;
     const raw = payload && payload.generated_at ? payload.generated_at : '';
     const display = raw ? formatDisplayTime(raw) : '';
     if (detailMetaEl) {
@@ -2490,7 +3210,39 @@
       detailUpdated.textContent = display ? `${TEXT.updatedLabel} ${display}` : '';
     }
     if (detailSubtitle && updateSubtitle) {
-      if (display) {
+      let dataTs = null;
+      if (payload) {
+        dataTs = normalizeEpochSeconds(payload.latest_trade_ts);
+      }
+      const resolveLatestFromBars = (list) => {
+        if (!Array.isArray(list) || !list.length) return null;
+        let latest = null;
+        list.forEach((bar) => {
+          const ts = normalizeEpochSeconds(bar && bar.time);
+          if (!Number.isFinite(ts)) return;
+          if (!Number.isFinite(latest) || ts > latest) {
+            latest = ts;
+          }
+        });
+        return latest;
+      };
+      if (!Number.isFinite(dataTs)) {
+        const managed = detailManager && Array.isArray(detailManager.ohlcData) ? detailManager.ohlcData : null;
+        dataTs = resolveLatestFromBars(managed);
+      }
+      if (!Number.isFinite(dataTs)) {
+        dataTs = resolveLatestFromBars(bars);
+      }
+      if (Number.isFinite(dataTs)) {
+        const showSeconds = Boolean(intervalSpec && (intervalSpec.unit === 'tick' || intervalSpec.unit === 'second'));
+        const dataDisplay = formatAxisTime(dataTs, {
+          timezoneMode,
+          showSeconds,
+          includeDate: true,
+          fullDate: true,
+        });
+        detailSubtitle.textContent = langPrefix === 'zh' ? `数据时间：${dataDisplay}` : `Data time: ${dataDisplay}`;
+      } else if (display) {
         detailSubtitle.textContent = langPrefix === 'zh' ? `更新时间：${display}` : `Updated: ${display}`;
       } else {
         detailSubtitle.textContent = '';
@@ -2503,15 +3255,44 @@
     detailLatency.textContent = text || '';
   }
 
-  function updateDetailLatencyFromTs(ts) {
-    if (!detailLatency) return;
-    const numeric = Number(ts);
-    if (!Number.isFinite(numeric)) {
-      setDetailLatencyText('');
+  function setDetailLazy(isLoading) {
+    if (!detailLazy) return;
+    if (isLoading) {
+      detailLazy.textContent = TEXT.detailLazyLoading || TEXT.loadingMore || 'Loading…';
+      detailLazy.hidden = false;
       return;
     }
-    const latencyMs = Math.max(0, Math.round(Date.now() - numeric * 1000));
-    setDetailLatencyText(`${TEXT.latencyLabel} ${latencyMs}${TEXT.latencyUnit}`);
+    detailLazy.hidden = true;
+  }
+
+  function updateDetailLatencyFromTs(ts, options = {}) {
+    const numeric = normalizeEpochSeconds(ts);
+    if (!Number.isFinite(numeric)) {
+      if (detailLatency) {
+        setDetailLatencyText('');
+      }
+      lastTradeAgeSeconds = null;
+      lastTradeStaleLabel = '';
+      return;
+    }
+    const nowSec = Date.now() / 1000;
+    const ageSeconds = Math.max(0, nowSec - numeric);
+    const latencyText = formatLatencyValue(ageSeconds * 1000);
+    if (detailLatency) {
+      setDetailLatencyText(latencyText ? `${TEXT.latencyLabel} ${latencyText}` : '');
+    }
+    lastTradeAgeSeconds = ageSeconds;
+    const intervalSpec = options.intervalSpec || (detailManager ? detailManager.intervalSpec : null);
+    if (intervalSpec && (intervalSpec.unit === 'tick' || intervalSpec.unit === 'second')) {
+      const threshold = intervalSpec.unit === 'tick' ? 15 : 60;
+      if (ageSeconds > threshold) {
+        lastTradeStaleLabel = TEXT.detailStale(formatAge(ageSeconds));
+      } else {
+        lastTradeStaleLabel = '';
+      }
+    } else {
+      lastTradeStaleLabel = '';
+    }
   }
 
   function hasCachedDetailInfo(symbol, rangeKey) {
@@ -2589,6 +3370,7 @@
           detailManager.setIntervalSpec(spec, { preserveData: true });
         }
         detailManager.setTimezone(timezoneMode);
+        bindChartLazyLoad();
       }
       return ready;
     } catch (error) {
@@ -2709,16 +3491,25 @@
     const intervalKey =
       (chartData.interval && chartData.interval.key) ||
       (chartData.interval_key ? chartData.interval_key : detailInterval);
-    detailBarIntervalSec = resolveBarIntervalSeconds(intervalKey) || inferBarIntervalSeconds(bars);
+    const intervalSpec = resolveIntervalSpec(intervalKey);
+    detailBarIntervalSec =
+      intervalSpec && intervalSpec.unit !== 'tick'
+        ? resolveBarIntervalSeconds(intervalKey) || inferBarIntervalSeconds(bars)
+        : null;
     updateDetailTimeScale(intervalKey);
+    updateDetailTimes(chartData, { intervalSpec, bars });
+    setDetailLazy(false);
     if (!renderChart) return;
     if (!ensureDetailChart() || !detailManager) {
       pendingChartRender = { symbol, rangeKey, payload, bars, chartPayload: chartData };
       scheduleChartInit();
       return;
     }
-    const intervalSpec = resolveIntervalSpec(intervalKey);
     detailManager.setData(bars, { intervalSpec });
+    updateDetailTimes(chartData, { intervalSpec, bars: detailManager.ohlcData });
+    chartLazyLoading = false;
+    chartLazyExhausted = false;
+    chartLazyCursor = detailManager.ohlcData[0] ? detailManager.ohlcData[0].time : null;
     if (detailSource) {
       const sourceLabel = TEXT.sourceLabels[chartData.data_source] || TEXT.sourceLabels.unknown || '';
       const sourceText = sourceLabel ? `${TEXT.sourcePrefix || ''}${sourceLabel}` : '';
@@ -2730,24 +3521,26 @@
           : '';
       detailSource.textContent = `${sourceText}${rawHint}`;
     }
-    updateDetailTimes(chartData);
     if (chartData) {
-      updateDetailLatencyFromTs(chartData.latest_trade_ts || chartData.server_ts);
+      updateDetailLatencyFromTs(chartData.latest_trade_ts || chartData.server_ts, { intervalSpec });
     }
     if (detailTitle) {
       const intervalLabel = getIntervalLabel(intervalKey);
       detailTitle.textContent = intervalLabel ? `${symbol} · ${intervalLabel}` : symbol;
     }
+    let statusMessage = '';
     if (chartData.downgrade_message) {
-      setDetailStatus(TEXT.detailDowngraded(chartData.downgrade_message));
+      statusMessage = TEXT.detailDowngraded(chartData.downgrade_message);
     } else if (chartData.window_limited) {
-      setDetailStatus(TEXT.detailWindowLimited);
-    } else {
-      setDetailStatus('');
+      statusMessage = TEXT.detailWindowLimited;
     }
+    if (lastTradeStaleLabel) {
+      statusMessage = statusMessage ? `${statusMessage} · ${lastTradeStaleLabel}` : lastTradeStaleLabel;
+    }
+    setDetailStatus(statusMessage);
   }
 
-  async function fetchChartBars(symbol, rangeKey, intervalKey) {
+  async function fetchChartBars(symbol, rangeKey, intervalKey, options = {}) {
     const endpointBase = chartApiUrl || '/api/market/chart/';
     const endpoint = endpointBase.endsWith('/') ? endpointBase : `${endpointBase}/`;
     const params = new URLSearchParams({
@@ -2755,6 +3548,12 @@
       range: rangeKey,
       interval: intervalKey,
     });
+    if (options && Number.isFinite(options.endTs)) {
+      params.set('end', String(options.endTs));
+    }
+    if (options && Number.isFinite(options.startTs)) {
+      params.set('start', String(options.startTs));
+    }
     const response = await fetch(`${endpoint}?${params.toString()}`, {
       headers: { 'X-Requested-With': 'XMLHttpRequest' },
       credentials: 'same-origin',
@@ -2886,6 +3685,9 @@
       btn.classList.toggle('is-active', btn.dataset.range === rangeKey);
     });
     updateDetailTimeScale(detailInterval);
+    chartLazyLoading = false;
+    chartLazyExhausted = false;
+    chartLazyCursor = null;
   }
 
   function updateDetailTimeScale(intervalKey) {
@@ -3016,6 +3818,9 @@
     renderIntervalFavorites();
     updateIntervalFavButtons();
     updateDetailTimeScale(normalized);
+    chartLazyLoading = false;
+    chartLazyExhausted = false;
+    chartLazyCursor = null;
     if (detailManager) {
       const spec = resolveIntervalSpec(normalized);
       if (spec) {
@@ -3191,7 +3996,9 @@
   }
 
   function isChartRealtimeActive() {
-    return Boolean(chartVisible && detailSymbol && chartSocketReady);
+    if (!chartVisible || !detailSymbol || !chartSocketReady) return false;
+    if (!lastLiveUpdateAt) return false;
+    return Date.now() - lastLiveUpdateAt < LIVE_CHART_STALE_MS;
   }
 
   function connectChartSocket() {
@@ -3210,10 +4017,24 @@
         chartSocket.send(JSON.stringify({ action: 'subscribe', symbol: chartSocketSymbol }));
         scheduleLiveWait();
       }
+      if (chartHeartbeatTimer) {
+        clearInterval(chartHeartbeatTimer);
+      }
+      chartHeartbeatTimer = setInterval(() => {
+        if (!chartSocket || chartSocket.readyState !== WebSocket.OPEN) return;
+        chartSocket.send(JSON.stringify({ action: 'ping' }));
+      }, 15000);
     };
     chartSocket.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data);
+        if (payload && (payload.type === 'pong' || payload.action === 'pong')) {
+          chartHeartbeatLastPong = Date.now();
+          if (payload.server_ts) {
+            updateDetailLatencyFromTs(payload.server_ts);
+          }
+          return;
+        }
         applyChartTradeUpdate(payload);
       } catch (error) {
         return;
@@ -3221,6 +4042,10 @@
     };
     chartSocket.onclose = () => {
       chartSocketReady = false;
+      if (chartHeartbeatTimer) {
+        clearInterval(chartHeartbeatTimer);
+        chartHeartbeatTimer = null;
+      }
       if (chartVisible && detailSymbol) {
         chartSocketRetryTimer = setTimeout(connectChartSocket, 2500);
       }
@@ -3237,6 +4062,16 @@
     }
     chartSocket = null;
     chartSocketReady = false;
+    chartTradeBuffer = [];
+    if (chartHeartbeatTimer) {
+      clearInterval(chartHeartbeatTimer);
+      chartHeartbeatTimer = null;
+    }
+    stopChartPolling();
+    if (chartTradeFlushHandle) {
+      cancelAnimationFrame(chartTradeFlushHandle);
+      chartTradeFlushHandle = null;
+    }
   }
 
   function setChartSocketSymbol(symbol) {
@@ -3246,6 +4081,11 @@
       chartSocket.send(JSON.stringify({ action: 'unsubscribe', symbol: chartSocketSymbol }));
     }
     chartSocketSymbol = normalized;
+    chartTradeBuffer = [];
+    if (chartTradeFlushHandle) {
+      cancelAnimationFrame(chartTradeFlushHandle);
+      chartTradeFlushHandle = null;
+    }
     if (!chartSocketReady) {
       connectChartSocket();
       return;
@@ -3256,33 +4096,79 @@
   }
 
   function applyChartTradeUpdate(update) {
+    enqueueChartTrade(update);
+  }
+
+  function enqueueChartTrade(update) {
     if (!update || typeof update !== 'object') return;
     const symbol = normalizeSymbol(update.symbol || '');
     if (!symbol || symbol !== detailSymbol) return;
-    const price = typeof update.price === 'number' ? update.price : Number.parseFloat(update.price);
-    const size = typeof update.size === 'number' ? update.size : Number.parseFloat(update.size);
-    const ts = typeof update.ts === 'number' ? update.ts : Number.parseFloat(update.ts);
-    if (!Number.isFinite(price)) return;
-    if (detailManager) {
-      detailManager.applyTradeUpdate({ price, size, ts });
-      if (detailPriceEl) {
-        detailPriceEl.textContent = price.toFixed(2);
-      }
-      if (detailChangeEl && detailManager.ohlcData.length > 1) {
-        const last = detailManager.ohlcData[detailManager.ohlcData.length - 1];
-        const prev = detailManager.ohlcData[detailManager.ohlcData.length - 2];
-        const changePct = prev && prev.close ? ((last.close / prev.close) - 1) * 100 : null;
-        detailChangeEl.textContent = typeof changePct === 'number' ? formatChange(changePct) : '--';
-        detailChangeEl.classList.remove('is-up', 'is-down');
-        applyChangeState(detailChangeEl, changePct, false);
-      }
+    if (Array.isArray(update.trades)) {
+      update.trades.forEach((trade) => {
+        if (!trade || typeof trade !== 'object') return;
+        chartTradeBuffer.push({
+          symbol,
+          price: trade.price,
+          size: trade.size,
+          ts: trade.ts,
+          server_ts: update.server_ts,
+        });
+      });
+    } else {
+      chartTradeBuffer.push(update);
     }
-    if (Number.isFinite(ts)) {
-      updateDetailLatencyFromTs(ts);
-    } else if (Number.isFinite(update.server_ts)) {
-      updateDetailLatencyFromTs(update.server_ts);
+    if (chartTradeBuffer.length > MAX_CHART_TRADE_BUFFER) {
+      chartTradeBuffer = chartTradeBuffer.slice(-MAX_CHART_TRADE_BUFFER);
+    }
+    if (chartTradeFlushHandle) return;
+    chartTradeFlushHandle = requestAnimationFrame(flushChartTradeBuffer);
+  }
+
+  function flushChartTradeBuffer() {
+    chartTradeFlushHandle = null;
+    if (!chartTradeBuffer.length) return;
+    const batch = chartTradeBuffer;
+    chartTradeBuffer = [];
+    let lastUpdate = null;
+    for (let i = 0; i < batch.length; i += 1) {
+      const update = batch[i];
+      if (!update || typeof update !== 'object') continue;
+      const price = typeof update.price === 'number' ? update.price : Number.parseFloat(update.price);
+      if (!Number.isFinite(price)) continue;
+      const size = typeof update.size === 'number' ? update.size : Number.parseFloat(update.size);
+      const ts = typeof update.ts === 'number' ? update.ts : Number.parseFloat(update.ts);
+      if (detailManager) {
+        detailManager.applyTradeUpdate({ price, size, ts });
+      }
+      lastUpdate = { update, price, ts };
+    }
+    if (!lastUpdate) return;
+    if (detailPriceEl) {
+      detailPriceEl.textContent = lastUpdate.price.toFixed(2);
+    }
+    if (detailChangeEl && detailManager && detailManager.ohlcData.length > 1) {
+      const last = detailManager.ohlcData[detailManager.ohlcData.length - 1];
+      const prev = detailManager.ohlcData[detailManager.ohlcData.length - 2];
+      const changePct = prev && prev.close ? ((last.close / prev.close) - 1) * 100 : null;
+      detailChangeEl.textContent = typeof changePct === 'number' ? formatChange(changePct) : '--';
+      detailChangeEl.classList.remove('is-up', 'is-down');
+      applyChangeState(detailChangeEl, changePct, false);
+    }
+    const latencyTs = Number.isFinite(lastUpdate.update.server_ts)
+      ? lastUpdate.update.server_ts
+      : lastUpdate.ts;
+    if (Number.isFinite(latencyTs)) {
+      const intervalSpec = detailManager ? detailManager.intervalSpec : null;
+      updateDetailLatencyFromTs(latencyTs, { intervalSpec });
+    }
+    if (detailStatus && !lastTradeStaleLabel) {
+      const marker = langPrefix === 'zh' ? '行情已延迟' : 'Stale data';
+      if ((detailStatus.textContent || '').includes(marker)) {
+        setDetailStatus(TEXT.detailLive);
+      }
     }
     stopLiveQuotePolling();
+    stopChartPolling();
     lastLiveUpdateAt = Date.now();
     if (detailStatus && detailStatus.textContent === TEXT.detailLiveWaiting) {
       setDetailStatus(TEXT.detailLive);
@@ -4008,8 +4894,10 @@
     const last = bars[bars.length - 1];
     const prev = bars[bars.length - 2];
     if (!last || !prev) return null;
-    if (typeof last.time !== 'number' || typeof prev.time !== 'number') return null;
-    const delta = last.time - prev.time;
+    const lastTime = normalizeEpochSeconds(last.time);
+    const prevTime = normalizeEpochSeconds(prev.time);
+    if (!Number.isFinite(lastTime) || !Number.isFinite(prevTime)) return null;
+    const delta = lastTime - prevTime;
     return delta > 0 ? delta : null;
   }
 
@@ -5079,6 +5967,13 @@
       detailAdvancedPanel.hidden = !willOpen;
       detailAdvancedToggle.classList.toggle('is-active', willOpen);
       detailAdvancedToggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    });
+  }
+
+  if (detailResetZoom) {
+    detailResetZoom.addEventListener('click', () => {
+      if (!ensureDetailChart() || !detailManager) return;
+      detailManager.resetZoom();
     });
   }
 

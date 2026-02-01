@@ -8,7 +8,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 
 from .realtime.market_stream import GROUP_NAME as MARKET_STREAM_GROUP, subscribe, unsubscribe
 from .realtime.chart_stream import (
-    GROUP_NAME as CHART_STREAM_GROUP,
+    GROUP_PREFIX as CHART_STREAM_GROUP_PREFIX,
     add_symbol as chart_add_symbol,
     remove_symbol as chart_remove_symbol,
     subscribe as chart_subscribe,
@@ -48,15 +48,16 @@ class MarketChartConsumer(AsyncWebsocketConsumer):
         self._symbol: str | None = None
 
     async def connect(self) -> None:
-        await self.channel_layer.group_add(CHART_STREAM_GROUP, self.channel_name)
         await self.accept()
         user = self.scope.get("user")
         user_id = str(user.id) if user and getattr(user, "is_authenticated", False) else None
         await sync_to_async(chart_subscribe)(user_id)
 
     async def disconnect(self, close_code: int) -> None:
-        await self.channel_layer.group_discard(CHART_STREAM_GROUP, self.channel_name)
         if self._symbol:
+            await self.channel_layer.group_discard(
+                f"{CHART_STREAM_GROUP_PREFIX}-{self._symbol}", self.channel_name
+            )
             await sync_to_async(chart_remove_symbol)(self._symbol)
             self._symbol = None
         await sync_to_async(chart_unsubscribe)()
@@ -72,15 +73,25 @@ class MarketChartConsumer(AsyncWebsocketConsumer):
             return
         action = str(payload.get("action") or "").lower()
         symbol = str(payload.get("symbol") or payload.get("ticker") or "").upper()
+        if action == "ping":
+            await self.send(text_data=json.dumps({"type": "pong", "server_ts": time.time()}))
+            return
         if action in {"subscribe", "set_symbol"} and symbol:
             if self._symbol and self._symbol != symbol:
+                await self.channel_layer.group_discard(
+                    f"{CHART_STREAM_GROUP_PREFIX}-{self._symbol}", self.channel_name
+                )
                 await sync_to_async(chart_remove_symbol)(self._symbol)
             self._symbol = symbol
+            await self.channel_layer.group_add(f"{CHART_STREAM_GROUP_PREFIX}-{symbol}", self.channel_name)
             user = self.scope.get("user")
             user_id = str(user.id) if user and getattr(user, "is_authenticated", False) else None
             await sync_to_async(chart_add_symbol)(symbol, user_id=user_id)
         elif action in {"unsubscribe", "clear"}:
             if self._symbol:
+                await self.channel_layer.group_discard(
+                    f"{CHART_STREAM_GROUP_PREFIX}-{self._symbol}", self.channel_name
+                )
                 await sync_to_async(chart_remove_symbol)(self._symbol)
                 self._symbol = None
 

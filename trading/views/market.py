@@ -43,6 +43,7 @@ from ..realtime.manual_orders import submit_manual_order
 from ..realtime.config import DEFAULT_CONFIG_NAME, load_realtime_config_from_payload
 from ..realtime.schema import RealtimePayloadError, validate_realtime_payload
 from ..realtime.chart_store import get_trades as chart_get_trades, get_latest_trade as chart_get_latest_trade
+from ..realtime.bars import parse_timestamp
 from ..market_aggregation import (
     aggregate_trades_to_tick_bars,
     aggregate_trades_to_time_bars,
@@ -2561,7 +2562,8 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
             chart_cache_ttl = 10
         else:
             chart_cache_ttl = 30
-    cache_enabled = chart_cache_ttl > 0 and interval.unit not in {"tick", "second"}
+    has_range_override = bool(params.get("start") or params.get("end"))
+    cache_enabled = chart_cache_ttl > 0 and interval.unit not in {"tick", "second"} and not has_range_override
     cache_key = build_cache_key("market-chart", symbol, range_key, interval.key, DEFAULT_FEED, request.user.id)
     if cache_enabled:
         cached = cache_get_object(cache_key, cache_alias=cache_alias)
@@ -2570,6 +2572,18 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
             return JsonResponse(cached, json_dumps_params={"ensure_ascii": False})
 
     start, end, range_seconds = _resolve_range_window(range_key)
+    start_override = parse_timestamp(params.get("start")) if params.get("start") else None
+    end_override = parse_timestamp(params.get("end")) if params.get("end") else None
+    if end_override is not None:
+        end = datetime.fromtimestamp(end_override, tz=timezone.utc)
+    if start_override is not None:
+        start = datetime.fromtimestamp(start_override, tz=timezone.utc)
+    if start_override is not None and end_override is not None:
+        range_seconds = max(1.0, float(end_override - start_override))
+    elif end_override is not None:
+        start = end - timedelta(seconds=range_seconds)
+    elif start_override is not None:
+        end = start + timedelta(seconds=range_seconds)
     downgrade_to: str | None = None
     downgrade_message: str | None = None
     window_limited = False

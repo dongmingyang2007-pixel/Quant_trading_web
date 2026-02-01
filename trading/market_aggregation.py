@@ -138,7 +138,7 @@ def aggregate_trades_to_time_bars(
                 bars.append(current)
             current_bucket = bucket
             current = {
-                "time": point.ts,
+                "time": float(current_bucket * interval),
                 "open": point.price,
                 "high": point.price,
                 "low": point.price,
@@ -150,7 +150,7 @@ def aggregate_trades_to_time_bars(
         current["high"] = max(float(current.get("high") or point.price), point.price)
         current["low"] = min(float(current.get("low") or point.price), point.price)
         current["close"] = point.price
-        current["time"] = point.ts
+        current["time"] = float(current_bucket * interval)
         current["volume"] = float(current.get("volume") or 0.0) + point.size
         current["trade_count"] = int(current.get("trade_count") or 0) + 1
 
