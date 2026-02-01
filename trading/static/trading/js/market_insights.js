@@ -772,6 +772,7 @@
       this.intervalSpec = null;
       this.axisShowSeconds = false;
       this.axisIncludeDate = true;
+      this.axisFullDate = false;
       this.axisMode = 'time';
       this.tickEpochBase = 0;
       this.tickIndex = 0;
@@ -913,7 +914,7 @@
     }
 
     setData(bars, options = {}) {
-      const { intervalSpec = null } = options || {};
+      const { intervalSpec = null, fitContent = true } = options || {};
       this._resetLiveState();
       this.lastLivePrice = null;
       this.ohlcData = this._sanitizeBars(bars);
@@ -929,7 +930,7 @@
       }
       this.updateOverlay();
       this.updateIndicator();
-      if (this.chart) {
+      if (this.chart && fitContent) {
         this.chart.timeScale().fitContent();
       }
       if (this.ohlcData.length) {
@@ -948,9 +949,10 @@
         this.setData(cleaned);
         return true;
       }
+      const prevLen = this.ohlcData.length;
+      const prevLastIndex = prevLen - 1;
       const timeScale = this.chart && this.chart.timeScale ? this.chart.timeScale() : null;
       const logicalRange = timeScale && timeScale.getVisibleLogicalRange ? timeScale.getVisibleLogicalRange() : null;
-      const added = filtered.length;
       const merged = [];
       let i = 0;
       let j = 0;
@@ -995,6 +997,8 @@
       if (this.historyMaxBars > 0 && this.ohlcData.length > this.historyMaxBars) {
         this.ohlcData = this.ohlcData.slice(-this.historyMaxBars);
       }
+      const newLen = this.ohlcData.length;
+      const delta = newLen - prevLen;
       if (this.candleSeries) {
         this.candleSeries.setData(this.ohlcData);
       }
@@ -1013,11 +1017,14 @@
           this.updatePriceLine(last.close);
         }
       }
-      if (logicalRange && timeScale && timeScale.setVisibleLogicalRange && Number.isFinite(added) && added > 0) {
-        timeScale.setVisibleLogicalRange({
-          from: logicalRange.from + added,
-          to: logicalRange.to + added,
-        });
+      if (logicalRange && timeScale && timeScale.setVisibleLogicalRange && Number.isFinite(delta) && delta > 0) {
+        const shouldStickToRight = Number.isFinite(prevLastIndex) && logicalRange.to >= prevLastIndex - 1e-6;
+        if (shouldStickToRight) {
+          timeScale.setVisibleLogicalRange({
+            from: logicalRange.from + delta,
+            to: logicalRange.to + delta,
+          });
+        }
       }
       return true;
     }
@@ -1035,8 +1042,10 @@
       this.liveMaxBars = isTick || isSecond ? this.historyMaxBars : 800;
       this.axisMode = isTick ? 'tick' : 'time';
       const showSeconds = Boolean(intervalSpec && (isTick || isSecond));
-      const timeVisible = Boolean(intervalSpec && intervalSpec.unit !== 'day');
-      this.setAxisOptions({ showSeconds, timeVisible });
+      const isIntraday = Boolean(intervalSpec && intervalSpec.unit !== 'day');
+      const includeDate = isIntraday;
+      const fullDate = isIntraday;
+      this.setAxisOptions({ showSeconds, timeVisible: isIntraday, includeDate, fullDate });
       if (isTick) {
         this._rebuildTickIndexMap();
       }
@@ -1048,9 +1057,18 @@
       }
     }
 
-    setAxisOptions({ showSeconds = false, timeVisible = true } = {}) {
+    setAxisOptions({ showSeconds = false, timeVisible = true, includeDate = null, fullDate = null } = {}) {
       this.axisShowSeconds = Boolean(showSeconds);
-      this.axisIncludeDate = !timeVisible;
+      if (includeDate === null) {
+        this.axisIncludeDate = !timeVisible;
+      } else {
+        this.axisIncludeDate = Boolean(includeDate);
+      }
+      if (fullDate === null) {
+        this.axisFullDate = false;
+      } else {
+        this.axisFullDate = Boolean(fullDate);
+      }
       if (this.chart) {
         this.chart.timeScale().applyOptions({
           timeVisible: Boolean(timeVisible),
@@ -1220,7 +1238,7 @@
         timezoneMode: this.timezoneMode,
         showSeconds: this.axisShowSeconds,
         includeDate: this.axisIncludeDate,
-        fullDate: false,
+        fullDate: this.axisFullDate,
         ...overrides,
       };
       if (this.axisMode !== 'tick') {
@@ -1494,6 +1512,7 @@
       if (!Array.isArray(bars) || !bars.length) return false;
       const cleaned = this._sanitizeBars(bars);
       if (!cleaned.length) return false;
+      const prevLen = this.ohlcData ? this.ohlcData.length : 0;
       const earliest = this.ohlcData && this.ohlcData.length ? this.ohlcData[0].time : null;
       const filtered =
         Number.isFinite(earliest) ? cleaned.filter((bar) => bar.time < earliest - 1e-6) : cleaned;
@@ -1504,6 +1523,8 @@
       if (this.historyMaxBars > 0 && this.ohlcData.length > this.historyMaxBars) {
         this.ohlcData = this.ohlcData.slice(-this.historyMaxBars);
       }
+      const newLen = this.ohlcData.length;
+      const delta = newLen - prevLen;
       if (this.candleSeries) {
         this.candleSeries.setData(this.ohlcData);
       }
@@ -1520,8 +1541,17 @@
       if (this.indicatorMode && this.indicatorMode !== 'none') {
         this.updateIndicator();
       }
-      if (logicalRange && timeScale && timeScale.setVisibleLogicalRange) {
-        timeScale.setVisibleLogicalRange(logicalRange);
+      if (
+        logicalRange &&
+        timeScale &&
+        timeScale.setVisibleLogicalRange &&
+        Number.isFinite(delta) &&
+        delta > 0
+      ) {
+        timeScale.setVisibleLogicalRange({
+          from: logicalRange.from + delta,
+          to: logicalRange.to + delta,
+        });
       }
       return true;
     }
@@ -2964,7 +2994,7 @@
       if (detailManager) {
         const merged = detailManager.mergeData(payload.bars);
         if (!merged) {
-          detailManager.setData(payload.bars, { intervalSpec });
+          detailManager.setData(payload.bars, { intervalSpec, fitContent: false });
         }
         chartLazyCursor = detailManager.ohlcData[0] ? detailManager.ohlcData[0].time : chartLazyCursor;
         chartLazyExhausted = false;
@@ -3039,13 +3069,14 @@
       if (chartLazyLoading || chartLazyExhausted) return;
       const intervalSpec = detailManager.intervalSpec;
       if (intervalSpec && intervalSpec.unit === 'tick') {
-        if (range && Number.isFinite(range.from) && range.from <= 2) {
+        const tickThreshold = 5;
+        if (range && Number.isFinite(range.from) && range.from <= tickThreshold) {
           loadOlderChartBars();
           return;
         }
         const logicalRange =
           typeof timeScale.getVisibleLogicalRange === 'function' ? timeScale.getVisibleLogicalRange() : null;
-        if (logicalRange && Number.isFinite(logicalRange.from) && logicalRange.from <= 2) {
+        if (logicalRange && Number.isFinite(logicalRange.from) && logicalRange.from <= tickThreshold) {
           loadOlderChartBars();
         }
         return;
@@ -3054,7 +3085,7 @@
         Number.isFinite(chartLazyCursor) ? chartLazyCursor : detailManager.ohlcData[0] && detailManager.ohlcData[0].time;
       if (!Number.isFinite(earliest)) return;
       if (!range || !Number.isFinite(range.from)) return;
-      const threshold = Math.max(1, intervalSpec && intervalSpec.seconds ? intervalSpec.seconds * 2 : 2);
+      const threshold = Math.max(1, intervalSpec && intervalSpec.seconds ? intervalSpec.seconds * 5 : 5);
       if (range.from <= earliest + threshold) {
         loadOlderChartBars();
       }
@@ -3695,7 +3726,9 @@
     const spec = resolveIntervalSpec(intervalKey);
     const isIntraday = Boolean(spec && spec.unit !== 'day');
     const showSeconds = Boolean(spec && (spec.unit === 'second' || spec.unit === 'tick'));
-    detailManager.setAxisOptions({ timeVisible: isIntraday, showSeconds });
+    const includeDate = spec && spec.unit !== 'day' ? true : null;
+    const fullDate = Boolean(spec && spec.unit !== 'day');
+    detailManager.setAxisOptions({ timeVisible: isIntraday, showSeconds, includeDate, fullDate });
   }
 
   const intervalLabelMap = new Map();
@@ -4153,6 +4186,21 @@
       detailChangeEl.textContent = typeof changePct === 'number' ? formatChange(changePct) : '--';
       detailChangeEl.classList.remove('is-up', 'is-down');
       applyChangeState(detailChangeEl, changePct, false);
+    }
+    if (detailSubtitle && detailManager && detailManager.ohlcData.length) {
+      const lastBar = detailManager.ohlcData[detailManager.ohlcData.length - 1];
+      const lastTs = lastBar ? normalizeEpochSeconds(lastBar.time) : null;
+      if (Number.isFinite(lastTs)) {
+        const intervalSpec = detailManager.intervalSpec;
+        const showSeconds = Boolean(intervalSpec && (intervalSpec.unit === 'tick' || intervalSpec.unit === 'second'));
+        const timeLabel = formatAxisTime(lastTs, {
+          timezoneMode,
+          showSeconds,
+          includeDate: true,
+          fullDate: true,
+        });
+        detailSubtitle.textContent = langPrefix === 'zh' ? `数据时间：${timeLabel}` : `Data time: ${timeLabel}`;
+      }
     }
     const latencyTs = Number.isFinite(lastUpdate.update.server_ts)
       ? lastUpdate.update.server_ts
