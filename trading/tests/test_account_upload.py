@@ -50,7 +50,7 @@ class AccountUploadTests(TestCase):
     def test_avatar_upload_persists_file(self):
         avatar_bytes = _make_image("green")
         response = self.client.post(
-            reverse("trading:account"),
+            reverse("trading:account_update_profile"),
             {
                 "action": "profile",
                 "display_name": "Tester",
@@ -64,7 +64,7 @@ class AccountUploadTests(TestCase):
 
         avatar_file = SimpleUploadedFile("avatar.jpg", avatar_bytes, content_type="image/jpeg")
         response = self.client.post(
-            reverse("trading:account"),
+            reverse("trading:account_update_profile"),
             {
                 "action": "profile",
                 "display_name": "Tester",
@@ -85,7 +85,7 @@ class AccountUploadTests(TestCase):
         raw = _make_image("blue")
         data_url = "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii")
         response = self.client.post(
-            reverse("trading:account"),
+            reverse("trading:account_update_profile"),
             {
                 "action": "profile",
                 "display_name": "Tester",

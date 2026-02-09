@@ -21,6 +21,7 @@ from .history import (
 )
 from .train_ml import run_engine_benchmark
 from .llm import LLMIntegrationError, generate_ai_commentary
+from .profile import load_api_credentials
 from paper.engine import run_pending_sessions
 
 
@@ -43,7 +44,7 @@ def _resolve_snapshot_user_id() -> str | None:
 
     try:
         for profile in UserProfile.objects.order_by("-updated_at")[:10]:
-            creds = profile.api_credentials if isinstance(profile.api_credentials, dict) else {}
+            creds = load_api_credentials(str(profile.user_id))
             if creds.get("alpaca_api_key_id") and creds.get("alpaca_api_secret_key"):
                 return str(profile.user_id)
     except Exception:

@@ -3,10 +3,11 @@ from __future__ import annotations
 from collections import deque
 from threading import Lock
 import time
-from typing import Iterable
 
-MAX_TRADES_PER_SYMBOL = 60000
-MAX_TRADE_AGE_SECONDS = 30 * 60
+from django.conf import settings
+
+MAX_TRADES_PER_SYMBOL = int(getattr(settings, "MARKET_CHART_STORE_MAX_TRADES", 60000))
+MAX_TRADE_AGE_SECONDS = int(getattr(settings, "MARKET_CHART_STORE_MAX_AGE_SECONDS", 30 * 60))
 
 _LOCK = Lock()
 _TRADES: dict[str, deque[dict[str, float]]] = {}
@@ -58,23 +59,26 @@ def get_trades(
     sym = _normalize_symbol(symbol)
     if not sym:
         return []
+    now_ts = time.time()
     with _LOCK:
-        bucket = list(_TRADES.get(sym, ()))
-    if not bucket:
-        return []
-    filtered: list[dict[str, float]] = []
-    for item in bucket:
-        ts = item.get("ts")
-        if ts is None:
-            continue
-        if start is not None and ts < start:
-            continue
-        if end is not None and ts > end:
-            continue
-        filtered.append(item)
-    if limit and limit > 0 and len(filtered) > limit:
-        filtered = filtered[-limit:]
-    return filtered
+        bucket = _TRADES.get(sym)
+        if not bucket:
+            return []
+        _prune_bucket(bucket, now_ts)
+        if not bucket:
+            return []
+        use_limit = limit is not None and limit > 0
+        filtered = deque(maxlen=limit if use_limit else None)
+        for item in bucket:
+            ts = item.get("ts")
+            if ts is None:
+                continue
+            if start is not None and ts < start:
+                continue
+            if end is not None and ts > end:
+                continue
+            filtered.append(item)
+    return list(filtered)
 
 
 def get_latest_trade(symbol: str | None) -> dict[str, float] | None:

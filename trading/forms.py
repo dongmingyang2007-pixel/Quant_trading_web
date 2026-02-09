@@ -61,6 +61,18 @@ class ApiCredentialForm(forms.Form):
         widget=forms.PasswordInput(render_value=True),
         help_text="用于阿里云百炼（通义千问）API Key。",
     )
+    ai_model = forms.ChoiceField(
+        required=False,
+        label="AI Model",
+        choices=[],
+        help_text="默认 AI 模型（示例：bailian:qwen-max）。留空则使用系统默认。",
+    )
+    ai_embedding_model = forms.ChoiceField(
+        required=False,
+        label="AI Embedding Model",
+        choices=[],
+        help_text="默认向量化模型（示例：text-embedding-v2）。留空则使用系统默认。",
+    )
     aliyun_access_key_id = forms.CharField(
         required=False,
         label="Aliyun AccessKey ID",
@@ -92,11 +104,51 @@ class ApiCredentialForm(forms.Form):
         help_text="用于远程策略覆写（可选）。",
     )
 
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self,
+        *args,
+        ai_model_choices: list[str] | None = None,
+        ai_embedding_model_choices: list[str] | None = None,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         for name in self.fields:
             self.fields[name].widget.attrs.setdefault("class", "form-control")
             self.fields[name].widget.attrs.setdefault("autocomplete", "off")
+        if "ai_model" in self.fields:
+            choices = []
+            for item in ai_model_choices or []:
+                if not item:
+                    continue
+                text = str(item).strip()
+                if text and text not in choices:
+                    choices.append(text)
+            selected = ""
+            if self.data:
+                selected = str(self.data.get("ai_model") or "").strip()
+            else:
+                selected = str(self.initial.get("ai_model") or "").strip()
+            if selected and selected not in choices:
+                choices.insert(0, selected)
+            self.fields["ai_model"].choices = [("", "默认 (系统)")] + [(opt, opt) for opt in choices]
+            self.fields["ai_model"].widget.attrs["class"] = "form-select"
+        if "ai_embedding_model" in self.fields:
+            choices = []
+            for item in ai_embedding_model_choices or []:
+                if not item:
+                    continue
+                text = str(item).strip()
+                if text and text not in choices:
+                    choices.append(text)
+            selected = ""
+            if self.data:
+                selected = str(self.data.get("ai_embedding_model") or "").strip()
+            else:
+                selected = str(self.initial.get("ai_embedding_model") or "").strip()
+            if selected and selected not in choices:
+                choices.insert(0, selected)
+            self.fields["ai_embedding_model"].choices = [("", "默认 (系统)")] + [(opt, opt) for opt in choices]
+            self.fields["ai_embedding_model"].widget.attrs["class"] = "form-select"
 
 
 class QuantStrategyForm(forms.Form):

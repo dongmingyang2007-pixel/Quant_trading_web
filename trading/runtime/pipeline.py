@@ -7,7 +7,7 @@ import time
 
 from .account import AccountManager, AccountState
 from .combiner import StrategyCombiner
-from .execution import AlpacaExecutionClient, OrderRequest
+from .execution import AlpacaExecutionClient, OrderRequest, OrderResult
 from .risk import RiskManager
 from .signals import CombinedSignal, Signal
 from .strategy import BaseStrategy, StrategyContext

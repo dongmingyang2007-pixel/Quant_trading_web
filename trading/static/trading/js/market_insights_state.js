@@ -62,8 +62,23 @@
   };
 
   const parseTimestamp = (value) => {
+    if (value == null) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      let ts = value;
+      if (ts > 1e15) ts = ts / 1e9;
+      else if (ts > 1e12) ts = ts / 1e3;
+      return new Date(ts * 1000);
+    }
     const raw = safeString(value);
     if (!raw) return null;
+    if (/^\d+(\.\d+)?$/.test(raw)) {
+      const num = Number.parseFloat(raw);
+      if (!Number.isFinite(num)) return null;
+      let ts = num;
+      if (ts > 1e15) ts = ts / 1e9;
+      else if (ts > 1e12) ts = ts / 1e3;
+      return new Date(ts * 1000);
+    }
     let normalized = raw;
     if (normalized.endsWith('UTC')) {
       normalized = normalized.replace(' UTC', 'Z');

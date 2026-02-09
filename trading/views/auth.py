@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from django.conf import settings
 from django.contrib.auth.tokens import default_token_generator
 from django.shortcuts import redirect, render
@@ -10,6 +12,8 @@ from django.core.mail import send_mail
 
 from ..forms import ResendActivationForm, SignupForm
 
+LOGGER = logging.getLogger(__name__)
+
 
 def _language_code(request) -> str:
     return (getattr(request, "LANGUAGE_CODE", "") or "").lower()
@@ -17,6 +21,14 @@ def _language_code(request) -> str:
 
 def _msg(language: str, english_text: str, chinese_text: str) -> str:
     return chinese_text if language.startswith("zh") else english_text
+
+
+def _activation_mail_error(language: str) -> str:
+    return _msg(
+        language,
+        "Activation email could not be sent. Please retry later.",
+        "激活邮件发送失败，请稍后重试。",
+    )
 
 
 def signup(request):
@@ -49,8 +61,9 @@ def signup(request):
                     [user.email],
                     fail_silently=False,
                 )
-            except Exception as exc:
-                mail_error = str(exc)
+            except Exception:
+                LOGGER.exception("Failed to send activation email for user_id=%s", user.id)
+                mail_error = _activation_mail_error(language)
             is_console = (
                 settings.EMAIL_BACKEND.endswith("console.EmailBackend")
                 if hasattr(settings, "EMAIL_BACKEND")
@@ -61,7 +74,7 @@ def signup(request):
                 "registration/signup_done.html",
                 {
                     "email": user.email,
-                    "activation_url": url if (is_console or settings.DEBUG or mail_error) else None,
+                    "activation_url": url if (is_console or settings.DEBUG) else None,
                     "mail_error": mail_error,
                 },
             )
@@ -126,8 +139,9 @@ def resend_activation(request):
                         [user.email],
                         fail_silently=False,
                     )
-                except Exception as exc:
-                    mail_error = str(exc)
+                except Exception:
+                    LOGGER.exception("Failed to resend activation email for user_id=%s", user.id)
+                    mail_error = _activation_mail_error(language)
                 is_console = (
                     settings.EMAIL_BACKEND.endswith("console.EmailBackend")
                     if hasattr(settings, "EMAIL_BACKEND")
@@ -138,7 +152,7 @@ def resend_activation(request):
                     "registration/signup_done.html",
                     {
                         "email": user.email,
-                        "activation_url": url if (is_console or settings.DEBUG or mail_error) else None,
+                        "activation_url": url if (is_console or settings.DEBUG) else None,
                         "mail_error": mail_error,
                     },
                 )

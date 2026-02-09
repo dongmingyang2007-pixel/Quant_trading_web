@@ -19,6 +19,7 @@ from rest_framework.views import APIView
 from django.http import HttpResponse
 
 from ..observability import ensure_request_id
+from ..error_contract import drf_error
 from ..strategies import QuantStrategyError
 from ..strategies.core import fetch_price_data
 from ..task_queue import (
@@ -119,11 +120,25 @@ class BacktestTaskView(BaseTaskAPIView):
         strategy_input, _ = build_strategy_input(cleaned, request_id=request_id, user=request.user)
         try:
             job = submit_backtest_task(asdict(strategy_input))
-        except QuantStrategyError as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except QuantStrategyError:
+            return drf_error(
+                error_code="invalid_backtest_params",
+                message="Invalid backtest parameters.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                request_id=request_id,
+                user_id=request.user.id,
+                endpoint="api_v1.backtests.tasks",
+            )
         except Exception:
             logging.getLogger(__name__).exception("Backtest job submission failed")
-            return Response({"error": "Backtest execution failed."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return drf_error(
+                error_code="backtest_submit_failed",
+                message="Backtest execution failed.",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                request_id=request_id,
+                user_id=request.user.id,
+                endpoint="api_v1.backtests.tasks",
+            )
         response_payload = {
             "task_id": getattr(job, "id", ""),
             "state": getattr(job, "state", "PENDING"),
@@ -160,11 +175,25 @@ class PreflightView(BaseTaskAPIView):
                 strategy_input.end_date,
                 user_id=strategy_input.user_id,
             )
-        except QuantStrategyError as exc:
-            return Response({"error": str(exc), "request_id": request_id}, status=status.HTTP_400_BAD_REQUEST)
+        except QuantStrategyError:
+            return drf_error(
+                error_code="preflight_invalid_params",
+                message="Invalid preflight parameters.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                request_id=request_id,
+                user_id=request.user.id,
+                endpoint="api_v1.backtests.preflight",
+            )
         except Exception:
             logging.getLogger(__name__).exception("Preflight data fetch failed")
-            return Response({"error": "Preflight failed.", "request_id": request_id}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return drf_error(
+                error_code="preflight_failed",
+                message="Preflight failed.",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                request_id=request_id,
+                user_id=request.user.id,
+                endpoint="api_v1.backtests.preflight",
+            )
 
         prices, quality_report = sanitize_price_history(prices)
         rows = int(prices.shape[0]) if prices is not None else 0

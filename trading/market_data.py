@@ -39,6 +39,10 @@ DATA_CACHE_DIR: Path = getattr(settings, "DATA_CACHE_DIR", Path(settings.DATA_RO
 DISK_CACHE_DIR = DATA_CACHE_DIR / "market_snapshots"
 DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 DISK_CACHE_TTL_SECONDS = int(getattr(settings, "MARKET_DISK_CACHE_TTL", 6 * 3600))
+try:
+    LEGACY_CACHE_FILENAME_MAX_BYTES = int(getattr(settings, "MARKET_LEGACY_CACHE_FILENAME_MAX_BYTES", 240))
+except (TypeError, ValueError):
+    LEGACY_CACHE_FILENAME_MAX_BYTES = 240
 
 _ALPACA_INTERVAL_MAP = {
     "1m": "1Min",
@@ -79,7 +83,9 @@ def _warn_parquet_missing(context: str) -> None:
 
 def _write_parquet_atomic(df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path = path.with_name(
+        f"{path.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
+    )
     try:
         df.to_parquet(tmp_path)
         os.replace(tmp_path, path)
@@ -93,7 +99,9 @@ def _write_parquet_atomic(df: pd.DataFrame, path: Path) -> None:
 
 def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path = path.with_name(
+        f"{path.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
+    )
     try:
         tmp_path.write_text(json.dumps(payload), encoding="utf-8")
         os.replace(tmp_path, path)
@@ -516,14 +524,24 @@ def fetch(
 
     def _candidate_cache_paths(key: str) -> list[tuple[Path, Path]]:
         hashed = _cache_paths(key)
-        legacy = (DISK_CACHE_DIR / f"{key}.parquet", DISK_CACHE_DIR / f"{key}.json")
-        if hashed == legacy:
-            return [hashed]
-        return [hashed, legacy]
+        paths: list[tuple[Path, Path]] = [hashed]
+        legacy_parquet_name = f"{key}.parquet"
+        legacy_meta_name = f"{key}.json"
+        if (
+            len(legacy_parquet_name.encode("utf-8")) <= LEGACY_CACHE_FILENAME_MAX_BYTES
+            and len(legacy_meta_name.encode("utf-8")) <= LEGACY_CACHE_FILENAME_MAX_BYTES
+        ):
+            legacy = (DISK_CACHE_DIR / legacy_parquet_name, DISK_CACHE_DIR / legacy_meta_name)
+            if hashed != legacy:
+                paths.append(legacy)
+        return paths
 
     def _load_disk_cache() -> pd.DataFrame:
         for path, meta_path in _candidate_cache_paths(cache_key):
-            if not path.exists() or not meta_path.exists():
+            try:
+                if not path.exists() or not meta_path.exists():
+                    continue
+            except OSError:
                 continue
             try:
                 if not _has_parquet_engine():

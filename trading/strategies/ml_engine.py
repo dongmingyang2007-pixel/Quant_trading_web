@@ -196,7 +196,8 @@ def compute_triple_barrier_labels(
 
     binary[valid & up_first] = 1
     binary[valid & down_first] = 0
-    binary[valid & no_hit] = (last_ret > 0).astype(float)
+    no_hit_mask = valid & no_hit
+    binary[no_hit_mask] = (last_ret[no_hit_mask] > 0).astype(float)
 
     multi[valid & up_first] = 1
     multi[valid & down_first] = -1
@@ -867,10 +868,8 @@ def run_ml_backtest(
 
         if params.label_style == "triple_barrier" and raw_proba_arr.ndim == 2 and raw_proba_arr.shape[1] >= 2:
             proba_up = _extract_class_prob(raw_proba_arr, classes_, 1, default=0.5)
-            proba_down = _extract_class_prob(raw_proba_arr, classes_, -1, default=0.5)
         else:
             proba_up = raw_proba_arr[:, 1] if raw_proba_arr.ndim == 2 and raw_proba_arr.shape[1] > 1 else np.array([])
-            proba_down = np.zeros_like(proba_up)
         proba_vals = proba_up if proba_up.size else (raw_proba_arr[:, 1] if raw_proba_arr.ndim == 2 and raw_proba_arr.shape[1] > 1 else raw_proba_arr)
 
         pred_vals = np.argmax(raw_proba_arr, axis=1) if raw_proba_arr.ndim == 2 and raw_proba_arr.shape[1] > 1 else (proba_vals >= 0.5).astype(int)
@@ -1051,6 +1050,7 @@ def run_ml_backtest(
     if probabilities is not None and not probabilities.dropna().empty:
         mid_p = len(probabilities) // 2
         psi_proba = compute_psi(probabilities.iloc[:mid_p], probabilities.iloc[mid_p:])
+    long_threshold, short_threshold = _resolve_signal_thresholds(params)
     stats: dict[str, Any] = {
         "validation_report": validation_report,
         "validation_oos_summary": summary_oos,

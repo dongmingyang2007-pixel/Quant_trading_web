@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
+import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 import time
-from typing import Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 import re
 from zoneinfo import ZoneInfo
 
@@ -24,10 +27,14 @@ from django.utils.translation import gettext as _, gettext_lazy as _lazy
 from .. import screener
 from ..cache_utils import build_cache_key, cache_get_object, cache_set_object, cache_memoize
 from .. import market_data
+from ..error_contract import json_error, log_sanitized_exception
 from ..observability import ensure_request_id, record_metric, track_latency
 from ..network import get_requests_session, resolve_retry_config, retry_call_result
 from ..rate_limit import check_rate_limit, rate_limit_key
 from ..models import UserProfile, RealtimeProfile
+from ..profile import resolve_api_credential
+from .. import bailian_ai
+from ..llm import run_llm_chat, LLMIntegrationError
 from ..alpaca_data import (
     DEFAULT_FEED,
     resolve_alpaca_data_credentials,
@@ -44,10 +51,20 @@ from ..realtime.config import DEFAULT_CONFIG_NAME, load_realtime_config_from_pay
 from ..realtime.schema import RealtimePayloadError, validate_realtime_payload
 from ..realtime.chart_store import get_trades as chart_get_trades, get_latest_trade as chart_get_latest_trade
 from ..realtime.bars import parse_timestamp
+from ..screen_patterns import PATTERN_KEYS, analyze_price_series
+from ..screen_training import (
+    load_model_meta as load_screen_model_meta,
+    load_samples as load_screen_samples,
+    save_sample as save_screen_sample,
+    train_model as train_screen_model,
+)
 from ..market_aggregation import (
     aggregate_trades_to_tick_bars,
     aggregate_trades_to_time_bars,
 )
+from .market_auth import market_auth_debug as _market_auth_debug
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -86,6 +103,49 @@ TIMEFRAMES: dict[str, Timeframe] = {
 }
 
 DEFAULT_TIMEFRAME = TIMEFRAMES["1mo"]
+LIST_TYPES = (
+    "gainers",
+    "losers",
+    "most_active",
+    "top_turnover",
+)
+LIST_TIMEFRAME_SUPPORT_DEFAULT: dict[str, tuple[str, ...]] = {
+    list_type: tuple(TIMEFRAMES.keys())
+    for list_type in LIST_TYPES
+}
+
+
+def _resolve_list_timeframe_support() -> dict[str, tuple[str, ...]]:
+    configured = getattr(settings, "MARKET_LIST_TIMEFRAME_SUPPORT", None)
+    if not isinstance(configured, Mapping):
+        return {key: tuple(value) for key, value in LIST_TIMEFRAME_SUPPORT_DEFAULT.items()}
+    resolved: dict[str, tuple[str, ...]] = {}
+    for list_type, defaults in LIST_TIMEFRAME_SUPPORT_DEFAULT.items():
+        raw_value = configured.get(list_type, defaults)
+        candidates = [key for key in _setting_list(raw_value, list(defaults)) if key in TIMEFRAMES]
+        normalized = list(dict.fromkeys(candidates))
+        resolved[list_type] = tuple(normalized or defaults)
+    return resolved
+
+
+def _market_capabilities_payload() -> dict[str, object]:
+    support = _resolve_list_timeframe_support()
+    return {
+        "supported_timeframes_by_list": {
+            list_type: list(keys)
+            for list_type, keys in support.items()
+        }
+    }
+
+
+def _is_list_timeframe_supported(list_type: str, timeframe_key: str) -> bool:
+    support = _resolve_list_timeframe_support()
+    allowed = support.get(list_type)
+    if not allowed:
+        return False
+    return timeframe_key in allowed
+
+
 DETAIL_TIMEFRAMES: dict[str, DetailTimeframe] = {
     "1m": DetailTimeframe("1m", _lazy("1分钟"), "1m", "5d", "1m", None, 720),
     "2m": DetailTimeframe("2m", _lazy("2分钟"), "2m", "5d", "1m", "2min", 720),
@@ -147,6 +207,40 @@ WINDOW_LENGTHS = {
     "1mo": 30,
     "6mo": 130,
 }
+
+MISSING_REASON_SOURCE_NOT_PROVIDED = "source_not_provided"
+MISSING_REASON_NOT_APPLICABLE_FUND = "not_applicable_fund"
+MISSING_REASON_INSUFFICIENT_WINDOW = "insufficient_window"
+MISSING_REASON_TIMEFRAME_SNAPSHOT_PENDING = "timeframe_snapshot_pending"
+MISSING_REASON_CODES = {
+    MISSING_REASON_SOURCE_NOT_PROVIDED,
+    MISSING_REASON_NOT_APPLICABLE_FUND,
+    MISSING_REASON_INSUFFICIENT_WINDOW,
+    MISSING_REASON_TIMEFRAME_SNAPSHOT_PENDING,
+}
+RANKING_REASON_FIELDS = ("volume", "dollar_volume", "range_pct", "prev_close", "open")
+PROFILE_REASON_FIELDS = ("sector", "industry", "ceo", "hq", "market_cap")
+FUND_LIKE_QUOTE_TYPES = {
+    "ETF",
+    "ETN",
+    "MUTUALFUND",
+    "MUTUAL FUND",
+    "INDEX",
+    "CLOSED_END_FUND",
+    "CLOSED END FUND",
+    "FUND",
+}
+FUND_LIKE_NAME_KEYWORDS = (
+    " etf",
+    " fund",
+    " trust",
+    " index",
+    " spdr",
+    " ishares",
+    " invesco",
+    " vanguard",
+    " proshares",
+)
 _QUERY_SANITIZER = re.compile(r"[^A-Z0-9\.\-]")
 MARKET_REQUEST_TIMEOUT = max(5, getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", 25))
 MARKET_MAX_WORKERS = max(1, getattr(settings, "MARKET_DATA_MAX_WORKERS", 20))
@@ -162,6 +256,23 @@ CHART_TRADES_PAGE_LIMIT = _setting_int("MARKET_CHART_TRADES_PAGE_LIMIT", 1000)
 CHART_TRADES_MAX_PAGES = _setting_int("MARKET_CHART_TRADES_MAX_PAGES", 6)
 MARKET_PROFILE_CACHE_TTL = max(120, getattr(settings, "MARKET_PROFILE_CACHE_TTL", 900))
 MARKET_NEWS_CACHE_TTL = max(120, getattr(settings, "MARKET_NEWS_CACHE_TTL", 300))
+MARKET_NEWS_CACHE_MAX_ITEMS = max(12, _setting_int("MARKET_NEWS_CACHE_MAX_ITEMS", 120))
+MARKET_NEWS_PAGE_DEFAULT = max(
+    6,
+    min(MARKET_NEWS_CACHE_MAX_ITEMS, _setting_int("MARKET_NEWS_PAGE_DEFAULT", 10)),
+)
+MARKET_NEWS_PAGE_MAX = max(
+    MARKET_NEWS_PAGE_DEFAULT,
+    min(MARKET_NEWS_CACHE_MAX_ITEMS, _setting_int("MARKET_NEWS_PAGE_MAX", 30)),
+)
+MARKET_NEWS_SENTIMENT_CACHE_TTL = max(60, _setting_int("MARKET_NEWS_SENTIMENT_CACHE_TTL", 300))
+MARKET_NEWS_SENTIMENT_TIMEOUT_SECONDS = max(3, _setting_int("MARKET_NEWS_SENTIMENT_TIMEOUT_SECONDS", 8))
+MARKET_AI_SUMMARY_CACHE_TTL = max(120, _setting_int("MARKET_AI_SUMMARY_CACHE_TTL", 600))
+MARKET_AI_SUMMARY_TIMEOUT_SECONDS = max(3, _setting_int("MARKET_AI_SUMMARY_TIMEOUT_SECONDS", 8))
+MARKET_AI_SUMMARY_MAX_TOKENS = max(240, _setting_int("MARKET_AI_SUMMARY_MAX_TOKENS", 480))
+MARKET_AI_SUMMARY_MAX_CHARS = max(240, _setting_int("MARKET_AI_SUMMARY_MAX_CHARS", 420))
+MARKET_52W_CACHE_TTL = max(300, _setting_int("MARKET_52W_CACHE_TTL", 6 * 3600))
+MARKET_FUNDAMENTALS_CACHE_TTL = max(300, _setting_int("MARKET_FUNDAMENTALS_CACHE_TTL", 6 * 3600))
 MARKET_ASSETS_CACHE_TTL = max(300, getattr(settings, "MARKET_ASSETS_CACHE_TTL", 6 * 3600))
 MARKET_RANKINGS_CACHE_TTL = max(30, getattr(settings, "MARKET_RANKINGS_CACHE_TTL", 55))
 MARKET_RANKINGS_MIN_PRICE = max(0.0, _setting_float("MARKET_RANKINGS_MIN_PRICE", 1.0))
@@ -183,8 +294,35 @@ MARKET_UNIVERSE_RANKINGS_CACHE_TTL = max(120, _setting_int("MARKET_UNIVERSE_RANK
 MARKET_UNIVERSE_CHUNK_SIZE = max(50, min(400, _setting_int("MARKET_UNIVERSE_CHUNK_SIZE", 200)))
 MARKET_UNIVERSE_MAX_SYMBOLS = max(0, _setting_int("MARKET_UNIVERSE_MAX_SYMBOLS", 0))
 MARKET_UNIVERSE_CHUNK_WORKERS = max(1, min(8, _setting_int("MARKET_UNIVERSE_CHUNK_WORKERS", 4)))
+MARKET_UNIVERSE_WINDOW_MAX_SYMBOLS = max(0, _setting_int("MARKET_UNIVERSE_WINDOW_MAX_SYMBOLS", 1500))
 MARKET_ASSETS_PAGE_DEFAULT = max(20, getattr(settings, "MARKET_ASSETS_PAGE_DEFAULT", 50))
 MARKET_ASSETS_PAGE_MAX = max(50, getattr(settings, "MARKET_ASSETS_PAGE_MAX", 200))
+MARKET_CHART_ANALYZER_NAMESPACE = str(
+    getattr(settings, "MARKET_CHART_ANALYZER_NAMESPACE", "market_chart_analyzer")
+).strip() or "market_chart_analyzer"
+MARKET_CHART_ANALYZER_MIN_POINTS = max(12, _setting_int("MARKET_CHART_ANALYZER_MIN_POINTS", 24))
+MARKET_CHART_ANALYZER_MAX_POINTS = max(
+    MARKET_CHART_ANALYZER_MIN_POINTS,
+    _setting_int("MARKET_CHART_ANALYZER_MAX_POINTS", 360),
+)
+MARKET_CHART_ANALYZER_TRAIN_MIN_SAMPLES = max(
+    12,
+    _setting_int("MARKET_CHART_ANALYZER_TRAIN_MIN_SAMPLES", 18),
+)
+MARKET_CHART_ANALYZER_SERIES_MODES = {"close", "hlc3", "ohlc4"}
+MARKET_CHART_ANALYZER_DEFAULT_SERIES_MODE = str(
+    getattr(settings, "MARKET_CHART_ANALYZER_DEFAULT_SERIES_MODE", "close")
+).strip().lower()
+if MARKET_CHART_ANALYZER_DEFAULT_SERIES_MODE not in MARKET_CHART_ANALYZER_SERIES_MODES:
+    MARKET_CHART_ANALYZER_DEFAULT_SERIES_MODE = "close"
+MARKET_CHART_ANALYZER_DEFAULT_SMOOTHING_WINDOW = max(
+    1,
+    _setting_int("MARKET_CHART_ANALYZER_DEFAULT_SMOOTHING_WINDOW", 1),
+)
+MARKET_CHART_ANALYZER_MAX_SMOOTHING_WINDOW = max(
+    3,
+    _setting_int("MARKET_CHART_ANALYZER_MAX_SMOOTHING_WINDOW", 11),
+)
 MARKET_RANKINGS_REFRESH_SECONDS = max(60, _setting_int("MARKET_RANKINGS_REFRESH_SECONDS", 300))
 MARKET_RANKINGS_REFRESH_MARGIN_SECONDS = max(0, _setting_int("MARKET_RANKINGS_REFRESH_MARGIN_SECONDS", 5))
 MARKET_RANKINGS_SNAPSHOT_CHUNK_SIZE = max(1, min(200, _setting_int("MARKET_RANKINGS_SNAPSHOT_CHUNK_SIZE", 200)))
@@ -284,6 +422,29 @@ def _parse_offset(value: object) -> int:
     return max(0, offset)
 
 
+def _parse_news_limit(value: object, *, default: int = MARKET_NEWS_PAGE_DEFAULT) -> int:
+    try:
+        limit = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        limit = default
+    return max(1, min(MARKET_NEWS_PAGE_MAX, limit))
+
+
+def _resolve_news_paging(limit_value: object, offset_value: object) -> tuple[int, int]:
+    return _parse_news_limit(limit_value), _parse_offset(offset_value)
+
+
+def _parse_bool(value: object, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def _fetch_market_clock(user_id: str | None) -> bool | None:
     key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
     if not key_id or not secret:
@@ -351,12 +512,7 @@ def _is_market_open(user_id: str | None) -> bool:
 
 def _resolve_list_type(value: object) -> str:
     text = str(value or "").strip().lower()
-    if text in {
-        "gainers",
-        "losers",
-        "most_active",
-        "top_turnover",
-    }:
+    if text in LIST_TYPES:
         return text
     return "gainers"
 
@@ -434,6 +590,423 @@ def _coerce_number(value: object) -> float | None:
         return float(text)
     except (TypeError, ValueError):
         return None
+
+
+def _downsample_indices(length: int, max_points: int) -> list[int]:
+    if length <= 0:
+        return []
+    if max_points <= 0 or length <= max_points:
+        return list(range(length))
+    if max_points == 1:
+        return [length - 1]
+    step = (length - 1) / float(max_points - 1)
+    indices: list[int] = []
+    prev = -1
+    for idx in range(max_points):
+        candidate = int(round(idx * step))
+        if candidate <= prev:
+            candidate = prev + 1
+        if candidate >= length:
+            candidate = length - 1
+        indices.append(candidate)
+        prev = candidate
+    indices[-1] = length - 1
+    return indices
+
+
+def _normalize_analyzer_series_mode(value: object) -> str:
+    mode = str(value or "").strip().lower()
+    if mode in MARKET_CHART_ANALYZER_SERIES_MODES:
+        return mode
+    return MARKET_CHART_ANALYZER_DEFAULT_SERIES_MODE
+
+
+def _normalize_analyzer_smoothing_window(value: object) -> int:
+    try:
+        window = int(value)
+    except (TypeError, ValueError):
+        window = MARKET_CHART_ANALYZER_DEFAULT_SMOOTHING_WINDOW
+    window = max(1, min(MARKET_CHART_ANALYZER_MAX_SMOOTHING_WINDOW, window))
+    if window > 1 and window % 2 == 0:
+        window = window - 1
+    return max(1, window)
+
+
+def _smooth_numeric_values(values: list[float], window: int) -> list[float]:
+    if not values or window <= 1 or len(values) < window:
+        return list(values)
+    half_window = window // 2
+    smoothed: list[float] = []
+    for idx in range(len(values)):
+        total = 0.0
+        count = 0
+        for offset in range(-half_window, half_window + 1):
+            target_index = min(len(values) - 1, max(0, idx + offset))
+            value = values[target_index]
+            if not isinstance(value, (int, float)):
+                continue
+            total += float(value)
+            count += 1
+        smoothed.append(total / count if count else float(values[idx]))
+    return smoothed
+
+
+def _resolve_bar_series_value(bar: Mapping[str, object], series_mode: str) -> float | None:
+    close_value = _coerce_number(bar.get("close"))
+    if close_value is None:
+        return None
+    if series_mode == "hlc3":
+        high_value = _coerce_number(bar.get("high"))
+        low_value = _coerce_number(bar.get("low"))
+        high = high_value if high_value is not None else close_value
+        low = low_value if low_value is not None else close_value
+        return float((high + low + close_value) / 3.0)
+    if series_mode == "ohlc4":
+        open_value = _coerce_number(bar.get("open"))
+        high_value = _coerce_number(bar.get("high"))
+        low_value = _coerce_number(bar.get("low"))
+        open_price = open_value if open_value is not None else close_value
+        high = high_value if high_value is not None else close_value
+        low = low_value if low_value is not None else close_value
+        return float((open_price + high + low + close_value) / 4.0)
+    return float(close_value)
+
+
+def _extract_chart_analyzer_series(
+    payload: Mapping[str, object],
+    *,
+    max_points: int,
+) -> tuple[list[float], list[int], int, dict[str, object]] | None:
+    series_mode = _normalize_analyzer_series_mode(payload.get("series_mode"))
+    smoothing_window = _normalize_analyzer_smoothing_window(payload.get("smoothing_window"))
+    values: list[float] = []
+    source = "series"
+    raw_series = payload.get("series")
+    if isinstance(raw_series, list):
+        for entry in raw_series:
+            number = _coerce_number(entry)
+            if number is None:
+                continue
+            values.append(float(number))
+    elif isinstance(payload.get("bars"), list):
+        source = "bars"
+        for bar in payload.get("bars", []):  # type: ignore[arg-type]
+            if not isinstance(bar, Mapping):
+                continue
+            number = _resolve_bar_series_value(bar, series_mode)
+            if number is None:
+                continue
+            values.append(float(number))
+    else:
+        return None
+    if not values:
+        return None
+    original_length = len(values)
+    working_values = _smooth_numeric_values(values, smoothing_window)
+    indices = _downsample_indices(original_length, max_points)
+    sampled = [working_values[idx] for idx in indices]
+    return sampled, indices, original_length, {
+        "series_mode": series_mode,
+        "smoothing_window": smoothing_window,
+        "series_source": source,
+    }
+
+
+def _normalize_reason_code(value: object) -> str:
+    code = str(value or "").strip()
+    if code in MISSING_REASON_CODES:
+        return code
+    return MISSING_REASON_SOURCE_NOT_PROVIDED
+
+
+def _normalize_missing_reason_map(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, reason in value.items():
+        field = str(key or "").strip()
+        if not field:
+            continue
+        normalized[field] = _normalize_reason_code(reason)
+    return normalized
+
+
+def _set_item_missing_reason(item: dict[str, object], field: str, reason_code: str) -> None:
+    reasons = _normalize_missing_reason_map(item.get("missing_reasons"))
+    reasons[field] = _normalize_reason_code(reason_code)
+    item["missing_reasons"] = reasons
+
+
+def _apply_common_market_item_shape(
+    item: dict[str, object],
+    *,
+    timeframe_pending: bool = False,
+) -> dict[str, object]:
+    period_value = _coerce_number(item.get("change_pct_period"))
+    if period_value is None:
+        period_value = _coerce_number(item.get("change_pct"))
+    if period_value is None:
+        period_value = _coerce_number(item.get("change_pct_day"))
+    day_value = _coerce_number(item.get("change_pct_day"))
+    if day_value is None:
+        day_value = _coerce_number(item.get("change_pct"))
+    if day_value is None:
+        day_value = period_value
+    item["change_pct_period"] = period_value
+    item["change_pct_day"] = day_value
+    item["change_pct"] = period_value
+
+    reasons = _normalize_missing_reason_map(item.get("missing_reasons"))
+    for field in RANKING_REASON_FIELDS:
+        if _coerce_number(item.get(field)) is None:
+            reasons.setdefault(field, MISSING_REASON_SOURCE_NOT_PROVIDED)
+    if timeframe_pending:
+        reasons["timeframe"] = MISSING_REASON_TIMEFRAME_SNAPSHOT_PENDING
+    if reasons:
+        item["missing_reasons"] = reasons
+    elif "missing_reasons" in item:
+        item.pop("missing_reasons", None)
+    return item
+
+
+def _extract_window_bars(
+    frame: pd.DataFrame,
+    symbol: str,
+    *,
+    timeframe: Timeframe,
+) -> list[dict[str, float | int]]:
+    bars = _extract_ohlc(frame, symbol, limit=420)
+    if not bars:
+        return []
+    if timeframe.interval == "1d":
+        window_len = _daily_window_length(timeframe)
+        if window_len:
+            bars = bars[-window_len:]
+    return bars
+
+
+def _compute_window_metrics_from_bars(
+    bars: list[dict[str, float | int]],
+) -> tuple[dict[str, float | None], dict[str, str]]:
+    metrics: dict[str, float | None] = {
+        "price": None,
+        "change_pct_period": None,
+        "change_pct_day": None,
+        "open": None,
+        "prev_close": None,
+        "volume": None,
+        "dollar_volume": None,
+        "range_pct": None,
+    }
+    reasons: dict[str, str] = {}
+    parsed: list[dict[str, float | None]] = []
+
+    for bar in bars:
+        if not isinstance(bar, dict):
+            continue
+        close = _coerce_number(bar.get("close"))
+        if close is None:
+            continue
+        parsed.append(
+            {
+                "open": _coerce_number(bar.get("open")),
+                "high": _coerce_number(bar.get("high")),
+                "low": _coerce_number(bar.get("low")),
+                "close": close,
+                "volume": _coerce_number(bar.get("volume")),
+            }
+        )
+
+    if not parsed:
+        reasons = {
+            "open": MISSING_REASON_SOURCE_NOT_PROVIDED,
+            "prev_close": MISSING_REASON_SOURCE_NOT_PROVIDED,
+            "volume": MISSING_REASON_SOURCE_NOT_PROVIDED,
+            "dollar_volume": MISSING_REASON_SOURCE_NOT_PROVIDED,
+            "range_pct": MISSING_REASON_SOURCE_NOT_PROVIDED,
+            "change_pct_period": MISSING_REASON_SOURCE_NOT_PROVIDED,
+            "change_pct_day": MISSING_REASON_SOURCE_NOT_PROVIDED,
+        }
+        return metrics, reasons
+
+    first = parsed[0]
+    last = parsed[-1]
+    first_open = first.get("open")
+    first_close = first.get("close")
+    price = last.get("close")
+    open_price = first_open if first_open is not None else first_close
+    prev_close = parsed[-2].get("close") if len(parsed) >= 2 else None
+
+    high_values = [bar.get("high") if bar.get("high") is not None else bar.get("close") for bar in parsed]
+    low_values = [bar.get("low") if bar.get("low") is not None else bar.get("close") for bar in parsed]
+    highs = [value for value in high_values if value is not None]
+    lows = [value for value in low_values if value is not None]
+    max_high = max(highs) if highs else None
+    min_low = min(lows) if lows else None
+
+    volume_points = [bar for bar in parsed if bar.get("volume") is not None]
+    volume_sum = sum(float(bar.get("volume") or 0.0) for bar in volume_points) if volume_points else None
+    dollar_volume = (
+        sum(float(bar.get("close") or 0.0) * float(bar.get("volume") or 0.0) for bar in volume_points)
+        if volume_points
+        else None
+    )
+
+    period_change = None
+    if price is not None and open_price not in (None, 0):
+        period_change = (float(price) / float(open_price) - 1.0) * 100.0
+    day_change = None
+    if price is not None and prev_close not in (None, 0):
+        day_change = (float(price) / float(prev_close) - 1.0) * 100.0
+    range_base = prev_close if prev_close not in (None, 0) else open_price
+    range_pct = None
+    if range_base not in (None, 0) and max_high is not None and min_low is not None:
+        range_pct = ((float(max_high) - float(min_low)) / float(range_base)) * 100.0
+
+    metrics.update(
+        {
+            "price": float(price) if price is not None else None,
+            "change_pct_period": float(period_change) if period_change is not None else None,
+            "change_pct_day": float(day_change) if day_change is not None else None,
+            "open": float(open_price) if open_price is not None else None,
+            "prev_close": float(prev_close) if prev_close is not None else None,
+            "volume": float(volume_sum) if volume_sum is not None else None,
+            "dollar_volume": float(dollar_volume) if dollar_volume is not None else None,
+            "range_pct": float(range_pct) if range_pct is not None else None,
+        }
+    )
+
+    if metrics["open"] is None:
+        reasons["open"] = MISSING_REASON_SOURCE_NOT_PROVIDED
+    if metrics["prev_close"] is None:
+        reasons["prev_close"] = (
+            MISSING_REASON_INSUFFICIENT_WINDOW if len(parsed) < 2 else MISSING_REASON_SOURCE_NOT_PROVIDED
+        )
+    if metrics["volume"] is None:
+        reasons["volume"] = MISSING_REASON_SOURCE_NOT_PROVIDED
+    if metrics["dollar_volume"] is None:
+        reasons["dollar_volume"] = MISSING_REASON_SOURCE_NOT_PROVIDED
+    if metrics["range_pct"] is None:
+        reasons["range_pct"] = (
+            MISSING_REASON_INSUFFICIENT_WINDOW if len(parsed) < 2 else MISSING_REASON_SOURCE_NOT_PROVIDED
+        )
+    if metrics["change_pct_period"] is None:
+        reasons["change_pct_period"] = MISSING_REASON_SOURCE_NOT_PROVIDED
+    if metrics["change_pct_day"] is None:
+        reasons["change_pct_day"] = (
+            MISSING_REASON_INSUFFICIENT_WINDOW if len(parsed) < 2 else MISSING_REASON_SOURCE_NOT_PROVIDED
+        )
+
+    return metrics, reasons
+
+
+def _resolve_symbol_window_metrics(
+    symbols: Iterable[str],
+    *,
+    timeframe: Timeframe,
+    user_id: str | None,
+) -> tuple[dict[str, dict[str, object]], str]:
+    unique = [sym for sym in dict.fromkeys(symbols) if sym]
+    if not unique:
+        return {}, "unknown"
+
+    def _resolve_chunk(chunk_symbols: list[str]) -> tuple[dict[str, dict[str, object]], str]:
+        frame = market_data.fetch(
+            chunk_symbols,
+            period=timeframe.period,
+            interval=timeframe.interval,
+            cache=True,
+            timeout=MARKET_REQUEST_TIMEOUT,
+            ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
+            cache_alias=getattr(settings, "MARKET_HISTORY_CACHE_ALIAS", None),
+            user_id=user_id,
+        )
+        chunk_source = _infer_market_source(frame)
+        chunk_map: dict[str, dict[str, object]] = {}
+        for symbol in chunk_symbols:
+            bars = _extract_window_bars(frame, symbol, timeframe=timeframe)
+            metrics, missing = _compute_window_metrics_from_bars(bars)
+            payload: dict[str, object] = {**metrics}
+            if missing:
+                payload["missing_reasons"] = missing
+            chunk_map[symbol] = payload
+        return chunk_map, chunk_source
+
+    def _merge_source(current: str, incoming: str) -> str:
+        if incoming and incoming != "unknown":
+            if current == "unknown":
+                return incoming
+            if incoming == "alpaca":
+                return incoming
+        return current
+
+    chunks = list(_iter_chunks(unique, MARKET_UNIVERSE_CHUNK_SIZE))
+    if not chunks:
+        return {}, "unknown"
+
+    metrics_map: dict[str, dict[str, object]] = {}
+    source = "unknown"
+    if MARKET_UNIVERSE_CHUNK_WORKERS <= 1 or len(chunks) == 1:
+        for chunk_symbols in chunks:
+            chunk_map, chunk_source = _resolve_chunk(chunk_symbols)
+            metrics_map.update(chunk_map)
+            source = _merge_source(source, chunk_source)
+        return metrics_map, source
+
+    with ThreadPoolExecutor(max_workers=MARKET_UNIVERSE_CHUNK_WORKERS) as executor:
+        futures = [
+            executor.submit(_resolve_chunk, chunk_symbols)
+            for chunk_symbols in chunks
+        ]
+        for future in futures:
+            try:
+                chunk_map, chunk_source = future.result()
+            except Exception:
+                continue
+            metrics_map.update(chunk_map)
+            source = _merge_source(source, chunk_source)
+    return metrics_map, source
+
+
+def _is_fund_like_profile(profile: Mapping[str, object]) -> bool:
+    quote_type = str(profile.get("quote_type") or profile.get("quoteType") or "").strip().upper()
+    if quote_type in FUND_LIKE_QUOTE_TYPES:
+        return True
+    name_parts = [
+        str(profile.get("name") or ""),
+        str(profile.get("shortName") or ""),
+        str(profile.get("symbol") or ""),
+    ]
+    lowered = " ".join(name_parts).lower()
+    return any(keyword in lowered for keyword in FUND_LIKE_NAME_KEYWORDS)
+
+
+def _profile_field_value(profile: Mapping[str, object], field: str) -> object:
+    if field == "hq":
+        hq = profile.get("hq") or profile.get("headquarters") or profile.get("location")
+        if hq:
+            return hq
+        city = profile.get("city")
+        state = profile.get("state")
+        country = profile.get("country")
+        joined = ", ".join(str(part) for part in (city, state, country) if part)
+        return joined
+    return profile.get(field)
+
+
+def _build_profile_missing_reasons(profile: Mapping[str, object]) -> dict[str, str]:
+    reasons: dict[str, str] = {}
+    if not profile:
+        return {field: MISSING_REASON_SOURCE_NOT_PROVIDED for field in PROFILE_REASON_FIELDS}
+    fund_like = _is_fund_like_profile(profile)
+    for field in PROFILE_REASON_FIELDS:
+        value = _profile_field_value(profile, field)
+        if value not in (None, "", [], {}):
+            continue
+        reasons[field] = (
+            MISSING_REASON_NOT_APPLICABLE_FUND if fund_like else MISSING_REASON_SOURCE_NOT_PROVIDED
+        )
+    return reasons
 
 
 def _normalize_asset_search(value: object) -> str:
@@ -828,7 +1401,7 @@ def refresh_snapshot_rankings(*, user_id: str | None = None) -> dict[str, object
     if not lock.acquire():
         return {"status": "locked"}
     started_ts = time.time()
-    started_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    started_at = float(started_ts)
     progress_payload = {
         "status": "running",
         "started_at": started_at,
@@ -992,18 +1565,24 @@ def refresh_snapshot_rankings(*, user_id: str | None = None) -> dict[str, object
                             timeframe_rows_map[timeframe.key].extend(_rank_symbols_daily(series_map, timeframe))
                     completed_chunks += 1
                     _update_progress()
-            except Exception as exc:
-                timeframe_error = str(exc)
+            except Exception:
+                LOGGER.exception(
+                    "Snapshot timeframe refresh failed user_id=%s timeframe=%s",
+                    user_id,
+                    max_timeframe.key,
+                )
+                timeframe_error = "timeframe_refresh_failed"
 
             duration = time.time() - timeframe_started
             for timeframe in timeframes:
                 timeframe_rows = timeframe_rows_map.get(timeframe.key, [])
                 if timeframe_rows:
                     timeframe_rows.sort(key=lambda item: item.get("change_pct_period") or 0, reverse=True)
+                generated_ts = time.time()
                 timeframe_payload: dict[str, object] = {
                     "status": "error" if timeframe_error else "complete",
-                    "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-                    "generated_ts": time.time(),
+                    "generated_at": generated_ts,
+                    "generated_ts": generated_ts,
                     "source": "alpaca",
                     "timeframe": timeframe.key,
                     "total_symbols": total_symbols,
@@ -1021,10 +1600,11 @@ def refresh_snapshot_rankings(*, user_id: str | None = None) -> dict[str, object
         if duration_seconds > 0:
             api_calls_per_minute = api_calls / (duration_seconds / 60.0)
 
+        generated_ts = time.time()
         payload = {
             "status": "complete",
-            "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-            "generated_ts": time.time(),
+            "generated_at": generated_ts,
+            "generated_ts": generated_ts,
             "source": "alpaca",
             "total_symbols": total_symbols,
             "chunk_size": chunk_size,
@@ -1036,12 +1616,13 @@ def refresh_snapshot_rankings(*, user_id: str | None = None) -> dict[str, object
         write_state(SNAPSHOT_RANKINGS_STATE, payload)
         write_state(SNAPSHOT_RANKINGS_PROGRESS_STATE, _snapshot_refresh_payload_summary(payload))
         return payload
-    except Exception as exc:
+    except Exception:
+        LOGGER.exception("Snapshot rankings refresh failed user_id=%s", user_id)
         error_payload = {
             "status": "error",
             "started_at": started_at,
             "started_ts": started_ts,
-            "error": str(exc),
+            "error": "snapshot_refresh_failed",
         }
         write_state(SNAPSHOT_RANKINGS_PROGRESS_STATE, error_payload)
         return error_payload
@@ -1371,6 +1952,114 @@ def _resolve_universe_timeframe_rankings(
     return [], "unknown"
 
 
+def _resolve_universe_window_rankings(
+    timeframe: Timeframe,
+    *,
+    user_id: str | None,
+) -> tuple[list[dict[str, object]], str]:
+    if timeframe.key == "1d":
+        rows, source = _resolve_universe_rankings(user_id)
+        normalized_rows = [
+            _apply_common_market_item_shape(dict(entry))
+            for entry in rows
+            if isinstance(entry, dict)
+        ]
+        return normalized_rows, source
+    cache_key = build_cache_key("market-universe-window-v2", "alpaca", timeframe.key, user_id or "anon")
+
+    def _load() -> dict[str, object]:
+        assets = _filter_rankable_assets(_normalize_assets(_load_assets_master(user_id)))
+        if not assets:
+            return {"rows": [], "source": "unknown"}
+        selected_assets = list(assets)
+        if MARKET_UNIVERSE_WINDOW_MAX_SYMBOLS and len(selected_assets) > MARKET_UNIVERSE_WINDOW_MAX_SYMBOLS:
+            asset_map = {
+                str(asset.get("symbol") or "").strip().upper(): asset
+                for asset in selected_assets
+                if asset.get("symbol")
+            }
+            ranked_rows, _ranked_source = _resolve_universe_rankings(user_id)
+            ranked_symbols: list[str] = []
+            seen: set[str] = set()
+            liquidity_rows = sorted(
+                [row for row in ranked_rows if isinstance(row, dict)],
+                key=lambda row: (
+                    _coerce_number(row.get("dollar_volume")) or 0.0,
+                    _coerce_number(row.get("volume")) or 0.0,
+                ),
+                reverse=True,
+            )
+            for row in liquidity_rows:
+                symbol = str(row.get("symbol") or "").strip().upper()
+                if not symbol or symbol in seen or symbol not in asset_map:
+                    continue
+                seen.add(symbol)
+                ranked_symbols.append(symbol)
+                if len(ranked_symbols) >= MARKET_UNIVERSE_WINDOW_MAX_SYMBOLS:
+                    break
+            if len(ranked_symbols) < MARKET_UNIVERSE_WINDOW_MAX_SYMBOLS:
+                for asset in selected_assets:
+                    symbol = str(asset.get("symbol") or "").strip().upper()
+                    if not symbol or symbol in seen:
+                        continue
+                    seen.add(symbol)
+                    ranked_symbols.append(symbol)
+                    if len(ranked_symbols) >= MARKET_UNIVERSE_WINDOW_MAX_SYMBOLS:
+                        break
+            selected_assets = [asset_map[symbol] for symbol in ranked_symbols if symbol in asset_map]
+        if MARKET_UNIVERSE_MAX_SYMBOLS and len(selected_assets) > MARKET_UNIVERSE_MAX_SYMBOLS:
+            selected_assets = selected_assets[:MARKET_UNIVERSE_MAX_SYMBOLS]
+        symbols = [asset.get("symbol") for asset in selected_assets if asset.get("symbol")]
+        metrics_map, source = _resolve_symbol_window_metrics(symbols, timeframe=timeframe, user_id=user_id)
+        label = str(timeframe.label)
+        rows: list[dict[str, object]] = []
+        for asset in selected_assets:
+            symbol = str(asset.get("symbol") or "").strip().upper()
+            if not symbol:
+                continue
+            metrics = metrics_map.get(symbol, {})
+            row: dict[str, object] = {
+                "symbol": symbol,
+                "name": asset.get("name") or "",
+                "exchange": asset.get("exchange") or "",
+                "price": metrics.get("price"),
+                "change_pct_period": metrics.get("change_pct_period"),
+                "change_pct_day": metrics.get("change_pct_day"),
+                "change_pct": metrics.get("change_pct_period"),
+                "volume": metrics.get("volume"),
+                "dollar_volume": metrics.get("dollar_volume"),
+                "range_pct": metrics.get("range_pct"),
+                "open": metrics.get("open"),
+                "prev_close": metrics.get("prev_close"),
+                "period_label": label,
+                "period_label_en": timeframe.label_en,
+            }
+            missing = _normalize_missing_reason_map(metrics.get("missing_reasons"))
+            if missing:
+                row["missing_reasons"] = missing
+            rows.append(_apply_common_market_item_shape(row))
+        return {"rows": rows, "source": source or "unknown"}
+
+    payload = cache_memoize(cache_key, _load, MARKET_UNIVERSE_RANKINGS_CACHE_TTL)
+    if isinstance(payload, dict):
+        rows = payload.get("rows")
+        source = payload.get("source")
+        normalized_rows = [
+            _apply_common_market_item_shape(dict(entry))
+            for entry in (rows if isinstance(rows, list) else [])
+            if isinstance(entry, dict)
+        ]
+        return normalized_rows, source if isinstance(source, str) else "unknown"
+    if isinstance(payload, list):
+        normalized_rows = [
+            _apply_common_market_item_shape(dict(entry))
+            for entry in payload
+            if isinstance(entry, dict)
+        ]
+        return normalized_rows, "unknown"
+    return [], "unknown"
+
+
 def _filter_assets(
     assets: list[dict[str, str]],
     *,
@@ -1516,49 +2205,403 @@ def _fetch_company_profile(symbol: str, *, user_id: str | None = None) -> dict[s
     return result if isinstance(result, dict) else {}
 
 
-def _format_news_time(value: object) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, (int, float)):
+def _fetch_52w_stats(symbol: str, *, user_id: str | None = None) -> dict[str, float | None]:
+    if not symbol:
+        return {"high_52w": None, "low_52w": None, "as_of": None}
+    cache_key = build_cache_key("market-52w", "alpaca", symbol.upper())
+
+    def _download() -> dict[str, float | None]:
+        frame = market_data.fetch(
+            [symbol],
+            period="1y",
+            interval="1d",
+            cache=True,
+            ttl=MARKET_52W_CACHE_TTL,
+            timeout=MARKET_REQUEST_TIMEOUT,
+            user_id=user_id,
+        )
+        bars = _extract_ohlc(frame, symbol, limit=420)
+        if not bars:
+            return {"high_52w": None, "low_52w": None, "as_of": None}
+        highs: list[float] = []
+        lows: list[float] = []
+        for bar in bars:
+            if not isinstance(bar, dict):
+                continue
+            high = _coerce_number(bar.get("high"))
+            low = _coerce_number(bar.get("low"))
+            if high is not None:
+                highs.append(float(high))
+            if low is not None:
+                lows.append(float(low))
+        if not highs or not lows:
+            return {"high_52w": None, "low_52w": None, "as_of": None}
+        last = bars[-1] if isinstance(bars[-1], dict) else {}
+        as_of = _coerce_number(last.get("time"))
+        return {
+            "high_52w": max(highs),
+            "low_52w": min(lows),
+            "as_of": float(as_of) if as_of is not None else None,
+        }
+
+    result = cache_memoize(cache_key, _download, MARKET_52W_CACHE_TTL)
+    if isinstance(result, dict):
+        return result  # type: ignore[return-value]
+    return {"high_52w": None, "low_52w": None, "as_of": None}
+
+
+def _download_yfinance_fundamentals(symbol: str) -> tuple[dict[str, object] | None, dict[str, object]]:
+    debug: dict[str, object] = {"symbol": symbol}
+    try:
+        import yfinance as yf  # type: ignore
+    except Exception as exc:
+        debug["error"] = f"import:{exc}"
+        return None, debug
+    try:
+        ticker = yf.Ticker(symbol)
+        info: dict[str, object] = {}
         try:
-            return datetime.fromtimestamp(float(value), tz=timezone.utc).strftime("%Y-%m-%d")
+            info = ticker.get_info() or {}
         except Exception:
-            return ""
-    text = str(value).strip()
-    if not text:
-        return ""
-    if len(text) >= 10:
-        return text[:10]
-    return text
+            info = ticker.info or {}
+    except Exception as exc:
+        debug["error"] = f"info:{exc}"
+        return None, debug
+    if not isinstance(info, dict):
+        debug["error"] = "info:invalid"
+        return None, debug
+    debug["info_size"] = len(info)
+    debug["info_keys"] = list(info.keys())[:12]
+    market_cap = info.get("marketCap")
+    sector = info.get("sector")
+    industry = info.get("industry")
+    city = info.get("city")
+    state = info.get("state")
+    country = info.get("country")
+    quote_type = info.get("quoteType") or info.get("quote_type")
+    hq_parts = [part for part in (city, state, country) if part]
+    hq = ", ".join(str(part) for part in hq_parts) if hq_parts else None
+    ceo = None
+    officers = info.get("companyOfficers")
+    if isinstance(officers, list):
+        for officer in officers:
+            if not isinstance(officer, dict):
+                continue
+            title = str(officer.get("title") or "").lower()
+            if "ceo" in title or "chief executive" in title:
+                ceo = officer.get("name") or officer.get("fullName") or officer.get("full_name")
+                if ceo:
+                    break
+    if market_cap in (None, "", 0):
+        try:
+            fast_info = ticker.fast_info or {}
+        except Exception:
+            fast_info = {}
+        if isinstance(fast_info, dict):
+            market_cap = fast_info.get("market_cap") or fast_info.get("marketCap") or market_cap
+    payload = {
+        "market_cap": market_cap,
+        "sector": sector,
+        "industry": industry,
+        "ceo": ceo,
+        "hq": hq,
+        "city": city,
+        "state": state,
+        "country": country,
+        "quote_type": quote_type,
+    }
+    has_value = any(value not in (None, "", [], {}) for value in payload.values())
+    debug["keys"] = [key for key, value in payload.items() if value not in (None, "", [], {})]
+    debug["has_values"] = has_value
+    return payload if has_value else None, debug
 
 
-def _normalize_news_items(items: list[dict[str, object]]) -> list[dict[str, str]]:
-    normalized: list[dict[str, str]] = []
+def _fetch_yfinance_fundamentals(symbol: str) -> dict[str, object]:
+    if not symbol:
+        return {}
+    cache_key = build_cache_key("market-fundamentals", "yfinance", "v4", symbol.upper())
+
+    def _download() -> dict[str, object] | None:
+        payload, _debug = _download_yfinance_fundamentals(symbol)
+        return payload
+
+    result = cache_memoize(cache_key, _download, MARKET_FUNDAMENTALS_CACHE_TTL)
+    return result if isinstance(result, dict) else {}
+
+
+def _fetch_yfinance_fundamentals_debug(symbol: str) -> tuple[dict[str, object], dict[str, object]]:
+    cache_key = build_cache_key("market-fundamentals", "yfinance", "v4", symbol.upper())
+    cached = cache_get_object(cache_key)
+    if isinstance(cached, dict):
+        keys = [key for key, value in cached.items() if value not in (None, "", [], {})]
+        return cached, {"symbol": symbol, "cached": True, "keys": keys, "has_values": bool(keys)}
+    payload, debug = _download_yfinance_fundamentals(symbol)
+    debug["cached"] = False
+    if payload is not None:
+        cache_set_object(cache_key, payload, MARKET_FUNDAMENTALS_CACHE_TTL)
+    return payload or {}, debug
+
+
+def _format_news_time(value: object) -> float | None:
+    ts = parse_timestamp(value)
+    return float(ts) if ts is not None else None
+
+
+def _normalize_news_related_symbols(entry: dict[str, object], content: dict[str, object] | None) -> list[str]:
+    candidates: list[object] = [
+        entry.get("symbols"),
+        entry.get("relatedTickers"),
+    ]
+    if isinstance(content, dict):
+        candidates.extend(
+            [
+                content.get("symbols"),
+                content.get("relatedTickers"),
+                content.get("tickers"),
+            ]
+        )
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in candidates:
+        if not isinstance(value, list):
+            continue
+        for raw in value:
+            symbol = _normalize_query(raw)
+            if not symbol:
+                continue
+            if symbol in seen:
+                continue
+            seen.add(symbol)
+            result.append(symbol)
+    return result
+
+
+def _normalize_news_items(items: list[dict[str, object]]) -> list[dict[str, object]]:
+    normalized: list[dict[str, object]] = []
     for entry in items:
         if not isinstance(entry, dict):
             continue
-        title = entry.get("headline") or entry.get("title") or entry.get("summary") or entry.get("content") or ""
-        url = entry.get("url") or entry.get("link") or entry.get("article_url") or ""
+        content = entry.get("content")
+        content_title = content.get("title") if isinstance(content, dict) else None
+        content_summary = content.get("summary") if isinstance(content, dict) else None
+        content_desc = content.get("description") if isinstance(content, dict) else None
+
+        def _coerce_text(value: object) -> str:
+            if isinstance(value, str):
+                return value
+            if isinstance(value, (int, float)):
+                return str(value)
+            return ""
+
+        def _pick_text(*candidates: object) -> str:
+            for candidate in candidates:
+                text = _coerce_text(candidate).strip()
+                if text:
+                    return text
+            return ""
+
+        title = _pick_text(
+            entry.get("headline"),
+            entry.get("title"),
+            content_title,
+            entry.get("summary"),
+            content_summary,
+            content if isinstance(content, str) else None,
+        )
+        snippet = _pick_text(
+            entry.get("summary"),
+            entry.get("description"),
+            content_summary,
+            content_desc,
+            content if isinstance(content, str) else None,
+        )
+        url = (
+            entry.get("url")
+            or entry.get("link")
+            or entry.get("article_url")
+            or (content.get("canonicalUrl", {}).get("url") if isinstance(content, dict) and isinstance(content.get("canonicalUrl"), dict) else None)
+            or (content.get("clickThroughUrl", {}).get("url") if isinstance(content, dict) and isinstance(content.get("clickThroughUrl"), dict) else None)
+            or ""
+        )
+        if not url and isinstance(entry.get("canonicalUrl"), dict):
+            url = entry.get("canonicalUrl", {}).get("url")  # type: ignore[assignment]
+        if not url and isinstance(entry.get("clickThroughUrl"), dict):
+            url = entry.get("clickThroughUrl", {}).get("url")  # type: ignore[assignment]
         source = entry.get("source") or entry.get("publisher") or entry.get("author") or ""
+        if not source and isinstance(entry.get("provider"), dict):
+            source = entry.get("provider", {}).get("displayName") or entry.get("provider", {}).get("name")  # type: ignore[assignment]
+        if not source and isinstance(content, dict) and isinstance(content.get("provider"), dict):
+            provider = content.get("provider", {})
+            source = provider.get("displayName") or provider.get("name") or provider.get("url")  # type: ignore[assignment]
+        related_symbols = _normalize_news_related_symbols(entry, content if isinstance(content, dict) else None)
         raw_time = (
             entry.get("created_at")
             or entry.get("createdAt")
+            or entry.get("updated_at")
+            or entry.get("updatedAt")
             or entry.get("time")
             or entry.get("published_at")
             or entry.get("published")
             or entry.get("providerPublishTime")
+            or entry.get("pubDate")
+            or entry.get("displayTime")
+            or (content.get("pubDate") if isinstance(content, dict) else None)
+            or (content.get("displayTime") if isinstance(content, dict) else None)
         )
-        snippet = entry.get("summary") or entry.get("description") or entry.get("content") or ""
         normalized.append(
             {
-                "title": str(title).strip(),
-                "url": str(url).strip(),
-                "source": str(source).strip(),
+                "title": _coerce_text(title).strip(),
+                "url": _coerce_text(url).strip(),
+                "source": _coerce_text(source).strip(),
                 "time": _format_news_time(raw_time),
-                "summary": str(snippet).strip(),
+                "summary": _coerce_text(snippet).strip(),
+                "related_symbols": related_symbols,
             }
         )
     return normalized
+
+
+def _sort_and_dedupe_news_items(items: list[dict[str, object]]) -> list[dict[str, object]]:
+    seen: set[str] = set()
+    deduped: list[dict[str, object]] = []
+    for entry in items:
+        if not isinstance(entry, dict):
+            continue
+        url = str(entry.get("url") or "").strip().lower()
+        title = str(entry.get("title") or "").strip().lower()
+        summary = str(entry.get("summary") or "").strip().lower()
+        time_value = _coerce_number(entry.get("time"))
+        if url:
+            dedupe_key = f"url:{url}"
+        elif title and time_value is not None:
+            dedupe_key = f"title_time:{title}|{int(time_value)}"
+        elif title:
+            dedupe_key = f"title:{title}"
+        elif summary:
+            dedupe_key = f"summary:{summary[:120]}"
+        else:
+            continue
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        deduped.append(entry)
+
+    return sorted(
+        deduped,
+        key=lambda item: (_coerce_number(item.get("time")) or 0.0, str(item.get("title") or "").lower()),
+        reverse=True,
+    )
+
+
+_NEWS_SENTIMENT_POSITIVE = {
+    "beat",
+    "beats",
+    "surge",
+    "surged",
+    "upgrade",
+    "upgraded",
+    "record",
+    "growth",
+    "profit",
+    "profits",
+    "rally",
+    "raises",
+    "raised",
+    "strong",
+    "outperform",
+    "buyback",
+    "bullish",
+    "expands",
+    "expansion",
+    "accelerate",
+    "accelerates",
+    "上调",
+    "增长",
+    "盈利",
+    "创新高",
+    "强劲",
+    "利好",
+    "回购",
+    "看多",
+}
+
+_NEWS_SENTIMENT_NEGATIVE = {
+    "miss",
+    "missed",
+    "downgrade",
+    "downgraded",
+    "falls",
+    "fall",
+    "drop",
+    "drops",
+    "lawsuit",
+    "cuts",
+    "cut",
+    "weak",
+    "warns",
+    "warning",
+    "bearish",
+    "decline",
+    "plunge",
+    "slump",
+    "下调",
+    "下跌",
+    "亏损",
+    "利空",
+    "警告",
+    "看空",
+}
+
+
+def _infer_sentiment_rule(text: str) -> str:
+    lowered = (text or "").lower()
+    if not lowered:
+        return "neutral"
+    score = 0
+    for word in _NEWS_SENTIMENT_POSITIVE:
+        if word in lowered:
+            score += 1
+    for word in _NEWS_SENTIMENT_NEGATIVE:
+        if word in lowered:
+            score -= 1
+    if score > 0:
+        return "bullish"
+    if score < 0:
+        return "bearish"
+    return "neutral"
+
+
+def _normalize_sentiment_label(value: str) -> str:
+    raw = str(value or "").strip()
+    lowered = raw.lower()
+    if lowered in {"bullish", "positive", "pos", "up"}:
+        return "bullish"
+    if lowered in {"bearish", "negative", "neg", "down"}:
+        return "bearish"
+    if lowered in {"neutral", "mixed"}:
+        return "neutral"
+    if any(token in raw for token in ("利好", "看多", "上涨", "正面")):
+        return "bullish"
+    if any(token in raw for token in ("利空", "看空", "下跌", "负面")):
+        return "bearish"
+    return "neutral"
+
+
+def _news_sentiment_cache_key(symbol: str, items: list[dict[str, object]]) -> str:
+    digest_items: list[dict[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        digest_items.append(
+            {
+                "title": str(item.get("title") or "").strip(),
+                "summary": str(item.get("summary") or "").strip(),
+                "source": str(item.get("source") or "").strip(),
+            }
+        )
+    raw = json.dumps({"symbol": symbol.upper(), "items": digest_items}, ensure_ascii=False, sort_keys=True)
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    return build_cache_key("market-news-sentiment", symbol.upper(), digest)
 
 
 def _infer_news_symbols(symbol: str, *, user_id: str | None = None) -> list[str]:
@@ -1578,47 +2621,67 @@ def _infer_news_symbols(symbol: str, *, user_id: str | None = None) -> list[str]
     return symbols
 
 
-def _fetch_yfinance_news(symbol: str, *, limit: int) -> list[dict[str, str]]:
-    try:
-        import yfinance as yf  # type: ignore
-    except Exception:
-        return []
-    try:
-        ticker = yf.Ticker(symbol)
-        items = ticker.news or []
-    except Exception:
-        return []
-    if not isinstance(items, list):
-        return []
-    normalized = _normalize_news_items([entry for entry in items if isinstance(entry, dict)])
-    return normalized[:limit]
-
-
-def _fetch_symbol_news(symbol: str, *, user_id: str | None = None, limit: int = 6) -> list[dict[str, str]]:
+def _fetch_symbol_news_pool(symbol: str, *, user_id: str | None = None) -> list[dict[str, object]]:
     if not symbol:
         return []
-    cache_key = build_cache_key("market-news", "alpaca", symbol.upper())
+    cache_key = build_cache_key("market-news", "alpaca", "v4-alpaca-unbounded", symbol.upper())
 
     cached = cache_get_object(cache_key)
-    if isinstance(cached, list) and cached:
-        return cached
+    if isinstance(cached, list):
+        cached_items = _sort_and_dedupe_news_items(_normalize_news_items([entry for entry in cached if isinstance(entry, dict)]))
+        if cached_items:
+            return cached_items
 
     symbols = _infer_news_symbols(symbol, user_id=user_id)
-    items = fetch_news(symbols=symbols, limit=limit, user_id=user_id)
-    normalized: list[dict[str, str]] = []
+    items = fetch_news(symbols=symbols, limit=None, user_id=user_id)
+    normalized: list[dict[str, object]] = []
     if isinstance(items, list) and items:
-        normalized = _normalize_news_items(items)[:limit]
-    if not normalized:
-        fallback_symbol = symbols[-1] if symbols else symbol
-        normalized = _fetch_yfinance_news(fallback_symbol, limit=limit)
+        normalized = _sort_and_dedupe_news_items(_normalize_news_items(items))
     if normalized:
         cache_set_object(cache_key, normalized, MARKET_NEWS_CACHE_TTL)
     return normalized
 
 
+def _fetch_symbol_news_page(
+    symbol: str,
+    *,
+    user_id: str | None = None,
+    limit: int = MARKET_NEWS_PAGE_DEFAULT,
+    offset: int = 0,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    safe_limit = _parse_news_limit(limit, default=MARKET_NEWS_PAGE_DEFAULT)
+    safe_offset = _parse_offset(offset)
+    all_items = _fetch_symbol_news_pool(symbol, user_id=user_id)
+    page_items = all_items[safe_offset : safe_offset + safe_limit]
+    next_offset = safe_offset + len(page_items)
+    has_more = next_offset < len(all_items)
+    return (
+        page_items,
+        {
+            "offset": safe_offset,
+            "limit": safe_limit,
+            "count": len(page_items),
+            "has_more": has_more,
+            "next_offset": next_offset if has_more else None,
+            "total_cached": len(all_items),
+        },
+    )
+
+
+def _fetch_symbol_news(
+    symbol: str,
+    *,
+    user_id: str | None = None,
+    limit: int = MARKET_NEWS_PAGE_DEFAULT,
+    offset: int = 0,
+) -> list[dict[str, object]]:
+    page_items, _meta = _fetch_symbol_news_page(symbol, user_id=user_id, limit=limit, offset=offset)
+    return page_items
+
+
 def _build_ai_summary(
     profile_payload: dict[str, object],
-    news_payload: list[dict[str, str]],
+    news_payload: list[dict[str, object]],
     *,
     lang_prefix: str,
 ) -> str:
@@ -1641,6 +2704,525 @@ def _build_ai_summary(
     if len(summary) > 160:
         summary = summary[:160].rstrip() + "..."
     return summary
+
+
+def _ai_summary_cache_key(
+    symbol: str,
+    profile_payload: dict[str, object],
+    news_payload: list[dict[str, str]],
+    *,
+    lang_prefix: str,
+) -> str:
+    safe_profile: dict[str, object] = {}
+    if isinstance(profile_payload, dict):
+        for key in (
+            "name",
+            "shortName",
+            "summary",
+            "exchange",
+            "sector",
+            "industry",
+            "marketCap",
+            "market_cap",
+            "market_capitalization",
+            "currency",
+            "country",
+        ):
+            value = profile_payload.get(key)
+            if value:
+                safe_profile[key] = value
+    safe_news: list[dict[str, object]] = []
+    if isinstance(news_payload, list):
+        for item in news_payload[:6]:
+            if not isinstance(item, dict):
+                continue
+            safe_news.append(
+                {
+                    "title": str(item.get("title") or "").strip(),
+                    "source": str(item.get("source") or "").strip(),
+                    "time": item.get("time"),
+                    "summary": str(item.get("summary") or "").strip(),
+                }
+            )
+    digest_payload = {
+        "symbol": symbol.upper(),
+        "lang": lang_prefix,
+        "profile": safe_profile,
+        "news": safe_news,
+    }
+    raw = json.dumps(digest_payload, ensure_ascii=False, sort_keys=True)
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    return build_cache_key("market-ai-summary", symbol.upper(), lang_prefix, digest)
+
+
+def _ai_summary_struct_cache_key(
+    symbol: str,
+    profile_payload: dict[str, object],
+    news_payload: list[dict[str, str]],
+    *,
+    lang_prefix: str,
+) -> str:
+    digest = _ai_summary_cache_key(symbol, profile_payload, news_payload, lang_prefix=lang_prefix).split(":")[-1]
+    return build_cache_key("market-ai-summary-struct", symbol.upper(), lang_prefix, digest)
+
+
+def _parse_ai_json(text: str) -> dict[str, Any] | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        pass
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            data = json.loads(raw[start : end + 1])
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+def _normalize_ai_struct(payload: dict[str, Any] | None) -> dict[str, str] | None:
+    if not isinstance(payload, dict) or not payload:
+        return None
+    mapping = {
+        "event": "event",
+        "核心事件": "event",
+        "impact": "impact",
+        "市场影响": "impact",
+        "implication": "implication",
+        "交易暗示": "implication",
+    }
+    normalized: dict[str, str] = {}
+    for key, target in mapping.items():
+        if key not in payload:
+            continue
+        value = str(payload.get(key) or "").strip()
+        if value:
+            normalized[target] = value
+    if not normalized:
+        return None
+    return normalized
+
+
+def _contains_cjk(text: str) -> bool:
+    if not text:
+        return False
+    return bool(re.search(r"[\u4e00-\u9fff]", text))
+
+
+def _struct_matches_lang(structured: dict[str, str], lang_prefix: str) -> bool:
+    values = [value for value in structured.values() if isinstance(value, str) and value.strip()]
+    if not values:
+        return True
+    if lang_prefix == "zh":
+        return any(_contains_cjk(value) for value in values)
+    if lang_prefix == "en":
+        return not any(_contains_cjk(value) for value in values)
+    return True
+
+
+def _translate_ai_struct(
+    structured: dict[str, str],
+    *,
+    lang_prefix: str,
+    model: str,
+    api_key: str,
+) -> dict[str, str] | None:
+    if not structured:
+        return None
+    if lang_prefix == "zh":
+        system_prompt = (
+            "你是专业翻译助手。请把 JSON 中的 event/impact/implication 翻译成中文，"
+            "保持 JSON 结构不变，只输出 JSON。公司名/股票代码可保留英文。"
+        )
+    else:
+        system_prompt = (
+            "You are a professional translator. Translate event/impact/implication into English, "
+            "keep JSON structure, output JSON only. Keep tickers/proper nouns as-is."
+        )
+    user_prompt = json.dumps(structured, ensure_ascii=False)
+    try:
+        response = bailian_ai.chat(
+            model,
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            timeout_seconds=MARKET_AI_SUMMARY_TIMEOUT_SECONDS,
+            api_key=api_key,
+            response_format={"type": "json_object"},
+            extra_params={"temperature": 0.1, "max_tokens": MARKET_AI_SUMMARY_MAX_TOKENS},
+        )
+    except Exception:
+        return None
+    answer = str(response.get("answer") or "").strip()
+    parsed = _parse_ai_json(answer)
+    translated = _normalize_ai_struct(parsed)
+    if not translated:
+        return None
+    if not _struct_matches_lang(translated, lang_prefix):
+        return None
+    return translated
+
+
+def _summary_from_struct(structured: dict[str, str], *, lang_prefix: str) -> str:
+    parts = [structured.get("event"), structured.get("impact"), structured.get("implication")]
+    parts = [part for part in parts if part]
+    if not parts:
+        return ""
+    sep = "。" if lang_prefix == "zh" else ". "
+    text = sep.join(parts)
+    if lang_prefix == "en" and text and not text.endswith((".", "!", "?")):
+        text = f"{text}."
+    return text.strip()
+
+
+def _resolve_bailian_model(preferred: str | None) -> str | None:
+    if not preferred:
+        return None
+    text = str(preferred).strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered.startswith(("bailian:", "dashscope:", "aliyun:")):
+        return text.split(":", 1)[1].strip() or None
+    if lowered.startswith("qwen"):
+        return text
+    return None
+
+
+def _build_ai_summary_llm(
+    profile_payload: dict[str, object],
+    news_payload: list[dict[str, str]],
+    *,
+    lang_prefix: str,
+    symbol: str,
+    user: Any,
+    api_key: str | None = None,
+    raise_on_error: bool = False,
+) -> str | None:
+    api_key = api_key or resolve_api_credential(user, "bailian_api_key") or os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("BAILIAN_API_KEY")
+    if not api_key:
+        return None
+    cache_key = _ai_summary_cache_key(symbol, profile_payload, news_payload, lang_prefix=lang_prefix)
+    cached = cache_get_object(cache_key)
+    if isinstance(cached, str) and cached:
+        return cached
+    preferred_model = resolve_api_credential(user, "ai_model")
+    model = (
+        _resolve_bailian_model(preferred_model)
+        or os.environ.get("BAILIAN_MODEL")
+        or os.environ.get("DASHSCOPE_MODEL")
+        or "qwen-max"
+    )
+
+    name = ""
+    exchange = ""
+    profile_summary = ""
+    if isinstance(profile_payload, dict):
+        name = str(profile_payload.get("name") or profile_payload.get("shortName") or "").strip()
+        exchange = str(profile_payload.get("exchange") or "").strip()
+        profile_summary = str(profile_payload.get("summary") or "").strip()
+
+    news_lines: list[str] = []
+    if isinstance(news_payload, list):
+        for item in news_payload[:6]:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            if not title:
+                continue
+            source = str(item.get("source") or "").strip()
+            summary = str(item.get("summary") or "").strip()
+            if source:
+                news_line = f"- {title} ({source})"
+            else:
+                news_line = f"- {title}"
+            if summary:
+                news_line = f"{news_line} 摘要：{summary}" if lang_prefix == "zh" else f"{news_line} Summary: {summary}"
+            news_lines.append(news_line)
+
+    if lang_prefix == "zh":
+        system_prompt = (
+            "你是谨慎的金融摘要助手。只根据提供的信息生成 4-6 句中文摘要，"
+            "覆盖核心事件、驱动因素、市场反应/影响、交易关注点（如信息不足请说明）。"
+            "每句尽量包含具体信息（如数值、时间或来源），"
+            "不做推测、不提供投资建议。"
+        )
+        user_prompt_lines = [
+            f"股票代码：{symbol}",
+        ]
+        if name:
+            user_prompt_lines.append(f"公司名称：{name}")
+        if exchange:
+            user_prompt_lines.append(f"交易所：{exchange}")
+        if profile_summary:
+            user_prompt_lines.append(f"公司简介：{profile_summary}")
+        if news_lines:
+            user_prompt_lines.append("相关新闻：")
+            user_prompt_lines.extend(news_lines)
+        else:
+            user_prompt_lines.append("相关新闻：暂无")
+        user_prompt_lines.append(
+            f"请输出 4-6 句中文摘要，不超过 {MARKET_AI_SUMMARY_MAX_CHARS} 个中文字符。"
+        )
+    else:
+        system_prompt = (
+            "You are a cautious market summary assistant. Summarize in 4-6 sentences using only the provided info, "
+            "covering event, key drivers, market reaction/impact, and what to watch if possible. "
+            "Each sentence should include concrete details (numbers, dates, or sources) when available. "
+            "No speculation or advice; if info is insufficient, say so."
+        )
+        user_prompt_lines = [
+            f"Symbol: {symbol}",
+        ]
+        if name:
+            user_prompt_lines.append(f"Company: {name}")
+        if exchange:
+            user_prompt_lines.append(f"Exchange: {exchange}")
+        if profile_summary:
+            user_prompt_lines.append(f"Profile: {profile_summary}")
+        if news_lines:
+            user_prompt_lines.append("News:")
+            user_prompt_lines.extend(news_lines)
+        else:
+            user_prompt_lines.append("News: none")
+        user_prompt_lines.append(f"Write 4-6 sentences within {MARKET_AI_SUMMARY_MAX_CHARS} characters.")
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": "\n".join(user_prompt_lines)},
+    ]
+    try:
+        response = bailian_ai.chat(
+            model,
+            messages,
+            timeout_seconds=MARKET_AI_SUMMARY_TIMEOUT_SECONDS,
+            api_key=api_key,
+            extra_params={"temperature": 0.2, "max_tokens": MARKET_AI_SUMMARY_MAX_TOKENS},
+        )
+    except Exception:
+        if raise_on_error:
+            raise
+        return None
+    answer = str(response.get("answer") or "").strip()
+    if not answer:
+        return None
+    if len(answer) > MARKET_AI_SUMMARY_MAX_CHARS:
+        answer = answer[:MARKET_AI_SUMMARY_MAX_CHARS].rstrip() + "..."
+    cache_set_object(cache_key, answer, MARKET_AI_SUMMARY_CACHE_TTL)
+    return answer
+
+
+def _build_ai_summary_struct_llm(
+    profile_payload: dict[str, object],
+    news_payload: list[dict[str, str]],
+    *,
+    lang_prefix: str,
+    symbol: str,
+    user: Any,
+    api_key: str | None = None,
+    raise_on_error: bool = False,
+) -> dict[str, str] | None:
+    api_key = api_key or resolve_api_credential(user, "bailian_api_key") or os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("BAILIAN_API_KEY")
+    if not api_key:
+        return None
+    preferred_model = resolve_api_credential(user, "ai_model")
+    model = (
+        _resolve_bailian_model(preferred_model)
+        or os.environ.get("BAILIAN_MODEL")
+        or os.environ.get("DASHSCOPE_MODEL")
+        or "qwen-max"
+    )
+    cache_key = _ai_summary_struct_cache_key(symbol, profile_payload, news_payload, lang_prefix=lang_prefix)
+    cached = cache_get_object(cache_key)
+    if isinstance(cached, dict) and cached:
+        cached_struct = _normalize_ai_struct(cached)
+        if cached_struct:
+            if _struct_matches_lang(cached_struct, lang_prefix):
+                return cached_struct
+            translated = _translate_ai_struct(cached_struct, lang_prefix=lang_prefix, model=model, api_key=api_key)
+            if translated:
+                cache_set_object(cache_key, translated, MARKET_AI_SUMMARY_CACHE_TTL)
+                return translated
+
+    name = ""
+    exchange = ""
+    profile_summary = ""
+    if isinstance(profile_payload, dict):
+        name = str(profile_payload.get("name") or profile_payload.get("shortName") or "").strip()
+        exchange = str(profile_payload.get("exchange") or "").strip()
+        profile_summary = str(profile_payload.get("summary") or "").strip()
+
+    news_lines: list[str] = []
+    if isinstance(news_payload, list):
+        for item in news_payload[:6]:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            if not title:
+                continue
+            source = str(item.get("source") or "").strip()
+            summary = str(item.get("summary") or "").strip()
+            news_line = f"- {title}"
+            if source:
+                news_line = f"{news_line} ({source})"
+            if summary:
+                news_line = f"{news_line} 摘要：{summary}" if lang_prefix == "zh" else f"{news_line} Summary: {summary}"
+            news_lines.append(news_line)
+
+    if lang_prefix == "zh":
+        system_prompt = (
+            "你是谨慎的金融摘要助手。只根据提供的信息输出严格 JSON，"
+            "不得猜测或给出投资建议。必须输出 JSON 对象，键为 event/impact/implication。"
+            "每个字段写 2-3 句中文（至少 2 句），尽量包含具体信息/数值/来源；"
+            "信息不足可写空字符串，但必须保留键。"
+            "只输出 JSON，不要任何额外文字。"
+        )
+        user_prompt_lines = [
+            f"股票代码：{symbol}",
+        ]
+        if name:
+            user_prompt_lines.append(f"公司：{name}")
+        if exchange:
+            user_prompt_lines.append(f"交易所：{exchange}")
+        if profile_summary:
+            user_prompt_lines.append(f"公司简介：{profile_summary}")
+        if news_lines:
+            user_prompt_lines.append("相关新闻：")
+            user_prompt_lines.extend(news_lines)
+        else:
+            user_prompt_lines.append("相关新闻：暂无")
+        user_prompt_lines.append(
+            "请输出 JSON：{\"event\":\"...\",\"impact\":\"...\",\"implication\":\"...\"}，不要输出其它文字。"
+        )
+    else:
+        system_prompt = (
+            "You are a cautious market summary assistant. Output strict JSON only with keys "
+            "event/impact/implication. Use only the provided info. No speculation or advice. "
+            "Write 2-3 sentences per field (at least 2) and include concrete details when available; "
+            "if insufficient, use empty string but keep the key. "
+            "Respond in English only and output JSON only."
+        )
+        user_prompt_lines = [
+            f"Symbol: {symbol}",
+        ]
+        if name:
+            user_prompt_lines.append(f"Company: {name}")
+        if exchange:
+            user_prompt_lines.append(f"Exchange: {exchange}")
+        if profile_summary:
+            user_prompt_lines.append(f"Profile: {profile_summary}")
+        if news_lines:
+            user_prompt_lines.append("News:")
+            user_prompt_lines.extend(news_lines)
+        else:
+            user_prompt_lines.append("News: none")
+        user_prompt_lines.append('Return JSON only: {"event":"...","impact":"...","implication":"..."}')
+
+    preferred_model = resolve_api_credential(user, "ai_model")
+    model = (
+        _resolve_bailian_model(preferred_model)
+        or os.environ.get("BAILIAN_MODEL")
+        or os.environ.get("DASHSCOPE_MODEL")
+        or "qwen-max"
+    )
+    def _call_llm(prompt_messages: list[dict[str, str]], *, temperature: float) -> dict[str, str] | None:
+        try:
+            response = bailian_ai.chat(
+                model,
+                prompt_messages,
+                timeout_seconds=MARKET_AI_SUMMARY_TIMEOUT_SECONDS,
+                api_key=api_key,
+                response_format={"type": "json_object"},
+                extra_params={"temperature": temperature, "max_tokens": MARKET_AI_SUMMARY_MAX_TOKENS},
+            )
+        except Exception:
+            if raise_on_error:
+                raise
+            return None
+        answer = str(response.get("answer") or "").strip()
+        parsed = _parse_ai_json(answer)
+        normalized = _normalize_ai_struct(parsed)
+        if not normalized:
+            return None
+        if not _struct_matches_lang(normalized, lang_prefix):
+            translated = _translate_ai_struct(normalized, lang_prefix=lang_prefix, model=model, api_key=api_key)
+            if translated:
+                return translated
+            return None
+        return normalized
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": "\n".join(user_prompt_lines)},
+    ]
+    structured = _call_llm(messages, temperature=0.2)
+    if not structured:
+        retry_prompt = (
+            system_prompt
+            + (" 必须严格 JSON，不要代码块。" if lang_prefix == "zh" else " Output strict JSON without code fences.")
+        )
+        retry_messages = [
+            {"role": "system", "content": retry_prompt},
+            {"role": "user", "content": "\n".join(user_prompt_lines)},
+        ]
+        structured = _call_llm(retry_messages, temperature=0.1)
+    if not structured:
+        return None
+    cache_set_object(cache_key, structured, MARKET_AI_SUMMARY_CACHE_TTL)
+    return structured
+
+
+def _build_ai_summary_with_llm(
+    profile_payload: dict[str, object],
+    news_payload: list[dict[str, str]],
+    *,
+    lang_prefix: str,
+    symbol: str,
+    user: Any,
+) -> str:
+    fallback = _build_ai_summary(profile_payload, news_payload, lang_prefix=lang_prefix)
+    summary = _build_ai_summary_llm(profile_payload, news_payload, lang_prefix=lang_prefix, symbol=symbol, user=user)
+    return summary or fallback
+
+
+def _build_ai_summary_with_meta(
+    profile_payload: dict[str, object],
+    news_payload: list[dict[str, str]],
+    *,
+    lang_prefix: str,
+    symbol: str,
+    user: Any,
+) -> tuple[str, dict[str, str], dict[str, str] | None]:
+    fallback = _build_ai_summary(profile_payload, news_payload, lang_prefix=lang_prefix)
+    api_key = resolve_api_credential(user, "bailian_api_key") or os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("BAILIAN_API_KEY")
+    if not api_key:
+        message = "AI 未配置百炼 API Key，当前显示新闻摘要。" if lang_prefix == "zh" else "AI API key is missing; showing fallback summary."
+        return fallback, {"status": "missing_key", "message": message, "source": "fallback"}, None
+    try:
+        structured = _build_ai_summary_struct_llm(
+            profile_payload,
+            news_payload,
+            lang_prefix=lang_prefix,
+            symbol=symbol,
+            user=user,
+            api_key=api_key,
+            raise_on_error=True,
+        )
+    except Exception:
+        message = "AI 暂时不可用，已显示回退摘要。" if lang_prefix == "zh" else "AI is unavailable right now; showing fallback summary."
+        return fallback, {"status": "error", "message": message, "source": "fallback"}, None
+    if structured:
+        summary = _summary_from_struct(structured, lang_prefix=lang_prefix)
+        return summary or fallback, {"status": "llm", "message": "", "source": "bailian"}, structured
+    message = "AI 返回格式异常，已显示回退摘要。" if lang_prefix == "zh" else "AI returned an invalid format; showing fallback summary."
+    return fallback, {"status": "fallback", "message": message, "source": "fallback"}, None
 
 
 def _extract_ohlc(frame: pd.DataFrame, symbol: str, *, limit: int = 360) -> list[dict[str, float | int]]:
@@ -1673,13 +3255,21 @@ def _extract_ohlc(frame: pd.DataFrame, symbol: str, *, limit: int = 360) -> list
             if isinstance(sub, pd.DataFrame) and field in sub.columns:
                 return sub[field]
         return None
+    
+    def _pull_first(fields: tuple[str, ...]) -> pd.Series | None:
+        for field in fields:
+            series = _pull_field(field)
+            if series is not None:
+                return series
+        return None
 
-    open_series = _pull_field("Open")
-    high_series = _pull_field("High")
-    low_series = _pull_field("Low")
-    close_series = _pull_field("Close")
+    open_series = _pull_first(("Open", "open"))
+    high_series = _pull_first(("High", "high"))
+    low_series = _pull_first(("Low", "low"))
+    close_series = _pull_first(("Close", "close"))
     if open_series is None or high_series is None or low_series is None or close_series is None:
         return []
+    volume_series = _pull_first(("Volume", "volume", "V", "v"))
 
     ohlc_frame = pd.DataFrame(
         {
@@ -1691,6 +3281,8 @@ def _extract_ohlc(frame: pd.DataFrame, symbol: str, *, limit: int = 360) -> list
     ).dropna()
     if ohlc_frame.empty:
         return []
+    if volume_series is not None:
+        ohlc_frame["volume"] = volume_series
 
     ohlc_frame = ohlc_frame.sort_index().tail(limit)
     bars: list[dict[str, float | int]] = []
@@ -1701,19 +3293,25 @@ def _extract_ohlc(frame: pd.DataFrame, symbol: str, *, limit: int = 360) -> list
                 stamp = stamp.tz_localize(timezone.utc)
             else:
                 stamp = stamp.tz_convert(timezone.utc)
-            time_val = int(stamp.timestamp())
+            time_val = float(stamp.timestamp())
         except Exception:
             continue
         try:
-            bars.append(
-                {
-                    "time": time_val,
-                    "open": float(row["open"]),
-                    "high": float(row["high"]),
-                    "low": float(row["low"]),
-                    "close": float(row["close"]),
-                }
-            )
+            entry = {
+                "time": time_val,
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+            }
+            if "volume" in row and row["volume"] is not None:
+                try:
+                    volume_val = float(row["volume"])
+                except Exception:
+                    volume_val = None
+                if volume_val is not None and not pd.isna(volume_val):
+                    entry["volume"] = volume_val
+            bars.append(entry)
         except Exception:
             continue
     return bars
@@ -1749,13 +3347,21 @@ def _resample_ohlc_frame(frame: pd.DataFrame, symbol: str, rule: str) -> pd.Data
             if isinstance(sub, pd.DataFrame) and field in sub.columns:
                 return sub[field]
         return None
+    
+    def _pull_first(fields: tuple[str, ...]) -> pd.Series | None:
+        for field in fields:
+            series = _pull_field(field)
+            if series is not None:
+                return series
+        return None
 
-    open_series = _pull_field("Open")
-    high_series = _pull_field("High")
-    low_series = _pull_field("Low")
-    close_series = _pull_field("Close")
+    open_series = _pull_first(("Open", "open"))
+    high_series = _pull_first(("High", "high"))
+    low_series = _pull_first(("Low", "low"))
+    close_series = _pull_first(("Close", "close"))
     if open_series is None or high_series is None or low_series is None or close_series is None:
         return pd.DataFrame()
+    volume_series = _pull_first(("Volume", "volume", "V", "v"))
 
     ohlc_frame = pd.DataFrame(
         {
@@ -1767,6 +3373,8 @@ def _resample_ohlc_frame(frame: pd.DataFrame, symbol: str, rule: str) -> pd.Data
     ).dropna()
     if ohlc_frame.empty:
         return pd.DataFrame()
+    if volume_series is not None:
+        ohlc_frame["volume"] = volume_series
 
     if not isinstance(ohlc_frame.index, pd.DatetimeIndex):
         ohlc_frame.index = pd.to_datetime(ohlc_frame.index, errors="coerce")
@@ -1775,21 +3383,22 @@ def _resample_ohlc_frame(frame: pd.DataFrame, symbol: str, rule: str) -> pd.Data
         return pd.DataFrame()
     ohlc_frame = ohlc_frame.sort_index()
 
-    resampled = (
-        ohlc_frame.resample(rule, label="right", closed="right")
-        .agg({"open": "first", "high": "max", "low": "min", "close": "last"})
-        .dropna()
-    )
+    agg_map = {"open": "first", "high": "max", "low": "min", "close": "last"}
+    if "volume" in ohlc_frame.columns:
+        agg_map["volume"] = "sum"
+    resampled = ohlc_frame.resample(rule, label="right", closed="right").agg(agg_map)
+    resampled = resampled.dropna(subset=["open", "high", "low", "close"])
     if resampled.empty:
         return pd.DataFrame()
-    resampled = resampled.rename(
-        columns={
-            "open": "Open",
-            "high": "High",
-            "low": "Low",
-            "close": "Close",
-        }
-    )
+    rename_map = {
+        "open": "Open",
+        "high": "High",
+        "low": "Low",
+        "close": "Close",
+    }
+    if "volume" in resampled.columns:
+        rename_map["volume"] = "Volume"
+    resampled = resampled.rename(columns=rename_map)
     return resampled
 
 
@@ -1882,6 +3491,14 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
     detail_mode = str(params.get("detail") or "").strip().lower() in {"1", "true", "yes"}
     detail_symbol = _normalize_query(params.get("symbol") or params.get("detail_symbol"))
     detail_timeframe = _resolve_detail_timeframe(params.get("range") or params.get("detail_timeframe"))
+    include_ai = _parse_bool(params.get("include_ai"), default=True)
+    ai_only = _parse_bool(params.get("ai_only"), default=False)
+    include_bars = _parse_bool(params.get("include_bars"), default=True)
+    news_only = _parse_bool(params.get("news_only"), default=False)
+    news_limit, news_offset = _resolve_news_paging(params.get("news_limit"), params.get("news_offset"))
+    if ai_only:
+        include_ai = True
+        include_bars = False
     subscribe_symbol = _normalize_query(params.get("subscribe") or params.get("subscribe_symbol"))
     subscribe_symbols_raw = params.get("subscribe_symbols") or params.get("subscribe_list") or ""
     quote_mode = str(params.get("quote") or params.get("snapshot") or "").strip().lower() in {"1", "true", "yes"}
@@ -2008,6 +3625,24 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                 status=400,
                 json_dumps_params={"ensure_ascii": False},
             )
+
+        if news_only:
+            news_payload, news_meta = _fetch_symbol_news_page(
+                detail_symbol,
+                user_id=str(request.user.id),
+                limit=news_limit,
+                offset=news_offset,
+            )
+            return JsonResponse(
+                {
+                    "symbol": detail_symbol,
+                    "news": news_payload,
+                    "news_meta": news_meta,
+                    "request_id": request_id,
+                },
+                json_dumps_params={"ensure_ascii": False},
+            )
+
         fallback_map = {
             "1m": ("2m", "3m", "5m", "10m", "15m", "30m", "1h", "1d"),
             "2m": ("3m", "5m", "10m", "15m", "30m", "1h", "1d"),
@@ -2032,57 +3667,165 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         effective_timeframe = detail_timeframe
         frame = None
         bars: list[dict[str, float | int]] = []
-        for candidate in candidates:
-            frame = market_data.fetch(
-                [detail_symbol],
-                period=candidate.period,
-                interval=candidate.interval,
-                cache=True,
-                timeout=MARKET_REQUEST_TIMEOUT,
-                ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
-                cache_alias=getattr(settings, "MARKET_HISTORY_CACHE_ALIAS", None),
-                user_id=str(request.user.id),
-            )
-            bar_frame = frame
-            if candidate.resample:
-                bar_frame = _resample_ohlc_frame(frame, detail_symbol, candidate.resample)
-            bars = _extract_ohlc(bar_frame, detail_symbol, limit=candidate.limit)
-            if bars:
-                effective_timeframe = candidate
-                break
+        if include_bars:
+            for candidate in candidates:
+                frame = market_data.fetch(
+                    [detail_symbol],
+                    period=candidate.period,
+                    interval=candidate.interval,
+                    cache=True,
+                    timeout=MARKET_REQUEST_TIMEOUT,
+                    ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
+                    cache_alias=getattr(settings, "MARKET_HISTORY_CACHE_ALIAS", None),
+                    user_id=str(request.user.id),
+                )
+                bar_frame = frame
+                if candidate.resample:
+                    bar_frame = _resample_ohlc_frame(frame, detail_symbol, candidate.resample)
+                bars = _extract_ohlc(bar_frame, detail_symbol, limit=candidate.limit)
+                if bars:
+                    effective_timeframe = candidate
+                    break
 
-        if not bars:
-            return JsonResponse(
-                {"error": _("未能获取 %(symbol)s 的行情数据。") % {"symbol": detail_symbol}, "request_id": request_id},
-                status=404,
-                json_dumps_params={"ensure_ascii": False},
-            )
+            if not bars:
+                return JsonResponse(
+                    {"error": _("未能获取 %(symbol)s 的行情数据。") % {"symbol": detail_symbol}, "request_id": request_id},
+                    status=404,
+                    json_dumps_params={"ensure_ascii": False},
+                )
 
+        debug_requested = str(params.get("debug") or "").strip().lower() in {"1", "true", "yes"}
+        debug_flag = debug_requested and bool(getattr(settings, "DEBUG", False)) and bool(getattr(request.user, "is_staff", False))
         profile_payload = _fetch_company_profile(detail_symbol, user_id=str(request.user.id))
-        news_payload = _fetch_symbol_news(detail_symbol, user_id=str(request.user.id))
-        lang_prefix = (getattr(request, "LANGUAGE_CODE", "") or request.COOKIES.get("django_language", "zh-hans")).lower()[:2]
-        ai_summary = _build_ai_summary(profile_payload, news_payload, lang_prefix=lang_prefix)
+        fundamentals_debug = None
+        if debug_flag:
+            fundamentals, fundamentals_debug = _fetch_yfinance_fundamentals_debug(detail_symbol)
+        else:
+            fundamentals = _fetch_yfinance_fundamentals(detail_symbol)
+        if isinstance(profile_payload, dict) and isinstance(fundamentals, dict):
+            for key, value in fundamentals.items():
+                if value in (None, "", []):
+                    continue
+                if profile_payload.get(key):
+                    continue
+                profile_payload[key] = value
+        profile_missing_reasons = _build_profile_missing_reasons(profile_payload if isinstance(profile_payload, dict) else {})
+        news_payload, news_meta = _fetch_symbol_news_page(
+            detail_symbol,
+            user_id=str(request.user.id),
+            limit=news_limit,
+            offset=news_offset,
+        )
+        key_stats = _fetch_52w_stats(detail_symbol, user_id=str(request.user.id)) if not ai_only else {"high_52w": None, "low_52w": None, "as_of": None}
+        raw_lang = str(params.get("lang") or "").strip().lower()
+        if raw_lang.startswith("zh"):
+            lang_prefix = "zh"
+        elif raw_lang.startswith("en"):
+            lang_prefix = "en"
+        else:
+            lang_prefix = (getattr(request, "LANGUAGE_CODE", "") or request.COOKIES.get("django_language", "zh-hans")).lower()[:2]
+        if include_ai:
+            ai_summary, ai_summary_meta, ai_summary_struct = _build_ai_summary_with_meta(
+                profile_payload,
+                news_payload,
+                lang_prefix=lang_prefix,
+                symbol=detail_symbol,
+                user=request.user,
+            )
+        else:
+            ai_summary = ""
+            ai_summary_struct = None
+            ai_summary_meta = {"status": "pending", "message": "", "source": "bailian"}
+        debug_payload = None
+        if debug_flag:
+            fundamentals_info = fundamentals_debug or {
+                "symbol": detail_symbol,
+                "keys": sorted(fundamentals.keys()) if isinstance(fundamentals, dict) else [],
+                "has_values": bool(
+                    isinstance(fundamentals, dict)
+                    and any(value not in (None, "", [], {}) for value in fundamentals.values())
+                ),
+            }
+            debug_payload = {
+                "auth": {
+                    "is_authenticated": bool(getattr(request.user, "is_authenticated", False)),
+                    "user_id": getattr(request.user, "id", None),
+                    "session_key_present": bool(getattr(getattr(request, "session", None), "session_key", None)),
+                    "has_session_cookie": "sessionid" in request.COOKIES,
+                    "cookie_names": sorted(request.COOKIES.keys()),
+                    "secure_cookie_required": bool(getattr(settings, "SESSION_COOKIE_SECURE", False)),
+                    "scheme": request.scheme,
+                    "host": request.get_host(),
+                },
+                "fundamentals": fundamentals_info,
+                "lang": {"param": raw_lang, "resolved": lang_prefix},
+                "options": {
+                    "include_ai": include_ai,
+                    "ai_only": ai_only,
+                    "include_bars": include_bars,
+                },
+            }
+        if ai_only:
+            response_payload = {
+                "symbol": detail_symbol,
+                "generated_at": time.time(),
+                "ai_summary": ai_summary,
+                "ai_summary_meta": ai_summary_meta,
+                "ai_summary_struct": ai_summary_struct,
+                "profile_missing_reasons": profile_missing_reasons,
+                "request_id": request_id,
+            }
+            if debug_payload:
+                response_payload["debug"] = debug_payload
+            return JsonResponse(response_payload, json_dumps_params={"ensure_ascii": False})
+        data_source = _infer_market_source(frame) if frame is not None else "alpaca"
+        response_payload = {
+            "symbol": detail_symbol,
+            "timeframe": {
+                "key": effective_timeframe.key,
+                "label": effective_timeframe.label,
+                "label_en": effective_timeframe.label_en,
+            },
+            "requested_timeframe": {
+                "key": detail_timeframe.key,
+                "label": detail_timeframe.label,
+                "label_en": detail_timeframe.label_en,
+            },
+            "generated_at": time.time(),
+            "data_source": data_source,
+            "bars": bars,
+            "key_stats": key_stats,
+            "profile": profile_payload,
+            "profile_missing_reasons": profile_missing_reasons,
+            "news": news_payload,
+            "news_meta": news_meta,
+            "ai_summary": ai_summary,
+            "ai_summary_meta": ai_summary_meta,
+            "ai_summary_struct": ai_summary_struct,
+            "request_id": request_id,
+        }
+        if debug_payload:
+            response_payload["debug"] = debug_payload
+        return JsonResponse(response_payload, json_dumps_params={"ensure_ascii": False})
+
+    capabilities_payload = _market_capabilities_payload()
+    if not _is_list_timeframe_supported(list_type, resolved.timeframe.key):
+        message = _("该榜单暂不支持所选区间。")
         return JsonResponse(
             {
-                "symbol": detail_symbol,
+                "error": message,
+                "message": message,
+                "error_code": "timeframe_not_supported",
+                "list_type": list_type,
                 "timeframe": {
-                    "key": effective_timeframe.key,
-                    "label": effective_timeframe.label,
-                    "label_en": effective_timeframe.label_en,
+                    "key": resolved.timeframe.key,
+                    "label": resolved.timeframe.label,
+                    "label_en": resolved.timeframe.label_en,
                 },
-                "requested_timeframe": {
-                    "key": detail_timeframe.key,
-                    "label": detail_timeframe.label,
-                    "label_en": detail_timeframe.label_en,
-                },
-                "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-                "data_source": _infer_market_source(frame),
-                "bars": bars,
-                "profile": profile_payload,
-                "news": news_payload,
-                "ai_summary": ai_summary,
+                "capabilities": capabilities_payload,
                 "request_id": request_id,
             },
+            status=400,
             json_dumps_params={"ensure_ascii": False},
         )
 
@@ -2155,6 +3898,7 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
     universe_source = "unknown"
     timeframe_rankings: list[dict[str, object]] | None = None
     timeframe_source = "unknown"
+    timeframe_fallback_pending = False
 
     if restrict_to_query:
         page_offset = 0
@@ -2296,7 +4040,44 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
 
         if not used_timeframe_rankings:
             if list_type == "most_active":
-                if resolved.timeframe.key == "1d":
+                timeframe_rows: list[dict[str, object]] = []
+                timeframe_rows_source = "unknown"
+                if resolved.timeframe.key != "1d":
+                    try:
+                        timeframe_rows, timeframe_rows_source = _resolve_universe_window_rankings(
+                            resolved.timeframe,
+                            user_id=user_id,
+                        )
+                    except Exception:
+                        LOGGER.exception(
+                            "failed to resolve most_active window rankings [timeframe=%s user_id=%s]",
+                            resolved.timeframe.key,
+                            user_id,
+                        )
+                        record_metric(
+                            "market.insights.error",
+                            request_id=request_id,
+                            user_id=request.user.id,
+                            error="most_active_window_rankings_failed",
+                            timeframe=resolved.timeframe.key,
+                        )
+                        timeframe_rows, timeframe_rows_source = [], "unknown"
+                if timeframe_rows:
+                    list_items = _sort_rows_by_metric(
+                        timeframe_rows,
+                        "volume",
+                        reverse=True,
+                        predicate=lambda value: value > 0,
+                    )[:page_stop]
+                    most_actives = list_items
+                    volume_label = _("成交量")
+                    for entry in list_items:
+                        if isinstance(entry, dict):
+                            entry.setdefault("period_label", volume_label)
+                            entry.setdefault("period_label_en", "Volume")
+                    data_source = timeframe_rows_source or data_source
+                    ranking_timeframe = resolved.timeframe
+                elif resolved.timeframe.key == "1d":
                     active_limit = min(100, max(page_stop, page_size))
                     list_items = market_data.fetch_most_actives(
                         by="volume",
@@ -2314,6 +4095,8 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                             entry.setdefault("period_label", volume_label)
                             entry.setdefault("period_label_en", "Volume")
                     data_source = "alpaca" if list_items else "unknown"
+                    if list_items:
+                        ranking_timeframe = resolved.timeframe
                 if not list_items:
                     if snapshot_rankings is None:
                         snapshot_rankings = _build_snapshot_rankings(user_id)
@@ -2331,6 +4114,8 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                                 entry.setdefault("period_label", volume_label)
                                 entry.setdefault("period_label_en", "Volume")
                         data_source = "alpaca" if list_items else "unknown"
+                        if list_items and ranking_timeframe is None:
+                            ranking_timeframe = TIMEFRAMES["1d"] if resolved.timeframe.key != "1d" else resolved.timeframe
                     elif not MARKET_RANKINGS_BACKGROUND_ONLY:
                         list_items = market_data.fetch_most_actives(
                             by="volume",
@@ -2348,23 +4133,60 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                                 entry.setdefault("period_label", volume_label)
                                 entry.setdefault("period_label_en", "Volume")
                         data_source = "alpaca" if list_items else "unknown"
+                        if list_items and ranking_timeframe is None:
+                            ranking_timeframe = TIMEFRAMES["1d"] if resolved.timeframe.key != "1d" else resolved.timeframe
             elif list_type == "top_turnover":
-                if snapshot_rankings is None:
-                    snapshot_rankings = _build_snapshot_rankings(user_id)
-                source_rows = snapshot_rankings
-                if not snapshot_rankings:
-                    if universe_rankings is None:
-                        universe_rankings, universe_source = _resolve_universe_rankings(user_id)
-                    source_rows = universe_rankings
-                    data_source = universe_source or data_source
-                else:
-                    data_source = "alpaca" if snapshot_rankings else data_source
-                list_items = _sort_rows_by_metric(
-                    source_rows,
-                    "dollar_volume",
-                    reverse=True,
-                    predicate=lambda value: value > 0,
-                )[:page_stop]
+                timeframe_rows: list[dict[str, object]] = []
+                timeframe_rows_source = "unknown"
+                if resolved.timeframe.key != "1d":
+                    try:
+                        timeframe_rows, timeframe_rows_source = _resolve_universe_window_rankings(
+                            resolved.timeframe,
+                            user_id=user_id,
+                        )
+                    except Exception:
+                        LOGGER.exception(
+                            "failed to resolve top_turnover window rankings [timeframe=%s user_id=%s]",
+                            resolved.timeframe.key,
+                            user_id,
+                        )
+                        record_metric(
+                            "market.insights.error",
+                            request_id=request_id,
+                            user_id=request.user.id,
+                            error="top_turnover_window_rankings_failed",
+                            timeframe=resolved.timeframe.key,
+                        )
+                        timeframe_rows, timeframe_rows_source = [], "unknown"
+                if timeframe_rows:
+                    list_items = _sort_rows_by_metric(
+                        timeframe_rows,
+                        "dollar_volume",
+                        reverse=True,
+                        predicate=lambda value: value > 0,
+                    )[:page_stop]
+                    if list_items:
+                        data_source = timeframe_rows_source or data_source
+                        ranking_timeframe = resolved.timeframe
+                if not list_items:
+                    if snapshot_rankings is None:
+                        snapshot_rankings = _build_snapshot_rankings(user_id)
+                    source_rows = snapshot_rankings
+                    if not snapshot_rankings:
+                        if universe_rankings is None:
+                            universe_rankings, universe_source = _resolve_universe_rankings(user_id)
+                        source_rows = universe_rankings
+                        data_source = universe_source or data_source
+                    else:
+                        data_source = "alpaca" if snapshot_rankings else data_source
+                    list_items = _sort_rows_by_metric(
+                        source_rows,
+                        "dollar_volume",
+                        reverse=True,
+                        predicate=lambda value: value > 0,
+                    )[:page_stop]
+                    if list_items and ranking_timeframe is None:
+                        ranking_timeframe = TIMEFRAMES["1d"] if resolved.timeframe.key != "1d" else resolved.timeframe
 
     if list_type in {"gainers", "losers"} and not list_items:
         user_id = str(request.user.id) if request.user.is_authenticated else None
@@ -2432,6 +4254,8 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                     entry.setdefault("period_label", volume_label)
                     entry.setdefault("period_label_en", "Volume")
             data_source = universe_source or data_source
+            if ranking_timeframe is None:
+                ranking_timeframe = TIMEFRAMES["1d"] if resolved.timeframe.key != "1d" else resolved.timeframe
 
     suggestions = _build_suggestions(resolved.query)
 
@@ -2455,6 +4279,35 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         list_items = most_actives
     elif active_list_type == "gainers":
         list_items = gainers
+
+    if (
+        active_list_type in {"most_active", "top_turnover"}
+        and resolved.timeframe.key != "1d"
+        and ranking_timeframe is not None
+        and ranking_timeframe.key != resolved.timeframe.key
+    ):
+        timeframe_fallback_pending = True
+
+    gainers = [
+        _apply_common_market_item_shape(entry)
+        for entry in gainers
+        if isinstance(entry, dict)
+    ]
+    losers = [
+        _apply_common_market_item_shape(entry)
+        for entry in losers
+        if isinstance(entry, dict)
+    ]
+    most_actives = [
+        _apply_common_market_item_shape(entry)
+        for entry in most_actives
+        if isinstance(entry, dict)
+    ]
+    list_items = [
+        _apply_common_market_item_shape(entry, timeframe_pending=timeframe_fallback_pending)
+        for entry in list_items
+        if isinstance(entry, dict)
+    ]
 
     page_items, total_items, next_offset = _paginate_items(
         list_items,
@@ -2487,7 +4340,7 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
             else None
         ),
         # Use timezone.utc for Python 3.13 compatibility (datetime.UTC removed)
-        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "generated_at": time.time(),
         "data_source": data_source or "unknown",
         "query": resolved.query,
         "list_type": active_list_type,
@@ -2506,6 +4359,7 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         "recent_queries": recent_queries,
         "watchlist": watchlist,
         "snapshot_refresh": _snapshot_refresh_meta(),
+        "capabilities": capabilities_payload,
     }
     record_metric(
         "market.insights.response",
@@ -2519,6 +4373,127 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         losers=len(losers),
     )
     return JsonResponse(response, json_dumps_params={"ensure_ascii": False})
+
+
+@require_http_methods(["GET"])
+def market_auth_debug(request: HttpRequest) -> JsonResponse:
+    return _market_auth_debug(request)
+
+
+@login_required
+@require_http_methods(["POST"])
+def market_news_sentiment(request: HttpRequest) -> JsonResponse:
+    request_id = ensure_request_id(request)
+    try:
+        payload = json.loads(request.body.decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({"error": _("请求体解析失败。"), "request_id": request_id}, status=400)
+
+    if not isinstance(payload, dict):
+        payload = {}
+    symbol = str(payload.get("symbol") or "").strip().upper()
+    raw_items = payload.get("news") or []
+    if not isinstance(raw_items, list) or not raw_items:
+        return JsonResponse({"labels": [], "request_id": request_id}, json_dumps_params={"ensure_ascii": False})
+
+    items = _normalize_news_items([item for item in raw_items if isinstance(item, dict)])
+    if not items:
+        return JsonResponse({"labels": [], "request_id": request_id}, json_dumps_params={"ensure_ascii": False})
+
+    cache_key = _news_sentiment_cache_key(symbol or "GLOBAL", items)
+    cached = cache_get_object(cache_key)
+    if isinstance(cached, list) and cached:
+        return JsonResponse({"labels": cached, "request_id": request_id}, json_dumps_params={"ensure_ascii": False})
+
+    prompt_lines = []
+    for idx, item in enumerate(items, start=1):
+        title = str(item.get("title") or "").strip()
+        summary = str(item.get("summary") or "").strip()
+        source = str(item.get("source") or "").strip()
+        parts = [title]
+        if summary:
+            parts.append(summary)
+        if source:
+            parts.append(f"来源:{source}")
+        prompt_lines.append(f"{idx}. " + " | ".join(parts))
+
+    system_prompt = (
+        "你是金融新闻情绪分类器。只输出JSON结果，不要解释。"
+        "标签只能是 bullish / bearish / neutral。"
+        "如果信息不足，返回 neutral。"
+    )
+    user_prompt = "请按顺序为以下新闻打标签，输出 JSON：\n" + "\n".join(prompt_lines)
+    response_schema = {
+        "type": "object",
+        "properties": {
+            "labels": {
+                "type": "array",
+                "items": {"type": "string"},
+            }
+        },
+        "required": ["labels"],
+    }
+
+    labels: list[str] = []
+    model_used = ""
+    provider_used = ""
+    try:
+        resp = run_llm_chat(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            user=request.user,
+            timeout_seconds=MARKET_NEWS_SENTIMENT_TIMEOUT_SECONDS,
+            response_schema=response_schema,
+        )
+        answer = (resp.get("answer") or "").strip() if isinstance(resp, dict) else ""
+        model_used = str(resp.get("model") or "").strip() if isinstance(resp, dict) else ""
+        provider_used = str(resp.get("provider") or "").strip() if isinstance(resp, dict) else ""
+        parsed = None
+        if answer:
+            try:
+                parsed = json.loads(answer)
+            except Exception:
+                match = re.search(r"(\{.*\}|\[.*\])", answer, flags=re.S)
+                if match:
+                    try:
+                        parsed = json.loads(match.group(1))
+                    except Exception:
+                        parsed = None
+        if isinstance(parsed, dict):
+            candidate = parsed.get("labels") or parsed.get("sentiments") or parsed.get("result")
+            if isinstance(candidate, list):
+                labels = [str(item) for item in candidate]
+        elif isinstance(parsed, list):
+            labels = [str(item) for item in parsed]
+    except LLMIntegrationError:
+        labels = []
+    except Exception:
+        labels = []
+
+    if not labels:
+        labels = [_infer_sentiment_rule(f"{item.get('title', '')} {item.get('summary', '')}") for item in items]
+
+    normalized_labels: list[str] = []
+    for label in labels[: len(items)]:
+        normalized_labels.append(_normalize_sentiment_label(label))
+    while len(normalized_labels) < len(items):
+        normalized_labels.append("neutral")
+
+    cache_set_object(cache_key, normalized_labels, MARKET_NEWS_SENTIMENT_CACHE_TTL)
+    record_metric(
+        "market.news.sentiment",
+        request_id=request_id,
+        user_id=request.user.id,
+        provider=provider_used,
+        model=model_used,
+        count=len(normalized_labels),
+    )
+    return JsonResponse(
+        {"labels": normalized_labels, "request_id": request_id},
+        json_dumps_params={"ensure_ascii": False},
+    )
 
 
 @login_required
@@ -2587,8 +4562,47 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
     downgrade_to: str | None = None
     downgrade_message: str | None = None
     window_limited = False
+    effective_range = range_key
+    base_interval = "1m"
+    resample_rule: str | None = None
 
-    server_ts = time.time()
+    range_fallbacks: dict[str, tuple[str, ...]] = {
+        "1d": ("5d", "1mo"),
+        "5d": ("1mo", "6mo"),
+        "1mo": ("6mo",),
+    }
+
+    def _fetch_ohlc_bars(range_key_value: str) -> tuple[list[dict[str, float | int]], pd.DataFrame]:
+        if has_range_override:
+            frame_local = market_data.fetch(
+                [symbol],
+                start=start,
+                end=end,
+                interval=base_interval,
+                cache=True,
+                timeout=MARKET_REQUEST_TIMEOUT,
+                ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
+                cache_alias=cache_alias,
+                user_id=str(request.user.id),
+            )
+        else:
+            frame_local = market_data.fetch(
+                [symbol],
+                period=range_key_value,
+                interval=base_interval,
+                cache=True,
+                timeout=MARKET_REQUEST_TIMEOUT,
+                ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
+                cache_alias=cache_alias,
+                user_id=str(request.user.id),
+            )
+        bar_frame_local = frame_local
+        if resample_rule:
+            bar_frame_local = _resample_ohlc_frame(frame_local, symbol, resample_rule)
+        bars_local = _extract_ohlc(bar_frame_local, symbol, limit=CHART_MAX_TIME_BARS)
+        return bars_local, frame_local
+
+    server_ts = float(time.time())
     if interval.unit in {"tick", "second"}:
         max_range = CHART_MAX_TICK_RANGE_SECONDS if interval.unit == "tick" else CHART_MAX_SECOND_RANGE_SECONDS
         if range_seconds > max_range:
@@ -2606,19 +4620,71 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
         trades = cached_trades
         next_token = None
         data_origin = "realtime"
-        if not trades:
-            trades, next_token = fetch_stock_trades(
+        cached_min = cached_trades[0].get("ts") if cached_trades else None
+        cached_max = cached_trades[-1].get("ts") if cached_trades else None
+        needs_fetch = not cached_trades
+        if not needs_fetch and start_ts is not None and cached_min is not None:
+            if cached_min > start_ts + 1e-6:
+                needs_fetch = True
+        if not needs_fetch and end_ts is not None and cached_max is not None:
+            if cached_max < end_ts - 1e-6:
+                needs_fetch = True
+        if needs_fetch:
+            fetched, next_token, downgrade_to, downgrade_message = fetch_stock_trades(
                 symbol,
                 start=start,
                 end=end,
                 feed=DEFAULT_FEED,
                 limit=CHART_TRADES_PAGE_LIMIT,
                 max_pages=CHART_TRADES_MAX_PAGES,
+                sort="desc",
                 user=request.user,
                 timeout=MARKET_REQUEST_TIMEOUT,
             )
-            data_origin = "alpaca"
-        window_limited = True
+            if fetched:
+                trades = fetched
+                data_origin = "alpaca"
+                if cached_trades:
+                    fetched_max = max(
+                        (parse_timestamp(item.get("ts") or item.get("t") or item.get("timestamp")) or 0.0)
+                        for item in fetched
+                        if isinstance(item, dict)
+                    )
+                    newer_cached = [
+                        item
+                        for item in cached_trades
+                        if (parse_timestamp(item.get("ts") or item.get("t") or item.get("timestamp")) or 0.0)
+                        > fetched_max + 1e-6
+                    ]
+                    if newer_cached:
+                        seen: set[tuple[float, float, float]] = set()
+                        merged: list[dict[str, Any]] = []
+                        for item in trades + newer_cached:
+                            if not isinstance(item, dict):
+                                continue
+                            ts_val = parse_timestamp(item.get("ts") or item.get("t") or item.get("timestamp"))
+                            if ts_val is None:
+                                continue
+                            price_val = item.get("price") or item.get("p")
+                            size_val = item.get("size") or item.get("s") or item.get("v") or 0
+                            try:
+                                price_num = float(price_val)
+                            except (TypeError, ValueError):
+                                continue
+                            try:
+                                size_num = float(size_val) if size_val is not None else 0.0
+                            except (TypeError, ValueError):
+                                size_num = 0.0
+                            key = (float(ts_val), price_num, size_num)
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            merged.append(item)
+                        merged.sort(key=lambda row: parse_timestamp(row.get("ts") or row.get("t") or row.get("timestamp")) or 0.0)
+                        trades = merged
+                        data_origin = "mixed"
+                if next_token:
+                    window_limited = True
         if interval.unit == "tick":
             bars = aggregate_trades_to_tick_bars(
                 trades,
@@ -2631,20 +4697,107 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
                 interval_seconds=interval.value,
                 max_bars=CHART_MAX_TIME_BARS,
             )
+        if not bars and not has_range_override:
+            latest_snapshot = market_data.fetch_latest_quote(symbol, interval="1m", user_id=str(request.user.id))
+            latest_as_of = latest_snapshot.get("as_of") if isinstance(latest_snapshot, dict) else None
+            latest_ts = parse_timestamp(latest_as_of)
+            if latest_ts:
+                anchored_end = datetime.fromtimestamp(latest_ts, tz=timezone.utc)
+                anchored_start = anchored_end - timedelta(seconds=max_range)
+                anchored_trades, next_token, anchored_feed, anchored_message = fetch_stock_trades(
+                    symbol,
+                    start=anchored_start,
+                    end=anchored_end,
+                    feed=DEFAULT_FEED,
+                    limit=CHART_TRADES_PAGE_LIMIT,
+                    max_pages=CHART_TRADES_MAX_PAGES,
+                    sort="desc",
+                    user=request.user,
+                    timeout=MARKET_REQUEST_TIMEOUT,
+                )
+                if anchored_trades:
+                    trades = anchored_trades
+                    data_origin = "alpaca"
+                    if anchored_feed:
+                        downgrade_to = anchored_feed
+                    if anchored_message:
+                        downgrade_message = anchored_message
+                    if interval.unit == "tick":
+                        bars = aggregate_trades_to_tick_bars(
+                            trades,
+                            ticks_per_bar=interval.value,
+                            max_bars=CHART_MAX_TICK_BARS,
+                        )
+                    else:
+                        bars = aggregate_trades_to_time_bars(
+                            trades,
+                            interval_seconds=interval.value,
+                            max_bars=CHART_MAX_TIME_BARS,
+                        )
+                    if bars:
+                        anchor_message = _("当前窗口无逐笔成交，已回溯到最近成交时段。")
+                        downgrade_message = (
+                            f"{downgrade_message} · {anchor_message}" if downgrade_message else anchor_message
+                        )
         if not bars:
+            fallback_interval = _resolve_chart_interval("1m")
+            fallback_message = _("逐笔/秒级行情不可用，已改用分钟K线。")
+            range_message = _("市场休市或数据稀疏，已展示更长周期历史。")
+            if fallback_interval is not None:
+                fallback_bars, fallback_frame = _fetch_ohlc_bars(range_key)
+                if not fallback_bars and not has_range_override:
+                    for candidate_range in range_fallbacks.get(range_key, ()):
+                        candidate_bars, candidate_frame = _fetch_ohlc_bars(candidate_range)
+                        if candidate_bars:
+                            fallback_bars = candidate_bars
+                            fallback_frame = candidate_frame
+                            effective_range = candidate_range
+                            downgrade_message = (
+                                f"{downgrade_message} · {range_message}" if downgrade_message else range_message
+                            )
+                            break
+                if fallback_bars:
+                    messages = []
+                    if downgrade_message:
+                        messages.append(downgrade_message)
+                    messages.append(fallback_message)
+                    response = {
+                        "symbol": symbol,
+                        "range": range_key,
+                        "range_fallback": effective_range if effective_range != range_key else None,
+                        "interval": {
+                            "key": fallback_interval.key,
+                            "unit": fallback_interval.unit,
+                            "value": fallback_interval.value,
+                            "label": fallback_interval.label,
+                        },
+                        "generated_at": server_ts,
+                        "data_source": _infer_market_source(fallback_frame),
+                        "data_origin": "fallback",
+                        "bars": fallback_bars,
+                        "window_limited": False,
+                        "latest_trade_ts": parse_timestamp(fallback_bars[-1]["time"] if fallback_bars else None),
+                        "server_ts": server_ts,
+                        "downgrade_to": fallback_interval.key,
+                        "downgrade_message": " · ".join(messages),
+                        "request_id": request_id,
+                    }
+                    return JsonResponse(response, json_dumps_params={"ensure_ascii": False})
             return JsonResponse(
                 {"error": _("未能获取 %(symbol)s 的逐笔成交。") % {"symbol": symbol}, "request_id": request_id},
                 status=404,
                 json_dumps_params={"ensure_ascii": False},
             )
-        latest_trade_ts = None
+        latest_trade_ts: float | None = None
         if trades:
             last_trade = trades[-1]
             if isinstance(last_trade, dict):
-                latest_trade_ts = last_trade.get("ts") or last_trade.get("t") or last_trade.get("timestamp")
+                latest_trade_ts = parse_timestamp(
+                    last_trade.get("ts") or last_trade.get("t") or last_trade.get("timestamp")
+                )
         if latest_trade_ts is None:
             latest_trade = chart_get_latest_trade(symbol)
-            latest_trade_ts = latest_trade.get("ts") if latest_trade else None
+            latest_trade_ts = parse_timestamp(latest_trade.get("ts") if latest_trade else None)
         response = {
             "symbol": symbol,
             "range": range_key,
@@ -2654,7 +4807,7 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
                 "value": interval.value,
                 "label": interval.label,
             },
-            "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            "generated_at": server_ts,
             "data_source": "alpaca",
             "data_origin": data_origin,
             "bars": bars,
@@ -2665,6 +4818,7 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
         }
         if downgrade_to:
             response["downgrade_to"] = downgrade_to
+        if downgrade_message:
             response["downgrade_message"] = downgrade_message
         if cache_enabled:
             cache_set_object(cache_key, response, chart_cache_ttl, cache_alias=cache_alias)
@@ -2690,20 +4844,47 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
         if value > 1:
             resample_rule = f"{value}d"
 
-    frame = market_data.fetch(
-        [symbol],
-        period=range_key,
-        interval=base_interval,
-        cache=True,
-        timeout=MARKET_REQUEST_TIMEOUT,
-        ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
-        cache_alias=cache_alias,
-        user_id=str(request.user.id),
-    )
-    bar_frame = frame
-    if resample_rule:
-        bar_frame = _resample_ohlc_frame(frame, symbol, resample_rule)
-    bars = _extract_ohlc(bar_frame, symbol, limit=CHART_MAX_TIME_BARS)
+    bars, frame = _fetch_ohlc_bars(range_key)
+    if not bars and has_range_override and start_override is None and end_override is not None:
+        range_message = _("市场休市或数据稀疏，已展示更长周期历史。")
+        for candidate_range in range_fallbacks.get(range_key, ()):
+            _candidate_start, _candidate_end, candidate_seconds = _resolve_range_window(candidate_range)
+            candidate_start = end - timedelta(seconds=candidate_seconds)
+            frame_candidate = market_data.fetch(
+                [symbol],
+                start=candidate_start,
+                end=end,
+                interval=base_interval,
+                cache=True,
+                timeout=MARKET_REQUEST_TIMEOUT,
+                ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
+                cache_alias=cache_alias,
+                user_id=str(request.user.id),
+            )
+            bar_frame_candidate = frame_candidate
+            if resample_rule:
+                bar_frame_candidate = _resample_ohlc_frame(frame_candidate, symbol, resample_rule)
+            candidate_bars = _extract_ohlc(bar_frame_candidate, symbol, limit=CHART_MAX_TIME_BARS)
+            if candidate_bars:
+                bars = candidate_bars
+                frame = frame_candidate
+                effective_range = candidate_range
+                downgrade_message = (
+                    f"{downgrade_message} · {range_message}" if downgrade_message else range_message
+                )
+                break
+    if not bars and not has_range_override:
+        range_message = _("市场休市或数据稀疏，已展示更长周期历史。")
+        for candidate_range in range_fallbacks.get(range_key, ()):
+            candidate_bars, candidate_frame = _fetch_ohlc_bars(candidate_range)
+            if candidate_bars:
+                bars = candidate_bars
+                frame = candidate_frame
+                effective_range = candidate_range
+                downgrade_message = (
+                    f"{downgrade_message} · {range_message}" if downgrade_message else range_message
+                )
+                break
     if not bars:
         return JsonResponse(
             {"error": _("未能获取 %(symbol)s 的行情数据。") % {"symbol": symbol}, "request_id": request_id},
@@ -2714,26 +4895,366 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
     response = {
         "symbol": symbol,
         "range": range_key,
+        "range_fallback": effective_range if effective_range != range_key else None,
         "interval": {
             "key": interval.key,
             "unit": interval.unit,
             "value": interval.value,
             "label": interval.label,
         },
-        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "generated_at": server_ts,
         "data_source": _infer_market_source(frame),
         "bars": bars,
         "window_limited": window_limited,
-        "latest_trade_ts": bars[-1]["time"] if bars else None,
+        "latest_trade_ts": parse_timestamp(bars[-1]["time"] if bars else None),
         "server_ts": server_ts,
     }
     if downgrade_to:
         response["downgrade_to"] = downgrade_to
+    if downgrade_message:
         response["downgrade_message"] = downgrade_message
     if cache_enabled:
         cache_set_object(cache_key, response, chart_cache_ttl, cache_alias=cache_alias)
     response["request_id"] = request_id
     return JsonResponse(response, json_dumps_params={"ensure_ascii": False})
+
+
+@login_required
+@require_http_methods(["POST"])
+def market_chart_analyze(request: HttpRequest) -> JsonResponse:
+    request_id = ensure_request_id(request)
+    try:
+        payload = json.loads(request.body.decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
+        return json_error(
+            error_code="series_invalid",
+            message=_("请求体解析失败。"),
+            status_code=400,
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.market.chart.analyze",
+        )
+    if not isinstance(payload, dict):
+        payload = {}
+
+    series_payload = _extract_chart_analyzer_series(payload, max_points=MARKET_CHART_ANALYZER_MAX_POINTS)
+    if not series_payload:
+        return json_error(
+            error_code="series_invalid",
+            message=_("图表序列无效。"),
+            status_code=400,
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.market.chart.analyze",
+        )
+    series_values, sample_index_map, original_length, series_meta = series_payload
+    if len(series_values) < MARKET_CHART_ANALYZER_MIN_POINTS:
+        return json_error(
+            error_code="series_insufficient",
+            message=_("可分析的数据点不足。"),
+            status_code=400,
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.market.chart.analyze",
+            extra={
+                "required_points": MARKET_CHART_ANALYZER_MIN_POINTS,
+                "points": len(series_values),
+            },
+        )
+
+    symbol = _normalize_query(payload.get("symbol")) if isinstance(payload.get("symbol"), str) else ""
+    range_key = str(payload.get("range") or payload.get("timeframe") or "").strip().lower()
+    interval_key = str(payload.get("interval") or "").strip().lower()
+    session_id = str(payload.get("session_id") or "").strip() or None
+    include_fusion = _parse_bool(payload.get("include_fusion"), default=True)
+
+    try:
+        result = analyze_price_series(
+            series_values,
+            symbol=symbol or None,
+            timeframe=range_key or None,
+            analysis_mode=interval_key or None,
+            include_features=False,
+            include_waves=True,
+            include_fusion=include_fusion,
+            include_timings=False,
+            session_id=session_id,
+            min_points=MARKET_CHART_ANALYZER_MIN_POINTS,
+            max_points=MARKET_CHART_ANALYZER_MAX_POINTS,
+            training_namespace=MARKET_CHART_ANALYZER_NAMESPACE,
+        )
+    except Exception as exc:
+        log_sanitized_exception(
+            context="Market chart analyze failed",
+            exc=exc,
+            error_code="chart_analysis_failed",
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.market.chart.analyze",
+            status_code=500,
+        )
+        return json_error(
+            error_code="chart_analysis_failed",
+            message=_("图表分析失败，请稍后重试。"),
+            status_code=500,
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.market.chart.analyze",
+        )
+
+    if result.get("error"):
+        error_code = str(result.get("error") or "series_invalid")
+        status_code = 400
+        if error_code not in {"series_invalid", "series_insufficient"}:
+            error_code = "series_invalid"
+        return json_error(
+            error_code=error_code,
+            message=_("图表序列暂不可分析。") if error_code == "series_invalid" else _("可分析的数据点不足。"),
+            status_code=status_code,
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.market.chart.analyze",
+            extra={
+                "required_points": MARKET_CHART_ANALYZER_MIN_POINTS,
+                "points": len(series_values),
+            }
+            if error_code == "series_insufficient"
+            else None,
+        )
+
+    diagnostics = result.get("diagnostics")
+    if isinstance(diagnostics, dict):
+        diagnostics["sample_index_map"] = sample_index_map
+        diagnostics["sample_points"] = len(series_values)
+        diagnostics["series_original_length"] = original_length
+        diagnostics["series_mode"] = series_meta.get("series_mode")
+        diagnostics["smoothing_window"] = series_meta.get("smoothing_window")
+        diagnostics["series_source"] = series_meta.get("series_source")
+
+    response = {
+        **result,
+        "series_mode": series_meta.get("series_mode"),
+        "smoothing_window": series_meta.get("smoothing_window"),
+        "request_id": request_id,
+    }
+    return JsonResponse(response, json_dumps_params={"ensure_ascii": False})
+
+
+@login_required
+@require_http_methods(["POST"])
+def market_chart_analyze_sample(request: HttpRequest) -> JsonResponse:
+    request_id = ensure_request_id(request)
+    try:
+        payload = json.loads(request.body.decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError):
+        return json_error(
+            error_code="series_invalid",
+            message=_("请求体解析失败。"),
+            status_code=400,
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.market.chart.analyze.sample",
+        )
+    if not isinstance(payload, dict):
+        payload = {}
+
+    label = str(payload.get("label") or "").strip()
+    if label not in PATTERN_KEYS:
+        return json_error(
+            error_code="invalid_label",
+            message=_("标签无效。"),
+            status_code=400,
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.market.chart.analyze.sample",
+        )
+
+    series_payload = _extract_chart_analyzer_series(payload, max_points=MARKET_CHART_ANALYZER_MAX_POINTS)
+    if not series_payload:
+        return json_error(
+            error_code="series_invalid",
+            message=_("图表序列无效。"),
+            status_code=400,
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.market.chart.analyze.sample",
+        )
+    series_values, _sample_index_map, _original_length, series_meta = series_payload
+    if len(series_values) < MARKET_CHART_ANALYZER_MIN_POINTS:
+        return json_error(
+            error_code="series_insufficient",
+            message=_("可分析的数据点不足。"),
+            status_code=400,
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.market.chart.analyze.sample",
+            extra={
+                "required_points": MARKET_CHART_ANALYZER_MIN_POINTS,
+                "points": len(series_values),
+            },
+        )
+
+    symbol = _normalize_query(payload.get("symbol")) if isinstance(payload.get("symbol"), str) else ""
+    range_key = str(payload.get("range") or payload.get("timeframe") or "").strip().lower()
+    interval_key = str(payload.get("interval") or "").strip().lower()
+
+    try:
+        analysis = analyze_price_series(
+            series_values,
+            symbol=symbol or None,
+            timeframe=range_key or None,
+            analysis_mode=interval_key or None,
+            include_features=True,
+            include_waves=False,
+            include_fusion=False,
+            include_timings=False,
+            min_points=MARKET_CHART_ANALYZER_MIN_POINTS,
+            max_points=MARKET_CHART_ANALYZER_MAX_POINTS,
+            training_namespace=MARKET_CHART_ANALYZER_NAMESPACE,
+        )
+        features = analysis.get("features")
+        if not isinstance(features, list) or not features:
+            return json_error(
+                error_code="series_invalid",
+                message=_("特征提取失败。"),
+                status_code=400,
+                request_id=request_id,
+                user_id=request.user.id,
+                endpoint="api.market.chart.analyze.sample",
+            )
+        save_screen_sample(
+            features,
+            label=label,
+            meta={
+                "symbol": symbol,
+                "range": range_key,
+                "interval": interval_key,
+                "series_mode": series_meta.get("series_mode"),
+                "smoothing_window": series_meta.get("smoothing_window"),
+                "lang": (getattr(request, "LANGUAGE_CODE", "") or "").lower()[:8],
+                "user_id": request.user.id,
+            },
+            namespace=MARKET_CHART_ANALYZER_NAMESPACE,
+        )
+        total_samples = len(load_screen_samples(namespace=MARKET_CHART_ANALYZER_NAMESPACE))
+    except Exception as exc:
+        log_sanitized_exception(
+            context="Market chart sample save failed",
+            exc=exc,
+            error_code="chart_sample_save_failed",
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.market.chart.analyze.sample",
+            status_code=500,
+        )
+        return json_error(
+            error_code="chart_sample_save_failed",
+            message=_("样本保存失败。"),
+            status_code=500,
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.market.chart.analyze.sample",
+        )
+
+    return JsonResponse(
+        {
+            "status": "saved",
+            "label": label,
+            "total_samples": total_samples,
+            "request_id": request_id,
+        },
+        json_dumps_params={"ensure_ascii": False},
+    )
+
+
+@login_required
+@require_http_methods(["POST"])
+def market_chart_analyze_train(request: HttpRequest) -> JsonResponse:
+    request_id = ensure_request_id(request)
+    try:
+        metrics = train_screen_model(
+            min_samples=MARKET_CHART_ANALYZER_TRAIN_MIN_SAMPLES,
+            namespace=MARKET_CHART_ANALYZER_NAMESPACE,
+        )
+    except RuntimeError:
+        return json_error(
+            error_code="training_state_invalid",
+            message=_("训练状态无效，请补充样本后再试。"),
+            status_code=400,
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.market.chart.analyze.train",
+        )
+    except Exception as exc:
+        log_sanitized_exception(
+            context="Market chart model train failed",
+            exc=exc,
+            error_code="chart_train_failed",
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.market.chart.analyze.train",
+            status_code=500,
+        )
+        return json_error(
+            error_code="chart_train_failed",
+            message=_("训练失败，请稍后重试。"),
+            status_code=500,
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.market.chart.analyze.train",
+        )
+    return JsonResponse(
+        {
+            "status": "trained",
+            "total_samples": metrics.total_samples,
+            "classes": metrics.classes,
+            "accuracy": metrics.accuracy,
+            "test_size": metrics.test_size,
+            "override_threshold": metrics.override_threshold,
+            "override_accuracy": metrics.override_accuracy,
+            "override_coverage": metrics.override_coverage,
+            "override_samples": metrics.override_samples,
+            "override_source": metrics.override_source,
+            "request_id": request_id,
+        },
+        json_dumps_params={"ensure_ascii": False},
+    )
+
+
+@login_required
+@require_http_methods(["GET"])
+def market_chart_analyze_meta(request: HttpRequest) -> JsonResponse:
+    request_id = ensure_request_id(request)
+    try:
+        samples = load_screen_samples(namespace=MARKET_CHART_ANALYZER_NAMESPACE)
+        model_meta = load_screen_model_meta(namespace=MARKET_CHART_ANALYZER_NAMESPACE) or {}
+    except Exception:
+        samples = []
+        model_meta = {}
+
+    class_counts: dict[str, int] = {}
+    for sample in samples:
+        if not isinstance(sample, Mapping):
+            continue
+        label = sample.get("label")
+        if not isinstance(label, str) or not label:
+            continue
+        class_counts[label] = class_counts.get(label, 0) + 1
+    if isinstance(model_meta.get("classes"), Mapping):
+        class_counts = {str(key): int(value) for key, value in model_meta["classes"].items()}  # type: ignore[index]
+
+    return JsonResponse(
+        {
+            "namespace": MARKET_CHART_ANALYZER_NAMESPACE,
+            "total_samples": len(samples),
+            "classes": class_counts,
+            "override_threshold": model_meta.get("override_threshold"),
+            "override_source": model_meta.get("override_source"),
+            "last_trained_at": model_meta.get("trained_at"),
+            "request_id": request_id,
+        },
+        json_dumps_params={"ensure_ascii": False},
+    )
 
 
 @login_required
@@ -2823,8 +5344,16 @@ def market_trading_mode(request: HttpRequest) -> JsonResponse:
 
     try:
         normalized = validate_realtime_payload(payload)
-    except RealtimePayloadError as exc:
-        return JsonResponse({"ok": False, "message": f"{exc}", "request_id": request_id}, status=400)
+    except RealtimePayloadError:
+        return JsonResponse(
+            {
+                "ok": False,
+                "error_code": "invalid_realtime_config",
+                "message": _("交易配置校验失败。"),
+                "request_id": request_id,
+            },
+            status=400,
+        )
 
     profile.payload = normalized
     profile.save(update_fields=["payload", "updated_at"])
@@ -2850,6 +5379,9 @@ def market_assets_data(request: HttpRequest) -> JsonResponse:
     user_id = str(request.user.id)
     letter = _normalize_asset_letter(request.GET.get("letter"))
     query = _normalize_asset_search(request.GET.get("query"))
+    timeframe_key_raw = str(request.GET.get("timeframe") or "1d").strip().lower()
+    timeframe = TIMEFRAMES.get(timeframe_key_raw, TIMEFRAMES["1d"])
+    timeframe_clamped = timeframe_key_raw not in TIMEFRAMES
 
     try:
         page = int(request.GET.get("page") or 1)
@@ -2874,46 +5406,112 @@ def market_assets_data(request: HttpRequest) -> JsonResponse:
     page_assets = filtered[start:end]
 
     symbols = [asset["symbol"] for asset in page_assets if asset.get("symbol")]
-    snapshots = (
-        fetch_stock_snapshots(symbols, feed=DEFAULT_FEED, user_id=user_id, timeout=MARKET_REQUEST_TIMEOUT)
-        if symbols
-        else {}
-    )
+    snapshots = fetch_stock_snapshots(symbols, feed=DEFAULT_FEED, user_id=user_id, timeout=MARKET_REQUEST_TIMEOUT) if symbols else {}
+    window_metrics: dict[str, dict[str, object]] = {}
+    window_source = "unknown"
+    if symbols and timeframe.key != "1d":
+        window_metrics, window_source = _resolve_symbol_window_metrics(
+            symbols,
+            timeframe=timeframe,
+            user_id=user_id,
+        )
 
     items: list[dict[str, object]] = []
     for asset in page_assets:
         symbol = asset.get("symbol") or ""
         snapshot = snapshots.get(symbol, {}) if isinstance(snapshots, dict) else {}
-        latest_trade = snapshot.get("latestTrade") if isinstance(snapshot, dict) else None
-        latest_quote = snapshot.get("latestQuote") if isinstance(snapshot, dict) else None
-        daily_bar = snapshot.get("dailyBar") if isinstance(snapshot, dict) else None
-        minute_bar = snapshot.get("minuteBar") if isinstance(snapshot, dict) else None
-        prev_bar = snapshot.get("prevDailyBar") if isinstance(snapshot, dict) else None
-
-        last_price = _coerce_number(
+        latest_trade = (
+            snapshot.get("latestTrade") or snapshot.get("latest_trade")
+            if isinstance(snapshot, dict)
+            else None
+        )
+        latest_quote = (
+            snapshot.get("latestQuote") or snapshot.get("latest_quote")
+            if isinstance(snapshot, dict)
+            else None
+        )
+        daily_bar = (
+            snapshot.get("dailyBar") or snapshot.get("daily_bar")
+            if isinstance(snapshot, dict)
+            else None
+        )
+        minute_bar = (
+            snapshot.get("minuteBar") or snapshot.get("minute_bar")
+            if isinstance(snapshot, dict)
+            else None
+        )
+        prev_bar = (
+            snapshot.get("prevDailyBar") or snapshot.get("prev_daily_bar")
+            if isinstance(snapshot, dict)
+            else None
+        )
+        snapshot_price = _coerce_number(
             (latest_trade or {}).get("p")
             or (minute_bar or {}).get("c")
             or (daily_bar or {}).get("c")
             or (latest_quote or {}).get("ap")
             or (latest_quote or {}).get("bp")
         )
-        prev_close = _coerce_number((prev_bar or {}).get("c"))
-        change_pct = None
-        if last_price is not None and prev_close not in (None, 0):
-            try:
-                change_pct = (last_price / prev_close - 1.0) * 100.0
-            except Exception:
-                change_pct = None
+        snapshot_open = _coerce_number((daily_bar or {}).get("o"))
+        snapshot_high = _coerce_number((daily_bar or {}).get("h"))
+        snapshot_low = _coerce_number((daily_bar or {}).get("l"))
+        snapshot_prev_close = _coerce_number((prev_bar or {}).get("c"))
+        snapshot_volume = _coerce_number((daily_bar or {}).get("v") or (minute_bar or {}).get("v"))
+        snapshot_dollar_volume = snapshot_price * snapshot_volume if snapshot_price is not None and snapshot_volume is not None else None
 
-        items.append(
-            {
+        snapshot_change = None
+        if snapshot_price is not None and snapshot_prev_close not in (None, 0):
+            snapshot_change = (snapshot_price / snapshot_prev_close - 1.0) * 100.0
+        snapshot_range = None
+        if snapshot_prev_close not in (None, 0) and snapshot_high is not None and snapshot_low is not None:
+            snapshot_range = ((snapshot_high - snapshot_low) / snapshot_prev_close) * 100.0
+
+        metrics = window_metrics.get(symbol, {}) if timeframe.key != "1d" else {}
+        missing_reasons = _normalize_missing_reason_map(metrics.get("missing_reasons"))
+        timeframe_pending = False
+        if timeframe.key == "1d":
+            item: dict[str, object] = {
                 "symbol": symbol,
                 "name": asset.get("name") or "",
                 "exchange": asset.get("exchange") or "",
-                "last": last_price,
-                "change_pct": change_pct,
+                "last": snapshot_price,
+                "price": snapshot_price,
+                "change_pct_period": snapshot_change,
+                "change_pct_day": snapshot_change,
+                "change_pct": snapshot_change,
+                "open": snapshot_open,
+                "prev_close": snapshot_prev_close,
+                "volume": snapshot_volume,
+                "dollar_volume": snapshot_dollar_volume,
+                "range_pct": snapshot_range,
             }
-        )
+        else:
+            period_price = _coerce_number(metrics.get("price"))
+            period_change = _coerce_number(metrics.get("change_pct_period"))
+            day_change = _coerce_number(metrics.get("change_pct_day"))
+            if period_price is None and snapshot_price is not None:
+                period_price = snapshot_price
+                timeframe_pending = True
+            if period_change is None and snapshot_change is not None:
+                timeframe_pending = True
+            item = {
+                "symbol": symbol,
+                "name": asset.get("name") or "",
+                "exchange": asset.get("exchange") or "",
+                "last": period_price,
+                "price": period_price,
+                "change_pct_period": period_change,
+                "change_pct_day": day_change,
+                "change_pct": period_change,
+                "open": _coerce_number(metrics.get("open")),
+                "prev_close": _coerce_number(metrics.get("prev_close")),
+                "volume": _coerce_number(metrics.get("volume")),
+                "dollar_volume": _coerce_number(metrics.get("dollar_volume")),
+                "range_pct": _coerce_number(metrics.get("range_pct")),
+            }
+            if missing_reasons:
+                item["missing_reasons"] = missing_reasons
+        items.append(_apply_common_market_item_shape(item, timeframe_pending=timeframe_pending))
 
     return JsonResponse(
         {
@@ -2924,7 +5522,14 @@ def market_assets_data(request: HttpRequest) -> JsonResponse:
             "total_pages": last_page,
             "letter": letter,
             "query": query,
-            "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            "timeframe": {
+                "key": timeframe.key,
+                "label": timeframe.label,
+                "label_en": timeframe.label_en,
+                "clamped": timeframe_clamped,
+            },
+            "data_source": "alpaca" if timeframe.key == "1d" else (window_source or "unknown"),
+            "generated_at": time.time(),
             "request_id": request_id,
         },
         json_dumps_params={"ensure_ascii": False},
@@ -3041,7 +5646,7 @@ def market_screener_data(request: HttpRequest) -> JsonResponse:
             "size": size,
             "total": total,
             "last_page": last_page,
-            "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            "generated_at": time.time(),
             "request_id": request_id,
         },
         json_dumps_params={"ensure_ascii": False},
@@ -3166,7 +5771,17 @@ def _rank_symbols(
         day_change = ((end_price / prev_price) - 1.0) * 100.0
 
         normalized = _normalize_series(window)
-        timestamps = [ts.strftime("%Y-%m-%d") for ts in window.index]
+        timestamps: list[float] = []
+        for ts in window.index:
+            try:
+                stamp = pd.Timestamp(ts)
+                if stamp.tzinfo is None:
+                    stamp = stamp.tz_localize(timezone.utc)
+                else:
+                    stamp = stamp.tz_convert(timezone.utc)
+                timestamps.append(float(stamp.timestamp()))
+            except Exception:
+                continue
 
         ranked.append(
             {

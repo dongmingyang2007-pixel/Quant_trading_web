@@ -4,6 +4,7 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 
 from .models import CommunityPostComment, CommunityPostLike, Notification
+from .notifications_cache import invalidate_unread_notifications_cache
 
 
 @receiver(post_save, sender=CommunityPostLike)
@@ -21,6 +22,7 @@ def create_like_notification(sender, instance, created, **kwargs):
         verb=Notification.VERB_LIKED,
         target_post=post,
     )
+    invalidate_unread_notifications_cache(recipient.pk)
 
 
 @receiver(post_save, sender=CommunityPostComment)
@@ -38,3 +40,4 @@ def create_comment_notification(sender, instance, created, **kwargs):
         verb=Notification.VERB_COMMENTED,
         target_post=post,
     )
+    invalidate_unread_notifications_cache(recipient.pk)

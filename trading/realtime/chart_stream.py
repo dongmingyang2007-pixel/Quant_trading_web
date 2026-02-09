@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Iterable
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+from django.conf import settings
 
 from .alpaca.stream import AlpacaStreamClient
 from .config import load_realtime_config
@@ -14,9 +14,9 @@ from .chart_store import add_trade as chart_store_add_trade
 from ..observability import record_metric
 
 GROUP_PREFIX = "market-chart"
-MAX_STREAM_SYMBOLS = 20
-AGGREGATE_SECONDS = 0.1
-MAX_BATCH_SIZE = 200
+MAX_STREAM_SYMBOLS = int(getattr(settings, "MARKET_CHART_STREAM_MAX_SYMBOLS", 20))
+AGGREGATE_SECONDS = float(getattr(settings, "MARKET_CHART_STREAM_AGGREGATE_SECONDS", 0.1))
+MAX_BATCH_SIZE = int(getattr(settings, "MARKET_CHART_STREAM_MAX_BATCH_SIZE", 200))
 
 _LOCK = threading.Lock()
 _CLIENT: AlpacaStreamClient | None = None

@@ -26,6 +26,7 @@ from django.utils.translation import gettext as _
 
 from .. import screener
 from ..forms import QuantStrategyForm
+from ..error_contract import json_error, log_sanitized_exception
 from ..llm import LLMIntegrationError, generate_ai_commentary
 from ..observability import ensure_request_id, record_metric, track_latency
 from ..task_queue import (
@@ -57,6 +58,10 @@ AI_RATE_MAX_CALLS = max(1, getattr(settings, "AI_CHAT_RATE_MAX_CALLS", 30))
 AI_RATE_CACHE_ALIAS = getattr(settings, "AI_CHAT_RATE_CACHE_ALIAS", "default")
 AI_RAG_MAX_FILES = int(os.environ.get("AI_RAG_MAX_FILES", "4") or 4)
 AI_RAG_MAX_BYTES = int(os.environ.get("AI_RAG_MAX_BYTES", str(2_000_000)) or 2_000_000)
+
+
+class AIChatPayloadError(ValueError):
+    """Raised when AI chat payload parsing/validation fails."""
 
 
 def _rate_key(request):
@@ -218,6 +223,126 @@ def _sse_message(event: str, data: dict[str, object]) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 
+def _trim_ai_history(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    history = value[-settings.AI_CHAT_MAX_HISTORY :]
+    trimmed: list[dict[str, str]] = []
+    for entry in history:
+        if not isinstance(entry, dict):
+            continue
+        role = str(entry.get("role") or "user")[:20]
+        content = str(entry.get("content") or "")[: settings.AI_CHAT_MAX_MESSAGE_CHARS]
+        trimmed.append({"role": role or "user", "content": content})
+    return trimmed
+
+
+def _parse_ai_chat_payload(raw_body: bytes) -> dict[str, Any]:
+    if raw_body and len(raw_body) > settings.AI_CHAT_MAX_PAYLOAD_BYTES:
+        raise AIChatPayloadError(_("请求内容过大，请缩短问题或清空历史。"))
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        raise AIChatPayloadError(_("无效的请求体"))
+    if not isinstance(payload, dict):
+        raise AIChatPayloadError(_("无效的请求体"))
+
+    context = payload.get("context")
+    if not isinstance(context, dict):
+        raise AIChatPayloadError(_("缺少上下文数据"))
+
+    message = payload.get("message")
+    if message is None:
+        message = ""
+    if not isinstance(message, str):
+        message = str(message)
+    if len(message) > settings.AI_CHAT_MAX_MESSAGE_CHARS:
+        message = message[: settings.AI_CHAT_MAX_MESSAGE_CHARS]
+
+    history = _trim_ai_history(payload.get("history") or [])
+
+    web_query = payload.get("web_query")
+    if not isinstance(web_query, str):
+        web_query = None
+    try:
+        web_max_results = int(payload.get("web_max_results")) if payload.get("web_max_results") is not None else None
+    except (TypeError, ValueError):
+        web_max_results = None
+    if web_max_results is not None:
+        web_max_results = max(1, min(web_max_results, 12))
+
+    response_schema = payload.get("response_schema")
+    if not isinstance(response_schema, dict):
+        response_schema = None
+    response_format = payload.get("response_format")
+    if not isinstance(response_format, dict):
+        response_format = None
+
+    rag_query = payload.get("rag_query")
+    if not isinstance(rag_query, str):
+        rag_query = None
+    try:
+        rag_top_k = int(payload.get("rag_top_k")) if payload.get("rag_top_k") is not None else None
+    except (TypeError, ValueError):
+        rag_top_k = None
+    if rag_top_k is not None:
+        rag_top_k = max(1, min(rag_top_k, 20))
+    rag_context = payload.get("rag_context")
+    if not isinstance(rag_context, str):
+        rag_context = None
+    if rag_context and len(rag_context) > 2000:
+        rag_context = rag_context[:2000]
+
+    tools = payload.get("tools")
+    if isinstance(tools, (list, tuple, set)):
+        tools = [str(item).strip() for item in tools if str(item).strip()][:12]
+    elif isinstance(tools, str):
+        tools = tools.strip()
+    elif isinstance(tools, bool):
+        tools = tools
+    else:
+        tools = None
+
+    tool_choice = payload.get("tool_choice")
+    if not isinstance(tool_choice, (str, dict)):
+        tool_choice = None
+
+    raw_images = payload.get("images") or []
+    image_list: list[str] = []
+    if isinstance(raw_images, (list, tuple)):
+        for item in raw_images:
+            if item:
+                image_list.append(str(item))
+    images = image_list[:4]
+
+    extra_params = payload.get("extra_params")
+    if not isinstance(extra_params, dict):
+        extra_params = None
+
+    if not message and not history and not images:
+        raise AIChatPayloadError(_("请先输入问题或提供历史上下文。"))
+
+    return {
+        "context": context,
+        "message": message,
+        "history": history,
+        "show_thoughts": bool(payload.get("show_thoughts", True)),
+        "enable_web": bool(payload.get("enable_web", False)),
+        "model_name": payload.get("model"),
+        "web_query": web_query,
+        "web_max_results": web_max_results,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "response_schema": response_schema,
+        "response_format": response_format,
+        "rag_query": rag_query,
+        "rag_top_k": rag_top_k,
+        "rag_context": rag_context,
+        "images": images,
+        "extra_params": extra_params,
+    }
+
+
 def _build_screener_snapshot(*, user, params, request_id: str) -> tuple[dict[str, Any], int]:
     if hasattr(params, "dict"):
         params = params.dict()
@@ -250,13 +375,27 @@ def _build_screener_snapshot(*, user, params, request_id: str) -> tuple[dict[str
                 user_id=str(user.id) if getattr(user, "is_authenticated", False) else None,
             )
     except Exception as exc:
-        record_metric(
-            "api.screener.error",
+        log_sanitized_exception(
+            context="Screener fetch failed",
+            exc=exc,
+            error_code="screener_fetch_failed",
             request_id=request_id,
             user_id=user_id,
-            error=str(exc),
+            endpoint="api.screener.fetch",
+            status_code=503,
         )
-        return ({"error": str(exc), "rows": [], "has_more": False}, 503)
+        message = _("筛选器暂时不可用，请稍后重试。")
+        return (
+            {
+                "error_code": "screener_fetch_failed",
+                "message": message,
+                "error": message,
+                "rows": [],
+                "has_more": False,
+                "request_id": request_id,
+            },
+            503,
+        )
 
     loaded = page_data.get("offset", offset) + len(page_data.get("rows", []))
     payload = {
@@ -363,163 +502,35 @@ def ai_chat(request):
         )
     future = None
     try:
-        raw_body = request.body or b""
-        if raw_body and len(raw_body) > settings.AI_CHAT_MAX_PAYLOAD_BYTES:
-            return JsonResponse({"error": _("请求内容过大，请缩短问题或清空历史。"), "request_id": request_id}, status=400)
         try:
-            payload = json.loads(raw_body.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            return JsonResponse({"error": _("无效的请求体"), "request_id": request_id}, status=400)
+            chat_payload = _parse_ai_chat_payload(request.body or b"")
+        except AIChatPayloadError:
+            return json_error(
+                error_code="invalid_ai_payload",
+                message=_("请求参数无效，请检查后重试。"),
+                status_code=400,
+                request_id=request_id,
+                user_id=request.user.id,
+                endpoint="api.ai_chat",
+            )
 
-        context = payload.get("context")
-        message = payload.get("message")
-        history = payload.get("history") or []
-        show_thoughts = payload.get("show_thoughts", True)
-        enable_web = bool(payload.get("enable_web", False))
-        model_name = payload.get("model")
-        web_query = payload.get("web_query")
-        web_max_results = payload.get("web_max_results")
-        tools = payload.get("tools")
-        tool_choice = payload.get("tool_choice")
-        response_schema = payload.get("response_schema")
-        response_format = payload.get("response_format")
-        rag_query = payload.get("rag_query")
-        rag_top_k = payload.get("rag_top_k")
-        rag_context = payload.get("rag_context")
-        images = payload.get("images") or []
-        extra_params = payload.get("extra_params")
-        web_query = payload.get("web_query")
-        web_max_results = payload.get("web_max_results")
-        tools = payload.get("tools")
-        tool_choice = payload.get("tool_choice")
-        response_schema = payload.get("response_schema")
-        response_format = payload.get("response_format")
-        rag_query = payload.get("rag_query")
-        rag_top_k = payload.get("rag_top_k")
-        rag_context = payload.get("rag_context")
-        images = payload.get("images") or []
-        extra_params = payload.get("extra_params")
-
-        if not isinstance(context, dict):
-            return JsonResponse({"error": _("缺少上下文数据")}, status=400)
-
-        if not isinstance(history, list):
-            history = []
-        history = history[-settings.AI_CHAT_MAX_HISTORY:]
-        trimmed_history: list[dict[str, str]] = []
-        for entry in history:
-            if not isinstance(entry, dict):
-                continue
-            role = str(entry.get("role") or "user")[:20]
-            content = str(entry.get("content") or "")[: settings.AI_CHAT_MAX_MESSAGE_CHARS]
-            trimmed_history.append({"role": role or "user", "content": content})
-        history = trimmed_history
-
-        if not isinstance(web_query, str):
-            web_query = None
-        try:
-            web_max_results = int(web_max_results) if web_max_results is not None else None
-        except (TypeError, ValueError):
-            web_max_results = None
-        if web_max_results is not None:
-            web_max_results = max(1, min(web_max_results, 12))
-
-        if not isinstance(response_schema, dict):
-            response_schema = None
-        if not isinstance(response_format, dict):
-            response_format = None
-        if not isinstance(rag_query, str):
-            rag_query = None
-        try:
-            rag_top_k = int(rag_top_k) if rag_top_k is not None else None
-        except (TypeError, ValueError):
-            rag_top_k = None
-        if rag_top_k is not None:
-            rag_top_k = max(1, min(rag_top_k, 20))
-        if not isinstance(rag_context, str):
-            rag_context = None
-        if rag_context and len(rag_context) > 2000:
-            rag_context = rag_context[:2000]
-
-        if isinstance(tools, (list, tuple, set)):
-            tools = [str(item).strip() for item in tools if str(item).strip()][:12]
-        elif isinstance(tools, str):
-            tools = tools.strip()
-        elif isinstance(tools, bool):
-            tools = tools
-        else:
-            tools = None
-
-        if not isinstance(tool_choice, (str, dict)):
-            tool_choice = None
-
-        image_list: list[str] = []
-        if isinstance(images, (list, tuple)):
-            for item in images:
-                if item:
-                    image_list.append(str(item))
-        images = image_list[:4]
-
-        if not isinstance(extra_params, dict):
-            extra_params = None
-
-        if not isinstance(web_query, str):
-            web_query = None
-        try:
-            web_max_results = int(web_max_results) if web_max_results is not None else None
-        except (TypeError, ValueError):
-            web_max_results = None
-        if web_max_results is not None:
-            web_max_results = max(1, min(web_max_results, 12))
-
-        if not isinstance(response_schema, dict):
-            response_schema = None
-        if not isinstance(response_format, dict):
-            response_format = None
-        if not isinstance(rag_query, str):
-            rag_query = None
-        try:
-            rag_top_k = int(rag_top_k) if rag_top_k is not None else None
-        except (TypeError, ValueError):
-            rag_top_k = None
-        if rag_top_k is not None:
-            rag_top_k = max(1, min(rag_top_k, 20))
-        if not isinstance(rag_context, str):
-            rag_context = None
-        if rag_context and len(rag_context) > 2000:
-            rag_context = rag_context[:2000]
-
-        if isinstance(tools, (list, tuple, set)):
-            tools = [str(item).strip() for item in tools if str(item).strip()][:12]
-        elif isinstance(tools, str):
-            tools = tools.strip()
-        elif isinstance(tools, bool):
-            tools = tools
-        else:
-            tools = None
-
-        if not isinstance(tool_choice, (str, dict)):
-            tool_choice = None
-
-        image_list: list[str] = []
-        if isinstance(images, (list, tuple)):
-            for item in images:
-                if item:
-                    image_list.append(str(item))
-        images = image_list[:4]
-
-        if not isinstance(extra_params, dict):
-            extra_params = None
-
-        if message is None:
-            message = ""
-        if not isinstance(message, str):
-            message = str(message)
-        if len(message) > settings.AI_CHAT_MAX_MESSAGE_CHARS:
-            message = message[: settings.AI_CHAT_MAX_MESSAGE_CHARS]
-
-        if not message and not history and not images:
-            return JsonResponse({"error": _("请先输入问题或提供历史上下文。"), "request_id": request_id}, status=400)
+        context = chat_payload["context"]
+        message = chat_payload["message"]
+        history = chat_payload["history"]
+        show_thoughts = chat_payload["show_thoughts"]
+        enable_web = chat_payload["enable_web"]
+        model_name = chat_payload["model_name"]
+        web_query = chat_payload["web_query"]
+        web_max_results = chat_payload["web_max_results"]
+        tools = chat_payload["tools"]
+        tool_choice = chat_payload["tool_choice"]
+        response_schema = chat_payload["response_schema"]
+        response_format = chat_payload["response_format"]
+        rag_query = chat_payload["rag_query"]
+        rag_top_k = chat_payload["rag_top_k"]
+        rag_context = chat_payload["rag_context"]
+        images = chat_payload["images"]
+        extra_params = chat_payload["extra_params"]
 
         def _invoke_ai():
             with track_latency(
@@ -564,14 +575,23 @@ def ai_chat(request):
         )
         return JsonResponse({"error": _("AI 分析超时，请稍后重试。"), "request_id": request_id}, status=504)
     except LLMIntegrationError as exc:
-        record_metric(
-            "ai.chat.error",
+        log_sanitized_exception(
+            context="AI chat failed",
+            exc=exc,
+            error_code="ai_chat_failed",
             request_id=request_id,
             user_id=request.user.id,
-            model=model_name or "",
-            error=str(exc),
+            endpoint="api.ai_chat",
+            status_code=500,
         )
-        return JsonResponse({"error": str(exc), "request_id": request_id}, status=500)
+        return json_error(
+            error_code="ai_chat_failed",
+            message=_("AI 服务暂时不可用，请稍后重试。"),
+            status_code=500,
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.ai_chat",
+        )
     finally:
         AI_INFLIGHT_GUARD.release()
 
@@ -622,49 +642,36 @@ def ai_chat_stream(request):
             guard_released = True
 
     try:
-        raw_body = request.body or b""
-        if raw_body and len(raw_body) > settings.AI_CHAT_MAX_PAYLOAD_BYTES:
-            _release_guard()
-            return JsonResponse({"error": _("请求内容过大，请缩短问题或清空历史。"), "request_id": request_id}, status=400)
         try:
-            payload = json.loads(raw_body.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
+            chat_payload = _parse_ai_chat_payload(request.body or b"")
+        except AIChatPayloadError:
             _release_guard()
-            return JsonResponse({"error": _("无效的请求体"), "request_id": request_id}, status=400)
+            return json_error(
+                error_code="invalid_ai_payload",
+                message=_("请求参数无效，请检查后重试。"),
+                status_code=400,
+                request_id=request_id,
+                user_id=request.user.id,
+                endpoint="api.ai_chat_stream",
+            )
 
-        context = payload.get("context")
-        message = payload.get("message")
-        history = payload.get("history") or []
-        show_thoughts = payload.get("show_thoughts", True)
-        enable_web = bool(payload.get("enable_web", False))
-        model_name = payload.get("model")
-
-        if not isinstance(context, dict):
-            _release_guard()
-            return JsonResponse({"error": "缺少上下文数据", "request_id": request_id}, status=400)
-
-        if not isinstance(history, list):
-            history = []
-        history = history[-settings.AI_CHAT_MAX_HISTORY:]
-        trimmed_history: list[dict[str, str]] = []
-        for entry in history:
-            if not isinstance(entry, dict):
-                continue
-            role = str(entry.get("role") or "user")[:20]
-            content = str(entry.get("content") or "")[: settings.AI_CHAT_MAX_MESSAGE_CHARS]
-            trimmed_history.append({"role": role or "user", "content": content})
-        history = trimmed_history
-
-        if message is None:
-            message = ""
-        if not isinstance(message, str):
-            message = str(message)
-        if len(message) > settings.AI_CHAT_MAX_MESSAGE_CHARS:
-            message = message[: settings.AI_CHAT_MAX_MESSAGE_CHARS]
-
-        if not message and not history and not images:
-            _release_guard()
-            return JsonResponse({"error": _("请先输入问题或提供历史上下文。"), "request_id": request_id}, status=400)
+        context = chat_payload["context"]
+        message = chat_payload["message"]
+        history = chat_payload["history"]
+        show_thoughts = chat_payload["show_thoughts"]
+        enable_web = chat_payload["enable_web"]
+        model_name = chat_payload["model_name"]
+        web_query = chat_payload["web_query"]
+        web_max_results = chat_payload["web_max_results"]
+        tools = chat_payload["tools"]
+        tool_choice = chat_payload["tool_choice"]
+        response_schema = chat_payload["response_schema"]
+        response_format = chat_payload["response_format"]
+        rag_query = chat_payload["rag_query"]
+        rag_top_k = chat_payload["rag_top_k"]
+        rag_context = chat_payload["rag_context"]
+        images = chat_payload["images"]
+        extra_params = chat_payload["extra_params"]
 
         event_queue: "queue.Queue[tuple[str, dict[str, Any]]]" = queue.Queue()
 
@@ -712,9 +719,49 @@ def ai_chat_stream(request):
                     timings_ms=result.get("timings_ms"),
                 )
             except LLMIntegrationError as exc:
-                event_queue.put(("error", {"error": str(exc), "request_id": request_id}))
+                log_sanitized_exception(
+                    context="AI stream failed",
+                    exc=exc,
+                    error_code="ai_chat_stream_failed",
+                    request_id=request_id,
+                    user_id=request.user.id,
+                    endpoint="api.ai_chat_stream",
+                    status_code=500,
+                )
+                error_message = _("AI 服务暂时不可用，请稍后重试。")
+                event_queue.put(
+                    (
+                        "error",
+                        {
+                            "error_code": "ai_chat_stream_failed",
+                            "message": error_message,
+                            "error": error_message,
+                            "request_id": request_id,
+                        },
+                    )
+                )
             except Exception as exc:  # pragma: no cover - safety net
-                event_queue.put(("error", {"error": f"{exc}", "request_id": request_id}))
+                log_sanitized_exception(
+                    context="AI stream unexpected error",
+                    exc=exc,
+                    error_code="ai_chat_stream_failed",
+                    request_id=request_id,
+                    user_id=request.user.id,
+                    endpoint="api.ai_chat_stream",
+                    status_code=500,
+                )
+                error_message = _("AI 服务暂时不可用，请稍后重试。")
+                event_queue.put(
+                    (
+                        "error",
+                        {
+                            "error_code": "ai_chat_stream_failed",
+                            "message": error_message,
+                            "error": error_message,
+                            "request_id": request_id,
+                        },
+                    )
+                )
             finally:
                 event_queue.put(("end", {"request_id": request_id}))
                 _release_guard()
@@ -815,7 +862,23 @@ def rag_ingest(request):
             overlap=overlap,
         )
     except Exception as exc:
-        return JsonResponse({"error": str(exc), "request_id": request_id}, status=500)
+        log_sanitized_exception(
+            context="RAG ingest failed",
+            exc=exc,
+            error_code="rag_ingest_failed",
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.rag_ingest",
+            status_code=500,
+        )
+        return json_error(
+            error_code="rag_ingest_failed",
+            message=_("知识库导入失败，请稍后重试。"),
+            status_code=500,
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.rag_ingest",
+        )
 
     payload = {"request_id": request_id, "errors": errors}
     if isinstance(result, dict):
@@ -846,7 +909,23 @@ def rag_query_api(request):
 
         results = rag_query(query.strip(), user_id=str(request.user.id), top_k=top_k)
     except Exception as exc:
-        return JsonResponse({"error": str(exc), "request_id": request_id}, status=500)
+        log_sanitized_exception(
+            context="RAG query failed",
+            exc=exc,
+            error_code="rag_query_failed",
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.rag_query",
+            status_code=500,
+        )
+        return json_error(
+            error_code="rag_query_failed",
+            message=_("知识库检索失败，请稍后重试。"),
+            status_code=500,
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.rag_query",
+        )
     return JsonResponse({"results": results, "request_id": request_id}, json_dumps_params={"ensure_ascii": False})
 
 
@@ -1196,10 +1275,22 @@ def get_user_backtests(request):
             json_dumps_params={"ensure_ascii": False},
         )
     except Exception as exc:
-        return JsonResponse(
-            {"error": _("Failed to load backtests."), "details": str(exc), "request_id": request_id},
-            status=500,
-            json_dumps_params={"ensure_ascii": False},
+        log_sanitized_exception(
+            context="Load backtests failed",
+            exc=exc,
+            error_code="load_backtests_failed",
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.backtests.user",
+            status_code=500,
+        )
+        return json_error(
+            error_code="load_backtests_failed",
+            message=_("Failed to load backtests."),
+            status_code=500,
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.backtests.user",
         )
 
 
@@ -1255,10 +1346,22 @@ def fork_backtest(request, record_id: str):
             json_dumps_params={"ensure_ascii": False},
         )
     except Exception as exc:
-        return JsonResponse(
-            {"error": _("Failed to fork backtest."), "details": str(exc), "request_id": request_id},
-            status=500,
-            json_dumps_params={"ensure_ascii": False},
+        log_sanitized_exception(
+            context="Fork backtest failed",
+            exc=exc,
+            error_code="fork_backtest_failed",
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.backtest_fork",
+            status_code=500,
+        )
+        return json_error(
+            error_code="fork_backtest_failed",
+            message=_("Failed to fork backtest."),
+            status_code=500,
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="api.backtest_fork",
         )
 
 

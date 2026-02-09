@@ -23,6 +23,12 @@ jobs:
       - name: Lint
         run: |
           ruff check .
+      - name: Lint (Gradual Quality Rules)
+        run: |
+          ruff check trading/error_contract.py trading/context_processors.py trading/notifications_cache.py trading/profile.py trading/signals.py --select B,I,UP,SIM
+      - name: Type Check (Critical Paths)
+        run: |
+          python -m mypy trading/error_contract.py trading/context_processors.py trading/notifications_cache.py trading/profile.py trading/signals.py
       - name: Tests
         env:
           DJANGO_SETTINGS_MODULE: quant_trading_site.settings

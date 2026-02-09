@@ -15,7 +15,7 @@ from ..models import RealtimeProfile
 from ..realtime.manual_orders import submit_manual_order
 from ..realtime.config import DEFAULT_CONFIG_NAME, load_realtime_config_from_payload
 from ..realtime.schema import RealtimePayloadError, validate_realtime_payload
-from ..realtime.storage import read_state, state_path, write_state
+from ..realtime.storage import read_state, write_state
 
 
 def _parse_unix_ts(value: Any) -> datetime | None:

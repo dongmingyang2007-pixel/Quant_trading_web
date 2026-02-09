@@ -864,6 +864,20 @@
                                                         {% endif %}
                                                     </div>
                                                     <div class="col-12">
+                                                        <label class="form-label" for="{{ api_form.ai_model.id_for_label }}">{% bilingual "Default AI Model" "默认 AI 模型" %}</label>
+                                                        {{ api_form.ai_model }}
+                                                        {% if api_form.ai_model.help_text %}
+                                                            <div class="form-text">{{ api_form.ai_model.help_text }}</div>
+                                                        {% endif %}
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label" for="{{ api_form.ai_embedding_model.id_for_label }}">{% bilingual "Embedding Model" "向量化模型" %}</label>
+                                                        {{ api_form.ai_embedding_model }}
+                                                        {% if api_form.ai_embedding_model.help_text %}
+                                                            <div class="form-text">{{ api_form.ai_embedding_model.help_text }}</div>
+                                                        {% endif %}
+                                                    </div>
+                                                    <div class="col-12">
                                                         <label class="form-label" for="{{ api_form.aliyun_access_key_id.id_for_label }}">Aliyun AccessKey ID</label>
                                                         <div class="input-group api-secret-field" data-role="api-secret-field">
                                                             {{ api_form.aliyun_access_key_id }}

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
-from django.contrib.auth import get_user_model
 
 from ..alpaca_data import resolve_alpaca_trading_mode
 from ..file_utils import update_json_file

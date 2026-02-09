@@ -10,11 +10,24 @@ try:  # pragma: no cover - optional dependency
     PYDANTIC_AVAILABLE = True
 except Exception:  # pragma: no cover
     BaseModel = object  # type: ignore[assignment]
-    Field = lambda *args, **kwargs: None  # type: ignore[assignment]
     ValidationError = Exception  # type: ignore[assignment]
     ConfigDict = dict  # type: ignore[assignment]
-    field_validator = lambda *args, **kwargs: (lambda fn: fn)  # type: ignore[assignment]
-    model_validator = lambda *args, **kwargs: (lambda fn: fn)  # type: ignore[assignment]
+
+    def Field(*args, **kwargs):
+        return None
+
+    def field_validator(*args, **kwargs):
+        def _decorator(fn):
+            return fn
+
+        return _decorator
+
+    def model_validator(*args, **kwargs):
+        def _decorator(fn):
+            return fn
+
+        return _decorator
+
     PYDANTIC_AVAILABLE = False
 
 

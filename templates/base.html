@@ -8,6 +8,7 @@
     {% bootstrap_css %}
     {% bootstrap_javascript %}
     <link rel="stylesheet" href="{% static 'trading/css/styles.css' %}">
+    <link rel="stylesheet" href="{% static 'trading/css/global_quick_widget.css' %}?v={{ STATIC_VERSION|default:'20260206-gqw-v2' }}">
     {% block extra_head %}{% endblock %}
 </head>
 <body class="bg-light"
@@ -27,9 +28,6 @@
                     </li>
                     <li class="nav-item">
                         <a class="nav-link{% if request.resolver_match.url_name == 'market_insights' %} active{% endif %}" href="{% url 'trading:market_insights' %}">{% bilingual "Market Insights" "股市信息" %}</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link{% if request.resolver_match.url_name == 'screen_analyzer' %} active{% endif %}" href="{% url 'trading:screen_analyzer' %}">{% bilingual "Screen Analyzer" "屏幕波型" %}</a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link{% if request.resolver_match.url_name == 'paper_trading' %} active{% endif %}" href="{% url 'trading:paper_trading' %}">{% bilingual "Paper Trading" "模拟实盘" %}</a>
@@ -127,14 +125,6 @@
         },
         {% endif %}
         {
-            "id": "screen-analyzer",
-            "label": "{% if lang_prefix == 'zh' %}{{ "屏幕波型"|escapejs }}{% else %}{{ "Screen Analyzer"|escapejs }}{% endif %}",
-            "description": "{% if lang_prefix == 'zh' %}{{ "屏幕解析波型与概率图谱"|escapejs }}{% else %}{{ "Analyze screen wave patterns"|escapejs }}{% endif %}",
-            "shortcut": "S",
-            "type": "route",
-            "href": "{% url 'trading:screen_analyzer' %}"
-        },
-        {
             "id": "learning",
             "label": "{% if lang_prefix == 'zh' %}{{ "学习中心"|escapejs }}{% else %}{{ "Learning Hub"|escapejs }}{% endif %}",
             "description": "{% if lang_prefix == 'zh' %}{{ "继续学习课程"|escapejs }}{% else %}{{ "Continue structured lessons"|escapejs }}{% endif %}",
@@ -219,6 +209,67 @@
         </div>
     </div>
     <div id="task-toast-container"></div>
+    <div id="global-quick-widget"
+         class="global-quick-widget is-collapsed"
+         data-market-url="{% url 'trading:market_insights' %}"
+         data-lang="{{ request.LANGUAGE_CODE|default:'zh-hans'|lower|slice:':2' }}"
+         aria-live="polite">
+        <button type="button"
+                class="gqw-launch"
+                data-role="gqw-toggle"
+                aria-expanded="false"
+                aria-controls="gqw-panel">
+            <span class="gqw-launch-icon">★</span>
+            <span class="gqw-launch-text">{% bilingual "Watch & Recent" "自选与最近" %}</span>
+        </button>
+        <section id="gqw-panel"
+                 class="gqw-panel"
+                 role="dialog"
+                 aria-label="{% bilingual 'Watchlist quick window' '自选最近悬浮窗' %}"
+                 hidden>
+            <header class="gqw-header" data-role="gqw-drag-handle">
+                <h3>{% bilingual "Watch & Recent" "自选与最近" %}</h3>
+                <button type="button"
+                        class="gqw-minify"
+                        data-role="gqw-toggle"
+                        aria-label="{% bilingual 'Minimize window' '缩小窗口' %}">
+                    <span aria-hidden="true">⤢</span>
+                </button>
+            </header>
+            <div class="gqw-tabs" role="tablist" aria-label="{% bilingual 'Quick tabs' '快速标签' %}">
+                <button type="button"
+                        class="gqw-tab is-active"
+                        data-role="gqw-tab"
+                        data-target="watchlist"
+                        role="tab"
+                        aria-selected="true">
+                    {% bilingual "Watchlist" "自选" %}
+                    <span class="gqw-count" data-role="gqw-watch-count">0</span>
+                </button>
+                <button type="button"
+                        class="gqw-tab"
+                        data-role="gqw-tab"
+                        data-target="recent"
+                        role="tab"
+                        aria-selected="false">
+                    {% bilingual "Recent" "最近" %}
+                    <span class="gqw-count" data-role="gqw-recent-count">0</span>
+                </button>
+            </div>
+            <div class="gqw-body">
+                <div class="gqw-chip-flow" data-role="gqw-watch-panel"></div>
+                <div class="gqw-chip-flow" data-role="gqw-recent-panel" hidden></div>
+            </div>
+            <form class="gqw-form" data-role="gqw-form">
+                <input type="text"
+                       class="gqw-input"
+                       data-role="gqw-input"
+                       placeholder="{% bilingual 'Ticker (e.g. NVDA)' '股票代码（如 NVDA）' %}"
+                       autocomplete="off">
+                <button type="submit" class="gqw-open-btn">{% bilingual "Open" "打开" %}</button>
+            </form>
+        </section>
+    </div>
 
     <main class="container-xl pb-5">
         {% block content %}{% endblock %}
@@ -226,6 +277,7 @@
     <script src="{% static 'trading/js/nav_controls.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
     <script src="{% static 'trading/js/command_palette.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
     <script src="{% static 'trading/js/task_dock.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
+    <script src="{% static 'trading/js/global_quick_widget.js' %}?v={{ STATIC_VERSION|default:'20260206-gqw-v2' }}" nonce="{{ csp_nonce }}" defer></script>
     {% block extra_scripts %}{% endblock %}
     <footer class="bg-white border-top py-4">
         <div class="container text-center text-muted small">

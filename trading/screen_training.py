@@ -5,6 +5,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
@@ -41,6 +42,8 @@ _MODEL_THRESHOLD_CANDIDATES = [
     ).split(",")
     if item.strip()
 ]
+_DEFAULT_NAMESPACE = "screen_analyzer"
+_NAMESPACE_SANITIZER = re.compile(r"[^a-z0-9_\-]+")
 
 
 @dataclass(slots=True)
@@ -56,26 +59,42 @@ class TrainingMetrics:
     override_source: Optional[str] = None
 
 
-def _data_dir() -> Path:
+def _resolve_namespace(namespace: str | None) -> str:
+    raw = (namespace or _DEFAULT_NAMESPACE).strip().lower()
+    if not raw:
+        raw = _DEFAULT_NAMESPACE
+    sanitized = _NAMESPACE_SANITIZER.sub("_", raw).strip("._-")
+    if not sanitized:
+        sanitized = _DEFAULT_NAMESPACE
+    return sanitized[:64]
+
+
+def _data_dir(namespace: str | None = None) -> Path:
     base = Path(getattr(settings, "DATA_CACHE_DIR", Path.cwd()))
-    path = base / "screen_analyzer"
+    path = base / _resolve_namespace(namespace)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def _samples_path() -> Path:
-    return _data_dir() / "pattern_samples.jsonl"
+def _samples_path(namespace: str | None = None) -> Path:
+    return _data_dir(namespace) / "pattern_samples.jsonl"
 
 
-def _model_path() -> Path:
-    return _data_dir() / "pattern_model.pkl"
+def _model_path(namespace: str | None = None) -> Path:
+    return _data_dir(namespace) / "pattern_model.pkl"
 
 
-def _model_meta_path() -> Path:
-    return _data_dir() / "pattern_model_meta.json"
+def _model_meta_path(namespace: str | None = None) -> Path:
+    return _data_dir(namespace) / "pattern_model_meta.json"
 
 
-def save_sample(features: List[float], label: str, meta: Optional[Dict[str, Any]] = None) -> None:
+def save_sample(
+    features: List[float],
+    label: str,
+    meta: Optional[Dict[str, Any]] = None,
+    *,
+    namespace: str | None = None,
+) -> None:
     if label not in PATTERN_KEYS:
         raise ValueError("invalid_label")
     entry = {
@@ -84,13 +103,13 @@ def save_sample(features: List[float], label: str, meta: Optional[Dict[str, Any]
         "meta": meta or {},
         "ts": time.time(),
     }
-    path = _samples_path()
+    path = _samples_path(namespace)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
-def load_samples() -> List[Dict[str, Any]]:
-    path = _samples_path()
+def load_samples(*, namespace: str | None = None) -> List[Dict[str, Any]]:
+    path = _samples_path(namespace)
     if not path.exists():
         return []
     samples: List[Dict[str, Any]] = []
@@ -109,10 +128,10 @@ def load_samples() -> List[Dict[str, Any]]:
     return samples
 
 
-def train_model(min_samples: int = 18) -> TrainingMetrics:
+def train_model(min_samples: int = 18, *, namespace: str | None = None) -> TrainingMetrics:
     if RandomForestClassifier is None or train_test_split is None or accuracy_score is None:
         raise RuntimeError("sklearn_unavailable")
-    samples = load_samples()
+    samples = load_samples(namespace=namespace)
     valid: List[Dict[str, Any]] = [
         sample
         for sample in samples
@@ -162,7 +181,7 @@ def train_model(min_samples: int = 18) -> TrainingMetrics:
         except Exception:
             override_summary = None
 
-    _save_model(model, labels=labels)
+    _save_model(model, labels=labels, namespace=namespace)
     override_threshold = _MODEL_MIN_CONF_DEFAULT
     override_source = "default"
     override_accuracy = None
@@ -185,12 +204,12 @@ def train_model(min_samples: int = 18) -> TrainingMetrics:
         override_samples=override_samples,
         override_source=override_source,
     )
-    _write_meta(meta)
+    _write_meta(meta, namespace=namespace)
     return meta
 
 
-def _save_model(model: Any, *, labels: List[str]) -> None:
-    path = _model_path()
+def _save_model(model: Any, *, labels: List[str], namespace: str | None = None) -> None:
+    path = _model_path(namespace)
     payload = {"model": model, "labels": labels, "features": FEATURE_NAMES}
     if joblib is not None:
         joblib.dump(payload, path)
@@ -201,9 +220,10 @@ def _save_model(model: Any, *, labels: List[str]) -> None:
         pickle.dump(payload, fh)
 
 
-def _write_meta(metrics: TrainingMetrics) -> None:
-    path = _model_meta_path()
+def _write_meta(metrics: TrainingMetrics, *, namespace: str | None = None) -> None:
+    path = _model_meta_path(namespace)
     meta = {
+        "trained_at": time.time(),
         "total_samples": metrics.total_samples,
         "classes": metrics.classes,
         "accuracy": metrics.accuracy,
@@ -218,8 +238,8 @@ def _write_meta(metrics: TrainingMetrics) -> None:
     path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def load_trained_model() -> Optional[Tuple[Any, List[str]]]:
-    path = _model_path()
+def load_trained_model(*, namespace: str | None = None) -> Optional[Tuple[Any, List[str]]]:
+    path = _model_path(namespace)
     if not path.exists():
         return None
     try:
@@ -241,8 +261,8 @@ def load_trained_model() -> Optional[Tuple[Any, List[str]]]:
     return model, labels
 
 
-def load_model_meta() -> Optional[Dict[str, Any]]:
-    path = _model_meta_path()
+def load_model_meta(*, namespace: str | None = None) -> Optional[Dict[str, Any]]:
+    path = _model_meta_path(namespace)
     if not path.exists():
         return None
     try:

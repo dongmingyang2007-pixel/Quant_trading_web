@@ -46,8 +46,11 @@ class MarketInsightsGuardsTests(TestCase):
 
     def test_market_params_clamped_and_sanitized(self):
         with mock.patch("trading.views.market._rank_symbols") as mock_rank, mock.patch(
-            "trading.views.market.yf", new=object()
-        ), mock.patch("trading.views.market._MARKET_EXECUTOR") as executor:
+            "trading.views.market._MARKET_EXECUTOR"
+        ) as executor, mock.patch(
+            "trading.views.market.resolve_alpaca_data_credentials",
+            return_value=("key", "secret"),
+        ):
             mock_rank.return_value = [
                 {
                     "symbol": "ABC",
@@ -60,7 +63,7 @@ class MarketInsightsGuardsTests(TestCase):
                     "timestamps": [],
                 }
             ]
-            executor.submit.return_value = self._dummy_future({"ABC": object()})
+            executor.submit.return_value = self._dummy_future(({"ABC": object()}, "alpaca"))
             resp = self.client.get(self.url, {"timeframe": "bad", "limit": "9999", "query": "abc$%^"}, follow=True)
 
             self.assertEqual(resp.status_code, 200)
@@ -72,8 +75,11 @@ class MarketInsightsGuardsTests(TestCase):
     def test_market_rate_limit_blocks_follow_up_calls(self):
         caches["default"].clear()
         with mock.patch("trading.views.market._rank_symbols") as mock_rank, mock.patch(
-            "trading.views.market.yf", new=object()
-        ), mock.patch("trading.views.market._MARKET_EXECUTOR") as executor, mock.patch(
+            "trading.views.market._MARKET_EXECUTOR"
+        ) as executor, mock.patch(
+            "trading.views.market.resolve_alpaca_data_credentials",
+            return_value=("key", "secret"),
+        ), mock.patch(
             "trading.views.market.MARKET_RATE_WINDOW", 60
         ), mock.patch(
             "trading.views.market.MARKET_RATE_MAX_CALLS", 1
@@ -91,8 +97,8 @@ class MarketInsightsGuardsTests(TestCase):
                 }
             ]
             executor.submit.side_effect = [
-                self._dummy_future({"XYZ": object()}),
-                self._dummy_future({"XYZ": object()}),
+                self._dummy_future(({"XYZ": object()}, "alpaca")),
+                self._dummy_future(({"XYZ": object()}, "alpaca")),
             ]
             first = self.client.get(self.url, {"query": "xyz"})
             second = self.client.get(self.url, {"query": "xyz"})

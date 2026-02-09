@@ -8,6 +8,8 @@ select = ["E4", "E7", "E9", "F"]
 
 [tool.pytest.ini_options]
 cache_dir = "../storage_bundle/pytest_cache"
+DJANGO_SETTINGS_MODULE = "quant_trading_site.settings"
+pythonpath = ["."]
 
 [tool.mypy]
 python_version = "3.11"

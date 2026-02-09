@@ -117,6 +117,7 @@ pip install -r requirements-rl.txt   # 强化学习相关
 可选配置：
 - `DJANGO_STORAGE_DIR`：自定义数据目录；默认使用 `storage_bundle/`，不存在时自动创建。
 - `DJANGO_ALLOW_INSECURE_KEY=1`：仅限本地临时绕过密钥校验。
+- `DJANGO_CREDENTIALS_ENCRYPTION_KEY`：用户 API 凭证加密密钥（推荐设置；支持 Fernet key 或自定义口令）。
 - `REDIS_URL`：启用 Redis cache（含限流跨进程一致）。
 - `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND`：异步队列配置。
 - `CELERY_ALWAYS_EAGER`：置为 `1` 可强制同步执行。
@@ -222,10 +223,11 @@ python manage.py realtime_refresh_assets --user-id <你的用户ID>
 - `REALTIME_NDJSON_MAX_BYTES`：NDJSON 文件轮转阈值（默认 10MB）。
 - `METRICS_MAX_BYTES`：遥测文件轮转阈值。
 
-## 屏幕图表分析（可选）
-浏览器页面提供“屏幕波型分析”，使用本地屏幕捕获与图形解析。
-- OCR 依赖 Tesseract（macOS: `brew install tesseract`）。
-- 在页面中开启/关闭 OCR，避免不必要的资源消耗。
+## 股市信息图表波型分析
+“屏幕波型”能力已迁移到「股市信息 -> 图表」工作台，无需额外截图流程。
+- 图表加载后会自动进行形态/波浪分析，也支持手动“重新分析”。
+- 可在图表上叠加关键 pivot 点与连线。
+- 支持样本保存与模型训练（独立命名空间：`market_chart_analyzer`）。
 
 ## 数据导入与清理
 导入历史数据：

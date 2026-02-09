@@ -5,7 +5,40 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 import math
 
-from .realtime.bars import parse_timestamp
+def _normalize_epoch_seconds(ts: float) -> float:
+    if ts > 1e15:
+        return ts / 1e9
+    if ts > 1e12:
+        return ts / 1e3
+    return ts
+
+
+def parse_timestamp(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        ts = float(value)
+        return _normalize_epoch_seconds(ts)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            if text.replace(".", "", 1).isdigit():
+                if "." in text:
+                    return _normalize_epoch_seconds(float(text))
+                return _normalize_epoch_seconds(float(int(text)))
+        except (TypeError, ValueError):
+            pass
+        normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    return None
 
 
 @dataclass(slots=True)
@@ -23,9 +56,25 @@ def _normalize_trade(trade: Any) -> TradePoint | None:
         price_val = trade[1]
         size_val = trade[2] if len(trade) > 2 else 0
     elif isinstance(trade, dict):
-        ts_val = parse_timestamp(trade.get("t") or trade.get("timestamp") or trade.get("ts"))
-        price_val = trade.get("p") or trade.get("price")
-        size_val = trade.get("s") or trade.get("size") or trade.get("v") or 0
+        if "t" in trade:
+            ts_raw = trade.get("t")
+        elif "timestamp" in trade:
+            ts_raw = trade.get("timestamp")
+        else:
+            ts_raw = trade.get("ts")
+        ts_val = parse_timestamp(ts_raw)
+        if "p" in trade:
+            price_val = trade.get("p")
+        else:
+            price_val = trade.get("price")
+        if "s" in trade:
+            size_val = trade.get("s")
+        elif "size" in trade:
+            size_val = trade.get("size")
+        elif "v" in trade:
+            size_val = trade.get("v")
+        else:
+            size_val = 0
     else:
         return None
     if ts_val is None or price_val is None:

@@ -116,8 +116,20 @@ def embed_texts(
     api_key = api_key or _resolve_key(user_id=user_id)
     if not api_key:
         return []
+    if not model and user_id:
+        try:
+            creds = load_api_credentials(str(user_id))
+        except Exception:
+            creds = {}
+        if isinstance(creds, dict):
+            preferred = str(creds.get("ai_embedding_model") or "").strip()
+            if preferred:
+                lowered = preferred.lower()
+                if lowered.startswith(("bailian:", "dashscope:", "aliyun:")):
+                    preferred = preferred.split(":", 1)[1].strip()
+                model = preferred
     payload = {
-        "model": model or os.environ.get("BAILIAN_EMBEDDING_MODEL", "text-embedding-v2"),
+        "model": model or os.environ.get("BAILIAN_EMBEDDING_MODEL", os.environ.get("DASHSCOPE_EMBEDDING_MODEL", "text-embedding-v2")),
         "input": {"texts": [str(text) for text in texts]},
     }
     url = f"{_base_url()}{EMBEDDING_PATH}"

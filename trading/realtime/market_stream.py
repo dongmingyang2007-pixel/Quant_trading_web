@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer

@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
+import logging
 import os
 from typing import Any
 
+from cryptography.fernet import Fernet, InvalidToken
+from django.conf import settings
 from django.contrib.auth import get_user_model
 
 from .models import UserProfile
+from .observability import record_metric
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_PROFILE = {
     "display_name": "",
@@ -58,6 +67,18 @@ API_CREDENTIAL_FIELDS = {
         "env": "DASHSCOPE_API_KEY",
         "help": "用于阿里云百炼（通义千问）API Key。",
     },
+    "ai_model": {
+        "label": "AI Model",
+        "env": "AI_MODEL",
+        "help": "默认 AI 模型（示例：bailian:qwen-max）。",
+        "mask": False,
+    },
+    "ai_embedding_model": {
+        "label": "AI Embedding Model",
+        "env": "BAILIAN_EMBEDDING_MODEL",
+        "help": "默认向量化模型（示例：text-embedding-v2）。",
+        "mask": False,
+    },
     "aliyun_access_key_id": {
         "label": "Aliyun AccessKey ID",
         "env": "ALIYUN_ACCESS_KEY_ID",
@@ -84,6 +105,8 @@ API_CREDENTIAL_FIELDS = {
         "help": "用于拉取远程策略覆写（可选）。",
     },
 }
+
+_CREDENTIALS_FIELD_PREFIX = "fernet:"
 
 
 def _get_or_create_profile(user_id: str) -> UserProfile:
@@ -117,6 +140,117 @@ def _normalize_api_credentials(raw: Any) -> dict[str, str]:
     return normalized
 
 
+def _resolve_credentials_encryption_key() -> bytes | None:
+    configured = (os.environ.get("DJANGO_CREDENTIALS_ENCRYPTION_KEY") or "").strip()
+    if configured:
+        try:
+            decoded = base64.urlsafe_b64decode(configured.encode("utf-8"))
+            if len(decoded) == 32:
+                return configured.encode("utf-8")
+        except Exception:
+            pass
+        # Support passphrase-style keys by deriving a Fernet-compatible key.
+        return base64.urlsafe_b64encode(hashlib.sha256(configured.encode("utf-8")).digest())
+
+    secret_key = str(getattr(settings, "SECRET_KEY", "") or "").strip()
+    if not secret_key:
+        return None
+    return base64.urlsafe_b64encode(hashlib.sha256(secret_key.encode("utf-8")).digest())
+
+
+def _get_credentials_cipher() -> Fernet | None:
+    key = _resolve_credentials_encryption_key()
+    if not key:
+        return None
+    try:
+        return Fernet(key)
+    except Exception as exc:
+        LOGGER.warning("Failed to initialize API credential cipher: %s", exc)
+    return None
+
+
+def _encrypt_api_credentials(credentials: dict[str, str]) -> str | None:
+    cipher = _get_credentials_cipher()
+    if cipher is None:
+        return None
+    payload = json.dumps(credentials, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    token = cipher.encrypt(payload).decode("utf-8")
+    return f"{_CREDENTIALS_FIELD_PREFIX}{token}"
+
+
+def _decrypt_api_credentials(encrypted: str | None) -> dict[str, str] | None:
+    text = (encrypted or "").strip()
+    if not text:
+        return None
+    cipher = _get_credentials_cipher()
+    if cipher is None:
+        return None
+    token = text[len(_CREDENTIALS_FIELD_PREFIX) :] if text.startswith(_CREDENTIALS_FIELD_PREFIX) else text
+    try:
+        decrypted = cipher.decrypt(token.encode("utf-8")).decode("utf-8")
+    except InvalidToken:
+        return None
+    except Exception:
+        return None
+    try:
+        payload = json.loads(decrypted)
+    except (TypeError, ValueError):
+        return None
+    return _normalize_api_credentials(payload)
+
+
+def _persist_encrypted_api_credentials(profile_obj: UserProfile, credentials: dict[str, str], *, clear_legacy: bool) -> bool:
+    encrypted = _encrypt_api_credentials(credentials)
+    if not encrypted:
+        return False
+    profile_obj.api_credentials_encrypted = encrypted
+    update_fields = ["api_credentials_encrypted", "updated_at"]
+    if clear_legacy:
+        profile_obj.api_credentials = {}
+        update_fields.insert(1, "api_credentials")
+    profile_obj.save(update_fields=update_fields)
+    return True
+
+
+def _load_api_credentials_from_profile(profile_obj: UserProfile) -> dict[str, str]:
+    encrypted_value = profile_obj.api_credentials_encrypted or ""
+    decrypted = _decrypt_api_credentials(encrypted_value)
+    if decrypted is not None:
+        if isinstance(profile_obj.api_credentials, dict) and profile_obj.api_credentials:
+            profile_obj.api_credentials = {}
+            profile_obj.save(update_fields=["api_credentials", "updated_at"])
+            record_metric(
+                "credential.migration.success",
+                user_id=str(profile_obj.user_id),
+                reason="clear_legacy_after_decrypt",
+            )
+        return decrypted
+
+    if encrypted_value:
+        record_metric(
+            "credential.migration.failure",
+            user_id=str(profile_obj.user_id),
+            reason="decrypt_failed",
+        )
+        LOGGER.warning("Failed to decrypt api_credentials_encrypted for user_id=%s", profile_obj.user_id)
+
+    legacy = _normalize_api_credentials(profile_obj.api_credentials)
+    if legacy and _persist_encrypted_api_credentials(profile_obj, legacy, clear_legacy=True):
+        record_metric(
+            "credential.migration.success",
+            user_id=str(profile_obj.user_id),
+            reason="read_rewrite",
+        )
+        return legacy
+    if legacy:
+        record_metric(
+            "credential.migration.failure",
+            user_id=str(profile_obj.user_id),
+            reason="encryption_unavailable",
+        )
+    return legacy
+
+
 def load_profile(user_id: str) -> dict[str, Any]:
     profile_obj = _get_or_create_profile(user_id)
     payload = {
@@ -144,12 +278,13 @@ def save_profile(user_id: str, profile: dict[str, Any]) -> None:
 
 def load_api_credentials(user_id: str) -> dict[str, str]:
     profile_obj = _get_or_create_profile(user_id)
-    return _normalize_api_credentials(profile_obj.api_credentials)
+    return _load_api_credentials_from_profile(profile_obj)
 
 
 def save_api_credentials(user_id: str, updates: dict[str, Any], *, replace: bool = False) -> dict[str, str]:
     profile_obj = _get_or_create_profile(user_id)
-    credentials = {} if replace else _normalize_api_credentials(profile_obj.api_credentials)
+    credentials = {} if replace else _load_api_credentials_from_profile(profile_obj)
+    clearable_fields = {"ai_model", "ai_embedding_model"}
     for key, value in updates.items():
         if key not in API_CREDENTIAL_FIELDS:
             continue
@@ -157,17 +292,46 @@ def save_api_credentials(user_id: str, updates: dict[str, Any], *, replace: bool
             continue
         text = str(value).strip()
         if not text:
+            if key in clearable_fields:
+                credentials.pop(key, None)
             continue
         credentials[key] = text
-    profile_obj.api_credentials = credentials
-    profile_obj.save(update_fields=["api_credentials", "updated_at"])
+    if not _persist_encrypted_api_credentials(profile_obj, credentials, clear_legacy=True):
+        raise RuntimeError("Credential encryption unavailable. Configure DJANGO_CREDENTIALS_ENCRYPTION_KEY.")
+    record_metric(
+        "credential.migration.success",
+        user_id=str(profile_obj.user_id),
+        reason="write_encrypted",
+    )
     return credentials
 
 
 def clear_api_credentials(user_id: str) -> None:
     profile_obj = _get_or_create_profile(user_id)
     profile_obj.api_credentials = {}
-    profile_obj.save(update_fields=["api_credentials", "updated_at"])
+    profile_obj.api_credentials_encrypted = ""
+    profile_obj.save(update_fields=["api_credentials", "api_credentials_encrypted", "updated_at"])
+
+
+def migrate_legacy_api_credentials(profile_obj: UserProfile, *, dry_run: bool = False) -> tuple[bool, str]:
+    legacy = _normalize_api_credentials(profile_obj.api_credentials)
+    if not legacy:
+        return False, "empty"
+    if dry_run:
+        return True, "dry_run"
+    if _persist_encrypted_api_credentials(profile_obj, legacy, clear_legacy=True):
+        record_metric(
+            "credential.migration.success",
+            user_id=str(profile_obj.user_id),
+            reason="bulk_migrate",
+        )
+        return True, "migrated"
+    record_metric(
+        "credential.migration.failure",
+        user_id=str(profile_obj.user_id),
+        reason="encryption_unavailable",
+    )
+    return False, "encryption_unavailable"
 
 
 def mask_credential(value: str | None) -> str:

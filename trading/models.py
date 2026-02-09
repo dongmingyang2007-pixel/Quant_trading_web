@@ -126,6 +126,7 @@ class UserProfile(models.Model):
     gallery_paths = models.JSONField(default=list, blank=True)
     market_watchlist = models.JSONField(default=list, blank=True)
     api_credentials = models.JSONField(default=dict, blank=True)
+    api_credentials_encrypted = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

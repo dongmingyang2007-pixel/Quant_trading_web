@@ -433,6 +433,7 @@ def _parse_str_list(raw: Optional[str], default: list[str]) -> list[str]:
 _MULTI_SCALE_FACTORS = _parse_float_list(_MULTI_SCALE_FACTORS_RAW, [1.0, 0.8, 0.6])
 _OVERLAY_LAYERS_DEFAULT = _parse_str_list(_OVERLAY_LAYERS_RAW, ["trendlines"])
 
+
 def analyze_screen_frame(
     data_url: str,
     *,
@@ -684,6 +685,191 @@ def analyze_screen_frame(
     return response
 
 
+def analyze_price_series(
+    series_input: np.ndarray | list[float] | tuple[float, ...],
+    *,
+    symbol: Optional[str] = None,
+    timeframe: Optional[str] = None,
+    analysis_mode: Optional[str] = None,
+    include_features: bool = False,
+    include_waves: bool = True,
+    include_fusion: bool = True,
+    include_timings: bool = False,
+    session_id: Optional[str] = None,
+    min_points: int = 24,
+    max_points: int = 360,
+    training_namespace: Optional[str] = None,
+) -> Dict[str, Any]:
+    timings: Dict[str, float] = {}
+    stage_start = time.perf_counter()
+    prepared = _prepare_numeric_series(series_input, max_points=max_points)
+    timings["prepare_series"] = _elapsed_ms(stage_start)
+    if prepared is None:
+        return _error_response(
+            "series_invalid",
+            next_action="Provide a numeric series with finite values.",
+            diagnostics={"mode": "price_series"},
+            timings=timings if include_timings else None,
+        )
+
+    series, series_diagnostics = prepared
+    if series.size < max(3, int(min_points)):
+        return _error_response(
+            "series_insufficient",
+            next_action=f"Need at least {int(min_points)} points.",
+            diagnostics={**series_diagnostics, "required_points": int(min_points)},
+            timings=timings if include_timings else None,
+        )
+
+    mode = (analysis_mode or "price_series").lower()
+
+    suggested_interval = None
+    analysis_volatility = None
+    if _ADAPTIVE_INTERVAL_ENABLED:
+        suggestion = _suggest_interval_ms(series)
+        if suggestion:
+            suggested_interval, analysis_volatility = suggestion
+
+    stage_start = time.perf_counter()
+    pattern = _classify_pattern(series)
+    timings["classify_pattern"] = _elapsed_ms(stage_start)
+    stage_start = time.perf_counter()
+    model_result = _maybe_apply_model(series, pattern, namespace=training_namespace)
+    timings["model"] = _elapsed_ms(stage_start)
+    quality_factor, quality_diagnostics = _apply_quality_gating(pattern, series_diagnostics)
+    series_diagnostics.update(quality_diagnostics)
+
+    stage_start = time.perf_counter()
+    momentum_payload = _momentum_signal(series)
+    timings["momentum"] = _elapsed_ms(stage_start)
+    wave_payload: Optional[Dict[str, Any]] = None
+    fused_probabilities: Optional[Dict[str, float]] = None
+    fusion_diagnostics: Dict[str, Any] = {}
+    include_waves = bool(include_waves) and _WAVE_ENABLED
+    include_fusion = bool(include_fusion)
+    if include_waves:
+        try:
+            from .screen_waves import analyze_waves
+
+            stage_start = time.perf_counter()
+            wave_result = analyze_waves(
+                series,
+                symbol=symbol,
+                timeframe=timeframe,
+                analysis_mode=mode,
+                session_id=session_id,
+            )
+            timings["waves"] = _elapsed_ms(stage_start)
+            wave_payload = wave_result.to_dict()
+        except Exception as exc:  # pragma: no cover - defensive
+            fusion_diagnostics = {"wave_error": str(exc)}
+
+    signals = [
+        {
+            "name": "pattern",
+            "probabilities": pattern.get("probabilities", {}),
+            "confidence": pattern.get("confidence", 0.0),
+            "weight": _WAVE_FUSION_PATTERN_WEIGHT,
+            "quality": quality_factor,
+        }
+    ]
+    if wave_payload and isinstance(wave_payload, dict):
+        wave_quality = _wave_quality_factor(wave_payload)
+        diagnostics = wave_payload.get("diagnostics")
+        if isinstance(diagnostics, dict):
+            diagnostics["quality_factor"] = round(wave_quality, 3)
+        signals.append(
+            {
+                "name": "wave",
+                "probabilities": wave_payload.get("probabilities", {}),
+                "confidence": wave_payload.get("confidence", 0.0),
+                "weight": _WAVE_FUSION_WAVE_WEIGHT,
+                "wave_key": wave_payload.get("wave_key"),
+                "quality": wave_quality,
+            }
+        )
+    if momentum_payload:
+        signals.append(
+            {
+                "name": "momentum",
+                "probabilities": momentum_payload.get("probabilities", {}),
+                "confidence": momentum_payload.get("confidence", 0.0),
+                "weight": _MOMENTUM_WEIGHT,
+                "direction": momentum_payload.get("direction"),
+                "quality": quality_factor,
+            }
+        )
+    fusion_payload: Optional[Dict[str, Any]] = None
+    if include_fusion:
+        stage_start = time.perf_counter()
+        fused_probabilities, fusion_info = _fuse_probabilities(
+            signals,
+            symbol=symbol,
+            timeframe=timeframe,
+            analysis_mode=mode,
+            session_id=session_id,
+        )
+        timings["fusion"] = _elapsed_ms(stage_start)
+        fusion_diagnostics = {**fusion_diagnostics, **fusion_info}
+        if fused_probabilities:
+            fused_direction = _dominant_direction(fused_probabilities, _SIGNAL_DIRECTION_THRESHOLD)
+            if fused_direction == "up":
+                fusion_bias = "bullish"
+                fusion_confidence = max(fused_probabilities.get("up", 0.0), fused_probabilities.get("down", 0.0))
+            elif fused_direction == "down":
+                fusion_bias = "bearish"
+                fusion_confidence = max(fused_probabilities.get("up", 0.0), fused_probabilities.get("down", 0.0))
+            else:
+                fusion_bias = "neutral"
+                fusion_confidence = fused_probabilities.get("neutral", 0.0)
+            fusion_payload = {
+                "probabilities": fused_probabilities,
+                "bias": fusion_bias,
+                "confidence": round(float(max(0.1, min(0.95, fusion_confidence))), 3),
+                "method": "weighted_log_smooth_v1",
+                "diagnostics": fusion_diagnostics,
+            }
+
+    response: Dict[str, Any] = {
+        "pattern_key": pattern["pattern_key"],
+        "confidence": pattern["confidence"],
+        "bias": pattern["bias"],
+        "probabilities": pattern["probabilities"],
+        "analysis_mode": mode,
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "diagnostics": {
+            **series_diagnostics,
+            **pattern["diagnostics"],
+            **model_result.get("diagnostics", {}),
+            **fusion_diagnostics,
+        },
+    }
+    if suggested_interval is not None:
+        response["suggested_interval_ms"] = suggested_interval
+        if analysis_volatility is not None:
+            response["diagnostics"]["analysis_volatility"] = round(float(analysis_volatility), 6)
+    if include_waves and wave_payload is not None:
+        response["wave"] = wave_payload
+    if include_fusion and fused_probabilities is not None:
+        response["fused_probabilities"] = fused_probabilities
+    if include_fusion and fusion_payload is not None:
+        response["fusion"] = fusion_payload
+    if momentum_payload:
+        response["diagnostics"].update(
+            {
+                "momentum_direction": momentum_payload.get("direction"),
+                "momentum_confidence": momentum_payload.get("confidence"),
+                "momentum_window": momentum_payload.get("window"),
+            }
+        )
+    if include_timings:
+        response["timings_ms"] = _finalize_timings(timings)
+    if include_features:
+        response["features"] = build_feature_vector(series)
+    return response
+
+
 def build_feature_vector(series: np.ndarray) -> list[float]:
     if series.size == 0:
         return [0.0 for _ in FEATURE_NAMES]
@@ -876,13 +1062,66 @@ def _extract_ocr_payload(header_image: str) -> Dict[str, Any]:
     }
 
 
-def _maybe_apply_model(series: np.ndarray, pattern: Dict[str, Any]) -> Dict[str, Any]:
+def _prepare_numeric_series(
+    series_input: np.ndarray | list[float] | tuple[float, ...],
+    *,
+    max_points: int = 360,
+) -> Optional[Tuple[np.ndarray, Dict[str, Any]]]:
+    try:
+        series = np.asarray(series_input, dtype=float)
+    except Exception:
+        return None
+    if series.ndim != 1:
+        series = np.ravel(series)
+    if series.size <= 0:
+        return None
+    mask = np.isfinite(series)
+    if not mask.any():
+        return None
+    cleaned = series[mask].astype(float)
+    original_len = int(cleaned.size)
+    resampled = False
+    if max_points > 0 and cleaned.size > max_points:
+        idx = np.linspace(0, cleaned.size - 1, num=max_points, dtype=int)
+        cleaned = cleaned[idx]
+        resampled = True
+    value_min = float(np.min(cleaned))
+    value_max = float(np.max(cleaned))
+    if value_max - value_min > 1e-12:
+        normalized = (cleaned - value_min) / (value_max - value_min)
+    else:
+        normalized = np.full(cleaned.shape, 0.5, dtype=float)
+    diagnostics = {
+        "series_length": int(normalized.size),
+        "series_original_length": original_len,
+        "series_mode": "price_series",
+        "series_min_raw": round(value_min, 8),
+        "series_max_raw": round(value_max, 8),
+        "resampled": resampled,
+        "coverage": 1.0,
+        "mask_coverage": 1.0,
+        "points": int(normalized.size),
+        "width": int(normalized.size),
+        "height": 1,
+        "median_range": 0.0,
+        "noise": round(float(np.std(np.diff(normalized))) if normalized.size > 1 else 0.0, 6),
+        "calibrated": False,
+    }
+    return normalized, diagnostics
+
+
+def _maybe_apply_model(
+    series: np.ndarray,
+    pattern: Dict[str, Any],
+    *,
+    namespace: Optional[str] = None,
+) -> Dict[str, Any]:
     try:
         from .screen_training import load_trained_model
     except Exception:
         return {"diagnostics": {"model_used": False}}
 
-    model_bundle = load_trained_model()
+    model_bundle = load_trained_model(namespace=namespace)
     if model_bundle is None:
         return {"diagnostics": {"model_used": False}}
     model, labels = model_bundle
@@ -899,7 +1138,7 @@ def _maybe_apply_model(series: np.ndarray, pattern: Dict[str, Any]) -> Dict[str,
     try:
         from .screen_training import load_model_meta
 
-        meta = load_model_meta()
+        meta = load_model_meta(namespace=namespace)
         if isinstance(meta, dict):
             override_threshold = meta.get("override_threshold")
             if override_threshold is not None:
@@ -1832,6 +2071,7 @@ def _line_pixels(fit: LineFit, width: int, height: int) -> Tuple[Tuple[int, int]
 
 __all__ = [
     "analyze_screen_frame",
+    "analyze_price_series",
     "build_feature_vector",
     "PATTERN_KEYS",
     "FEATURE_NAMES",

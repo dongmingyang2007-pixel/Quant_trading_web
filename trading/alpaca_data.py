@@ -8,11 +8,13 @@ import pandas as pd
 import requests
 
 from .network import get_requests_session, resolve_retry_config, retry_call_result
-from .profile import load_api_credentials, resolve_api_credential
+from .profile import load_api_credentials
 
 DEFAULT_DATA_URL = os.environ.get("ALPACA_DATA_REST_URL", "https://data.alpaca.markets").rstrip("/")
 DEFAULT_FEED = os.environ.get("ALPACA_DATA_FEED", "sip")
 DEFAULT_NEWS_PATH = os.environ.get("ALPACA_NEWS_PATH", "/v1beta1/news")
+DEFAULT_NEWS_MAX_PAGES = max(1, int(os.environ.get("ALPACA_NEWS_MAX_PAGES", "500") or 500))
+TradeFetchResult = tuple[list[dict[str, Any]], str | None, str | None, str | None]
 
 
 def _resolve_trading_mode(creds: dict[str, str] | None) -> str:
@@ -250,21 +252,24 @@ def fetch_stock_trades(
     limit: int | None = None,
     page_token: str | None = None,
     max_pages: int = 1,
+    sort: str | None = None,
     user: Any | None = None,
     user_id: str | None = None,
     timeout: float | None = None,
     base_url: str | None = None,
-) -> tuple[list[dict[str, Any]], str | None]:
+) -> TradeFetchResult:
+    # Contract: always return a 4-tuple so callers can safely unpack.
     key_id, secret = resolve_alpaca_data_credentials(user=user, user_id=user_id)
     if not key_id or not secret:
-        return [], None
+        return [], None, None, None
     symbol_text = str(symbol or "").strip().upper()
     if not symbol_text:
-        return [], None
+        return [], None, None, None
 
     params: dict[str, Any] = {}
-    if feed or DEFAULT_FEED:
-        params["feed"] = feed or DEFAULT_FEED
+    resolved_feed = feed or DEFAULT_FEED
+    if resolved_feed:
+        params["feed"] = resolved_feed
     if limit:
         params["limit"] = int(limit)
     start_ts = _format_ts(start)
@@ -273,31 +278,47 @@ def fetch_stock_trades(
         params["start"] = start_ts
     if end_ts:
         params["end"] = end_ts
-    params["sort"] = "asc"
+    sort_mode = (sort or "asc").strip().lower()
+    if sort_mode not in {"asc", "desc"}:
+        sort_mode = "asc"
+    params["sort"] = sort_mode
 
     url = f"{(base_url or DEFAULT_DATA_URL).rstrip('/')}/v2/stocks/{symbol_text}/trades"
     headers = _alpaca_headers(key_id, secret)
 
-    aggregated: list[dict[str, Any]] = []
-    next_token = page_token
-    pages = max(1, int(max_pages))
-    for _ in range(pages):
-        if next_token:
-            params["page_token"] = next_token
-        response = _alpaca_get(url, params=params, headers=headers, timeout=timeout)
-        if response is None:
-            break
-        try:
-            payload = response.json()
-        except ValueError:
-            break
-        trades = payload.get("trades") or payload.get("data") or []
-        if isinstance(trades, list):
-            aggregated.extend([t for t in trades if isinstance(t, dict)])
-        next_token = payload.get("next_page_token") or payload.get("next_page") or None
-        if not next_token:
-            break
-    return aggregated, next_token
+    def _fetch_with_params(current_params: dict[str, Any]) -> tuple[list[dict[str, Any]], str | None]:
+        aggregated: list[dict[str, Any]] = []
+        next_token = page_token
+        pages = max(1, int(max_pages))
+        for _ in range(pages):
+            if next_token:
+                current_params["page_token"] = next_token
+            response = _alpaca_get(url, params=current_params, headers=headers, timeout=timeout)
+            if response is None:
+                break
+            try:
+                payload = response.json()
+            except ValueError:
+                break
+            trades = payload.get("trades") or payload.get("data") or []
+            if isinstance(trades, list):
+                aggregated.extend([t for t in trades if isinstance(t, dict)])
+            next_token = payload.get("next_page_token") or payload.get("next_page") or None
+            if not next_token:
+                break
+        return aggregated, next_token
+
+    aggregated, next_token = _fetch_with_params(params.copy())
+    downgrade_to = None
+    downgrade_message = None
+    if not aggregated and resolved_feed and resolved_feed.lower() != "iex":
+        params_iex = params.copy()
+        params_iex["feed"] = "iex"
+        aggregated, next_token = _fetch_with_params(params_iex)
+        if aggregated:
+            downgrade_to = "iex"
+            downgrade_message = "SIP feed unavailable. Falling back to IEX."
+    return aggregated, next_token, downgrade_to, downgrade_message
 
 
 def bars_to_frame(bars_by_symbol: dict[str, list[dict[str, Any]]]) -> pd.DataFrame:
@@ -431,17 +452,19 @@ def fetch_news(
     timeout: float | None = None,
     base_url: str | None = None,
     path: str | None = None,
+    max_pages: int | None = None,
 ) -> list[dict[str, Any]]:
     key_id, secret = resolve_alpaca_data_credentials(user=user, user_id=user_id)
     if not key_id or not secret:
         return []
     params: dict[str, Any] = {}
+    max_items: int | None = None
     if symbols:
         normalized = _normalize_symbols(symbols)
         if normalized:
             params["symbols"] = ",".join(normalized)
     if limit:
-        params["limit"] = int(limit)
+        max_items = max(1, int(limit))
     start_ts = _format_ts(start)
     end_ts = _format_ts(end)
     if start_ts:
@@ -450,17 +473,48 @@ def fetch_news(
         params["end"] = end_ts
     url = f"{(base_url or DEFAULT_DATA_URL).rstrip('/')}{path or DEFAULT_NEWS_PATH}"
     headers = _alpaca_headers(key_id, secret)
-    response = _alpaca_get(url, params=params, headers=headers, timeout=timeout)
-    if response is None:
-        return []
-    try:
-        payload = response.json()
-    except ValueError:
-        return []
-    for key in ("news", "items", "data"):
-        items = payload.get(key) if isinstance(payload, dict) else None
-        if isinstance(items, list):
-            return items
-    if isinstance(payload, list):
-        return payload
-    return []
+    aggregated: list[dict[str, Any]] = []
+    page_token: str | None = None
+    safe_max_pages = max(1, int(max_pages)) if max_pages is not None else DEFAULT_NEWS_MAX_PAGES
+    seen_tokens: set[str] = set()
+    for _ in range(safe_max_pages):
+        request_params = dict(params)
+        if max_items is not None:
+            remaining = max_items - len(aggregated)
+            if remaining <= 0:
+                break
+            request_params["limit"] = min(50, max(1, remaining))
+        elif "limit" not in request_params:
+            request_params["limit"] = 50
+        if page_token:
+            if page_token in seen_tokens:
+                break
+            seen_tokens.add(page_token)
+            request_params["page_token"] = page_token
+        response = _alpaca_get(url, params=request_params, headers=headers, timeout=timeout)
+        if response is None:
+            break
+        try:
+            payload = response.json()
+        except ValueError:
+            break
+        page_items: list[dict[str, Any]] = []
+        if isinstance(payload, dict):
+            for key in ("news", "items", "data"):
+                items = payload.get(key)
+                if isinstance(items, list):
+                    page_items = [item for item in items if isinstance(item, dict)]
+                    break
+            page_token = payload.get("next_page_token") or payload.get("next_page") or None
+        elif isinstance(payload, list):
+            page_items = [item for item in payload if isinstance(item, dict)]
+            page_token = None
+        if page_items:
+            aggregated.extend(page_items)
+        if not page_token:
+            break
+        if not page_items:
+            break
+    if max_items is not None:
+        return aggregated[:max_items]
+    return aggregated

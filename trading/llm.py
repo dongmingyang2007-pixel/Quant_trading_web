@@ -1407,6 +1407,10 @@ def generate_ai_commentary(
     emit("stage", message="开始整理回测上下文")
 
     selected_model_input = (model_name or result.get("ai_model") or "").strip()
+    if not selected_model_input:
+        preferred_model = resolve_api_credential(user, "ai_model")
+        if preferred_model:
+            selected_model_input = str(preferred_model).strip()
     provider_hint, model_hint = _split_model_hint(selected_model_input)
     selected_model = model_hint if provider_hint else selected_model_input
     gemini_api_key = resolve_api_credential(user, "gemini_api_key")
@@ -1969,6 +1973,126 @@ def generate_ai_commentary(
             ret["timings_ms"] = timings_ms
     emit("done", message="AI 解读完成", model=primary_model)
     return ret
+
+
+def resolve_fast_model_name(user: Any | None = None, *, provider_hint: str | None = None) -> str:
+    env_override = (os.environ.get("AI_FAST_MODEL") or os.environ.get("FAST_MODEL") or "").strip()
+    if env_override:
+        return env_override
+    provider = (provider_hint or "").strip().lower()
+    if not provider:
+        preferred = resolve_api_credential(user, "ai_model") if user is not None else None
+        if preferred:
+            hint, _ = _split_model_hint(preferred)
+            provider = hint or _resolve_provider(preferred)
+        else:
+            provider = (os.environ.get("AI_PROVIDER") or "").strip().lower()
+    if provider == "gemini":
+        return os.environ.get("GEMINI_FAST_MODEL", "gemini-2.5-flash")
+    if provider == "bailian":
+        return os.environ.get("BAILIAN_FAST_MODEL", "bailian:qwen-flash")
+    return os.environ.get("OLLAMA_FAST_MODEL", os.environ.get("OLLAMA_MODEL", "deepseek-r1:8b"))
+
+
+def run_llm_chat(
+    messages: list[dict[str, Any]],
+    *,
+    model_name: str | None = None,
+    user: Any | None = None,
+    timeout_seconds: int | None = None,
+    response_schema: dict[str, Any] | None = None,
+    response_format: dict[str, Any] | None = None,
+    extra_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized: list[dict[str, Any]] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "").strip() or "user"
+        content = msg.get("content")
+        if content is None:
+            continue
+        if isinstance(content, (list, tuple)):
+            normalized.append({"role": role, "content": list(content)})
+        else:
+            text = str(content).strip()
+            if not text:
+                continue
+            normalized.append({"role": role, "content": text})
+    if not normalized:
+        normalized = [{"role": "user", "content": "Ready."}]
+    if response_schema:
+        schema_text = json.dumps(response_schema, ensure_ascii=False)
+        normalized.insert(
+            0,
+            {
+                "role": "system",
+                "content": f"请严格输出符合以下 JSON Schema 的结果，不要添加额外解释：{schema_text}",
+            },
+        )
+
+    selected_model_input = (model_name or "").strip()
+    if not selected_model_input:
+        selected_model_input = resolve_fast_model_name(user)
+    provider_hint, model_hint = _split_model_hint(selected_model_input)
+    provider = _resolve_provider(model_hint or selected_model_input, override=provider_hint)
+
+    resolved_user_id: str | None = None
+    if user is not None and getattr(user, "is_authenticated", False):
+        resolved_user_id = str(getattr(user, "id", "") or getattr(user, "pk", "") or "") or None
+
+    if provider == "gemini":
+        model = model_hint or selected_model_input or os.environ.get("GEMINI_MODEL", "gemini-3.0-pro")
+        chat_timeout = timeout_seconds or _env_int("GEMINI_TIMEOUT_SECONDS", 30)
+        resp = _call_gemini_chat(
+            model,
+            normalized,
+            timeout_seconds=chat_timeout,
+            api_key=resolve_api_credential(user, "gemini_api_key"),
+        )
+        answer = (resp.get("answer") or "").strip() if isinstance(resp, dict) else ""
+        return {"answer": answer, "provider": "gemini", "model": model, "raw": resp.get("raw") if isinstance(resp, dict) else {}}
+
+    if provider == "bailian":
+        model = model_hint or selected_model_input or os.environ.get("BAILIAN_MODEL") or os.environ.get("DASHSCOPE_MODEL") or "qwen-max"
+        chat_timeout = timeout_seconds or _env_int("BAILIAN_TIMEOUT_SECONDS", _env_int("DASHSCOPE_TIMEOUT_SECONDS", 30))
+        use_advanced = bool(response_format or response_schema or extra_params)
+        if use_advanced:
+            resp = _call_bailian_chat_advanced(
+                model,
+                normalized,
+                timeout_seconds=chat_timeout,
+                user_id=resolved_user_id,
+                tools=None,
+                tool_choice=None,
+                response_format=response_format,
+                extra_params=extra_params,
+                images=None,
+            )
+        else:
+            resp = _call_bailian_chat(
+                model,
+                normalized,
+                timeout_seconds=chat_timeout,
+                api_key=resolve_api_credential(user, "bailian_api_key"),
+            )
+        answer = (resp.get("answer") or "").strip() if isinstance(resp, dict) else ""
+        return {"answer": answer, "provider": "bailian", "model": model, "raw": resp.get("raw") if isinstance(resp, dict) else {}}
+
+    model = model_hint or selected_model_input or os.environ.get("OLLAMA_MODEL", "deepseek-r1:8b")
+    chat_endpoint = _resolve_chat_endpoint(os.environ.get("OLLAMA_ENDPOINT"))
+    chat_timeout = timeout_seconds or _env_int("OLLAMA_CHAT_TIMEOUT_SECONDS", _env_int("OLLAMA_TIMEOUT_SECONDS", 30))
+    resp = _call_ollama_chat(
+        chat_endpoint,
+        model,
+        normalized,
+        {},
+        timeout_seconds=chat_timeout,
+        retries=_env_int("OLLAMA_CHAT_RETRIES", _env_int("OLLAMA_RETRIES", 2)),
+        keep_alive=os.environ.get("OLLAMA_KEEP_ALIVE"),
+    )
+    answer = (resp.get("answer") or "").strip() if isinstance(resp, dict) else ""
+    return {"answer": answer, "provider": "ollama", "model": model, "raw": resp.get("raw") if isinstance(resp, dict) else {}}
 
 
 def _call_ollama(endpoint: str, model: str, prompt: str, options: dict[str, Any], *, timeout_seconds: int, retries: int) -> dict[str, Any]:

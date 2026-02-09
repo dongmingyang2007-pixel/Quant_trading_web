@@ -15,6 +15,7 @@ from typing import Any
 from django.utils import timezone
 
 from ..forms import ApiCredentialForm, ProfileForm
+from ..ai_settings import get_ai_model_choices, get_embedding_model_choices
 from ..history import load_history
 from ..profile import (
     API_CREDENTIAL_FIELDS,
@@ -97,7 +98,11 @@ def account(request):
 
     api_credentials = load_api_credentials(str(user.id))
     profile_form = ProfileForm(initial=profile_data)
-    api_form = ApiCredentialForm(initial=api_credentials)
+    api_form = ApiCredentialForm(
+        initial=api_credentials,
+        ai_model_choices=get_ai_model_choices(),
+        ai_embedding_model_choices=get_embedding_model_choices(),
+    )
     api_credential_status = []
     for key, meta in API_CREDENTIAL_FIELDS.items():
         value = api_credentials.get(key, "")
@@ -403,11 +408,25 @@ def update_profile(request):
 def update_api_credentials(request):
     user = request.user
     _, _, _msg = _lang_helpers(request)
-    api_form = ApiCredentialForm(request.POST)
+    api_form = ApiCredentialForm(
+        request.POST,
+        ai_model_choices=get_ai_model_choices(),
+        ai_embedding_model_choices=get_embedding_model_choices(),
+    )
     if api_form.is_valid():
         updates = {key: api_form.cleaned_data.get(key) for key in API_CREDENTIAL_FIELDS}
-        save_api_credentials(str(user.id), updates)
-        messages.success(request, _msg("API credentials updated.", "API 凭证已更新。"))
+        try:
+            save_api_credentials(str(user.id), updates)
+        except RuntimeError:
+            messages.error(
+                request,
+                _msg(
+                    "Credential encryption is not configured. Please set DJANGO_CREDENTIALS_ENCRYPTION_KEY.",
+                    "凭证加密未配置，请先设置 DJANGO_CREDENTIALS_ENCRYPTION_KEY。",
+                ),
+            )
+        else:
+            messages.success(request, _msg("API credentials updated.", "API 凭证已更新。"))
     else:
         messages.error(request, _msg("Failed to save API credentials.", "保存 API 凭证失败。"))
     return redirect("trading:account")

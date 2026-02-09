@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db.models import Count, F, Q
@@ -39,9 +40,13 @@ from ..models import CommunityPost as CommunityPostModel
 from ..models import CommunityPostComment
 from ..models import CommunityTopic as CommunityTopicModel
 from ..models import Notification
+from ..notifications_cache import invalidate_unread_notifications_cache
 from ..profile import load_profile
 from ..storage_utils import save_uploaded_file, describe_image_error, decode_data_url_image, resolve_media_url
-from ..observability import record_metric
+from ..error_contract import json_error, log_sanitized_exception
+from ..observability import ensure_request_id, record_metric
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _build_share_prefill(summary: dict[str, Any]) -> str:
@@ -107,6 +112,26 @@ def _sanitize_post_content(content: str) -> str:
     )
     text_only = bleach.clean(cleaned, tags=[], strip=True)
     return cleaned if text_only.strip() else ""
+
+
+def _community_json_error(
+    *,
+    error_code: str,
+    message: str,
+    status_code: int,
+    request_id: str | None,
+    user_id: str | int | None,
+) -> JsonResponse:
+    return json_error(
+        error_code=error_code,
+        message=message,
+        status_code=status_code,
+        request_id=request_id,
+        user_id=user_id,
+        endpoint="community.write_post",
+        include_legacy_error=False,
+        extra={"status": "error"},
+    )
 
 
 @login_required
@@ -362,6 +387,7 @@ def community_notifications(request):
     unread_ids = [notice.id for notice in notifications if not notice.is_read]
     if unread_ids:
         Notification.objects.filter(recipient=request.user, id__in=unread_ids).update(is_read=True)
+        invalidate_unread_notifications_cache(request.user.id)
     return render(
         request,
         "trading/community_notifications.html",
@@ -375,7 +401,7 @@ def community_notifications(request):
 @login_required
 @ensure_csrf_cookie
 def write_post(request, post_id: int | None = None):
-    print(f"Received data: {request.body}")
+    request_id = ensure_request_id(request)
     user = request.user
     profile = load_profile(str(user.id))
     display_name = profile.get("display_name") or user.username
@@ -408,15 +434,42 @@ def write_post(request, post_id: int | None = None):
     draft_id = str(post.pk) if post else ""
 
     if request.method == "POST":
+        raw_body = request.body or b""
+        if raw_body:
+            LOGGER.info(
+                "community.write_post.request request_id=%s user_id=%s content_length=%s",
+                request_id,
+                user.id,
+                len(raw_body),
+            )
+            record_metric(
+                "security.redacted_log_hit",
+                request_id=request_id,
+                user_id=str(user.id),
+                endpoint="community.write_post",
+                content_length=len(raw_body),
+            )
         is_json = request.content_type and "application/json" in request.content_type
         payload = request.POST
         if is_json:
             try:
                 payload = json.loads(request.body or "{}")
-            except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
-                return JsonResponse({"status": "error", "message": str(exc)}, status=400)
+            except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+                return _community_json_error(
+                    error_code="invalid_json_payload",
+                    message="请求体解析失败。" if is_zh else "Failed to parse request body.",
+                    status_code=400,
+                    request_id=request_id,
+                    user_id=user.id,
+                )
             if not isinstance(payload, dict):
-                return JsonResponse({"status": "error", "message": "invalid_payload"}, status=400)
+                return _community_json_error(
+                    error_code="invalid_payload",
+                    message="无效的请求体。" if is_zh else "Invalid payload.",
+                    status_code=400,
+                    request_id=request_id,
+                    user_id=user.id,
+                )
 
         action = (payload.get("action") or "").strip().lower()
         status = (payload.get("status") or "").strip().lower()
@@ -470,7 +523,22 @@ def write_post(request, post_id: int | None = None):
                     target_post.status = CommunityPostModel.STATUS_DRAFT
                     target_post.save(update_fields=["topic", "title", "content", "status", "updated_at"])
             except Exception as exc:
-                return JsonResponse({"status": "error", "message": str(exc)}, status=500)
+                log_sanitized_exception(
+                    context="Save community draft failed",
+                    exc=exc,
+                    error_code="community_save_draft_failed",
+                    request_id=request_id,
+                    user_id=user.id,
+                    endpoint="community.write_post",
+                    status_code=500,
+                )
+                return _community_json_error(
+                    error_code="community_save_draft_failed",
+                    message="保存草稿失败，请稍后重试。" if is_zh else "Failed to save draft. Please try again.",
+                    status_code=500,
+                    request_id=request_id,
+                    user_id=user.id,
+                )
             return JsonResponse({"status": "success", "post_id": target_post.pk})
 
         if action == "publish":
@@ -504,7 +572,22 @@ def write_post(request, post_id: int | None = None):
                         target_post.status = CommunityPostModel.STATUS_PUBLISHED
                         target_post.save(update_fields=["topic", "title", "content", "status", "updated_at"])
                 except Exception as exc:
-                    return JsonResponse({"status": "error", "message": str(exc)}, status=500)
+                    log_sanitized_exception(
+                        context="Publish community post failed",
+                        exc=exc,
+                        error_code="community_publish_failed",
+                        request_id=request_id,
+                        user_id=user.id,
+                        endpoint="community.write_post",
+                        status_code=500,
+                    )
+                    return _community_json_error(
+                        error_code="community_publish_failed",
+                        message="发布失败，请稍后重试。" if is_zh else "Failed to publish. Please try again.",
+                        status_code=500,
+                        request_id=request_id,
+                        user_id=user.id,
+                    )
                 redirect_url = f"{reverse('trading:community')}?topic={topic.topic_id}"
                 if is_json:
                     return JsonResponse(
@@ -513,7 +596,13 @@ def write_post(request, post_id: int | None = None):
                 return redirect(redirect_url)
         else:
             if is_json:
-                return JsonResponse({"status": "error", "message": "invalid_action"}, status=400)
+                return _community_json_error(
+                    error_code="invalid_action",
+                    message="无效操作。" if is_zh else "Invalid action.",
+                    status_code=400,
+                    request_id=request_id,
+                    user_id=user.id,
+                )
             error_message = "Invalid action."
 
     return render(
@@ -553,17 +642,35 @@ def get_user_drafts(request):
 @login_required
 @require_POST
 def delete_post(request, post_id: int):
+    request_id = ensure_request_id(request)
     post = CommunityPostModel.objects.filter(pk=post_id).first()
     if not post:
-        return JsonResponse({"status": "error", "message": "not_found"}, status=404)
+        return JsonResponse({"status": "error", "error_code": "not_found", "message": "not_found", "request_id": request_id}, status=404)
     if post.author_id != request.user.id:
-        return JsonResponse({"status": "error", "message": "forbidden"}, status=403)
+        return JsonResponse({"status": "error", "error_code": "forbidden", "message": "forbidden", "request_id": request_id}, status=403)
     if post.status != CommunityPostModel.STATUS_DRAFT:
-        return JsonResponse({"status": "error", "message": "not_draft"}, status=400)
+        return JsonResponse({"status": "error", "error_code": "not_draft", "message": "not_draft", "request_id": request_id}, status=400)
     try:
         post.delete()
     except Exception as exc:
-        return JsonResponse({"status": "error", "message": str(exc)}, status=500)
+        log_sanitized_exception(
+            context="Delete community draft failed",
+            exc=exc,
+            error_code="community_delete_failed",
+            request_id=request_id,
+            user_id=request.user.id,
+            endpoint="community.delete_post",
+            status_code=500,
+        )
+        return JsonResponse(
+            {
+                "status": "error",
+                "error_code": "community_delete_failed",
+                "message": "delete_failed",
+                "request_id": request_id,
+            },
+            status=500,
+        )
     return JsonResponse({"status": "success"})
 
 

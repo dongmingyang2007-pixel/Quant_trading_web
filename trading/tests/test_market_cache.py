@@ -4,6 +4,7 @@ import json
 import threading
 import time
 from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 from django.test import SimpleTestCase
@@ -19,21 +20,16 @@ class MarketCacheTests(SimpleTestCase):
         market_data.DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
         symbols = ["TST"]
-        cache_key = build_cache_key("market-data", symbols, None, None, None, "Adj Close")
+        cache_key = build_cache_key("market-data", "alpaca", sorted(symbols), None, None, None, "Adj Close")
         df = pd.DataFrame({"Adj Close": [1.0, 1.1, 1.2]}, index=pd.date_range("2024-01-01", periods=3, freq="B"))
         df.to_parquet(tmp_dir / f"{cache_key}.parquet")
-        meta = {"timestamp": time.time(), "symbols": symbols, "fields": "Adj Close"}
+        meta = {"timestamp": time.time(), "symbols": symbols, "fields": "Adj Close", "source": "alpaca"}
         (tmp_dir / f"{cache_key}.json").write_text(json.dumps(meta), encoding="utf-8")
 
-        # Simulate missing yfinance by forcing yf to None
-        yf_backup = market_data.yf
-        market_data.yf = None
-        try:
+        with mock.patch("trading.market_data.resolve_alpaca_data_credentials", return_value=(None, None)):
             result = market_data.fetch(symbols, cache=True)
             self.assertFalse(result.empty)
             self.assertIn("Adj Close", result.columns)
-        finally:
-            market_data.yf = yf_backup
 
     def _get_tempdir(self) -> str:
         import tempfile
@@ -70,3 +66,35 @@ class MarketCacheTests(SimpleTestCase):
 
         loaded = pd.read_parquet(path)
         self.assertFalse(loaded.empty)
+
+    def test_fetch_handles_overlong_legacy_cache_key_without_raising(self):
+        tmp_dir = Path(self._get_tempdir())
+        market_data.DISK_CACHE_DIR = tmp_dir
+        market_data.DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+        symbols = [f"S{i:04d}" for i in range(1800)]
+        with mock.patch("trading.market_data.resolve_alpaca_data_credentials", return_value=(None, None)):
+            result = market_data.fetch(symbols, period="1y", interval="1d", cache=True)
+        self.assertIsInstance(result, pd.DataFrame)
+        self.assertTrue(result.empty)
+
+    def test_fetch_ignores_disk_exists_oserror(self):
+        tmp_dir = Path(self._get_tempdir())
+        market_data.DISK_CACHE_DIR = tmp_dir
+        market_data.DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+        call_count = {"value": 0}
+        original_exists = Path.exists
+
+        def flaky_exists(path_obj: Path) -> bool:
+            call_count["value"] += 1
+            if call_count["value"] == 1:
+                raise OSError("file name too long")
+            return original_exists(path_obj)
+
+        with mock.patch.object(Path, "exists", new=flaky_exists), mock.patch(
+            "trading.market_data.resolve_alpaca_data_credentials",
+            return_value=(None, None),
+        ):
+            result = market_data.fetch(["TST"], cache=True)
+        self.assertIsInstance(result, pd.DataFrame)

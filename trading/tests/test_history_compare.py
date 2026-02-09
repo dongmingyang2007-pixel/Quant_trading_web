@@ -44,7 +44,12 @@ class HistoryCompareTests(TestCase):
             snapshot={"recent_rows": recent_rows},
         )
 
-    @override_settings(STATICFILES_STORAGE="django.contrib.staticfiles.storage.StaticFilesStorage")
+    @override_settings(
+        STORAGES={
+            "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+            "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+        }
+    )
     def test_compare_includes_correlation_and_risk(self):
         self._make_record("rec-1", "AAPL", [0.01, -0.005, 0.004, 0.0])
         self._make_record("rec-2", "MSFT", [0.008, -0.004, 0.006, 0.001])

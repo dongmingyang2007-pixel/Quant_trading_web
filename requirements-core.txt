@@ -25,6 +25,8 @@ redis>=5.0
 bleach>=6.1.0
 tinycss2>=1.2.1
 Markdown>=3.6
+# Credential encryption
+cryptography>=42.0
 # JSON schema validation (structured LLM outputs)
 jsonschema>=4.22
 # Pydantic validation (realtime profiles)

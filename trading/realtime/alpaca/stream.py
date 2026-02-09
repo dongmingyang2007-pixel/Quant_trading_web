@@ -7,7 +7,6 @@ import os
 import queue
 import random
 import threading
-import time
 from typing import Callable, Iterable
 
 import websockets

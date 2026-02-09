@@ -10,22 +10,31 @@ from ..observability import record_metric
 from .storage import append_ndjson, write_state
 
 
+def _normalize_epoch_seconds(ts: float) -> float:
+    if ts > 1e15:
+        return ts / 1e9
+    if ts > 1e12:
+        return ts / 1e3
+    return ts
+
+
 def parse_timestamp(value: Any) -> float | None:
     if value is None:
         return None
     if isinstance(value, (int, float)):
         ts = float(value)
-        if ts > 1e15:
-            return ts / 1e9
-        if ts > 1e12:
-            return ts / 1e3
-        return ts
+        return _normalize_epoch_seconds(ts)
     if isinstance(value, str):
         text = value.strip()
         if not text:
             return None
-        if text.isdigit():
-            return parse_timestamp(int(text))
+        try:
+            if text.replace(".", "", 1).isdigit():
+                if "." in text:
+                    return _normalize_epoch_seconds(float(text))
+                return _normalize_epoch_seconds(float(int(text)))
+        except (TypeError, ValueError):
+            pass
         normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
         try:
             parsed = datetime.fromisoformat(normalized)

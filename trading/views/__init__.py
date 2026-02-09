@@ -39,14 +39,20 @@ from .account import (
 from .auth import activate, resend_activation, signup
 from .market import (
     market_assets_data,
+    market_chart_analyze,
+    market_chart_analyze_meta,
+    market_chart_analyze_sample,
+    market_chart_analyze_train,
     market_chart_data,
     market_insights,
     market_insights_data,
+    market_news_sentiment,
     market_manual_order,
     market_trading_mode,
     market_watchlist_snapshot,
     market_screener_data,
 )
+from .market_auth import market_auth_debug
 from .community import (
     community,
     community_notifications,
@@ -107,8 +113,14 @@ __all__ = [
     "remove_gallery",
     "market_insights",
     "market_insights_data",
+    "market_auth_debug",
     "market_assets_data",
+    "market_chart_analyze",
+    "market_chart_analyze_meta",
+    "market_chart_analyze_sample",
+    "market_chart_analyze_train",
     "market_chart_data",
+    "market_news_sentiment",
     "market_manual_order",
     "market_trading_mode",
     "market_watchlist_snapshot",

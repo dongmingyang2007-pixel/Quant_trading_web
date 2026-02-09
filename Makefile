@@ -9,7 +9,7 @@ install:
 	. .venv/bin/activate && pip install -r requirements.txt && pip install -r requirements-dev.txt
 
 test:
-	. .venv/bin/activate && pytest -q
+	. .venv/bin/activate && PYTHONPATH=. DJANGO_SETTINGS_MODULE=quant_trading_site.settings DJANGO_DEBUG=1 pytest -q
 
 lint:
 	. .venv/bin/activate && ruff check .
