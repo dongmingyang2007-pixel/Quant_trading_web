@@ -1,0 +1,48 @@
+<section class="account-tab-panel" data-tab-panel="settings" id="account-tab-settings" role="tabpanel" aria-labelledby="account-tab-btn-settings">
+    <div class="account-settings-shell">
+        <aside class="account-settings-nav" data-role="settings-nav" data-default-section="profile" role="tablist">
+            <div class="account-settings-nav-head">
+                <span class="nav-kicker">{% bilingual "Settings" "设置" %}</span>
+                <span class="nav-subtext">{% bilingual "Manage profile, security, and integrations" "管理资料、安全与集成" %}</span>
+            </div>
+            <button type="button" class="account-settings-link is-active" id="account-settings-profile" data-settings-target="profile" aria-controls="account-settings-panel-profile" aria-selected="true" role="tab">
+                <span class="settings-icon" aria-hidden="true">P</span>
+                <span class="settings-text">
+                    <span class="settings-title">{% bilingual "Profile" "资料设置" %}</span>
+                    <span class="settings-desc">{% bilingual "Public profile & appearance" "公开形象与资料" %}</span>
+                </span>
+            </button>
+            <button type="button" class="account-settings-link" id="account-settings-security" data-settings-target="security" aria-controls="account-settings-panel-security" aria-selected="false" role="tab">
+                <span class="settings-icon" aria-hidden="true">S</span>
+                <span class="settings-text">
+                    <span class="settings-title">{% bilingual "Security" "安全中心" %}</span>
+                    <span class="settings-desc">{% bilingual "Password & protection" "密码与安全提醒" %}</span>
+                </span>
+            </button>
+            <button type="button" class="account-settings-link" id="account-settings-api" data-settings-target="api" aria-controls="account-settings-panel-api" aria-selected="false" role="tab">
+                <span class="settings-icon" aria-hidden="true">API</span>
+                <span class="settings-text">
+                    <span class="settings-title">{% bilingual "API credentials" "API 凭证" %}</span>
+                    <span class="settings-desc">{% bilingual "Data providers & tokens" "数据供应商与凭证" %}</span>
+                </span>
+            </button>
+            {% if is_superuser %}
+            <button type="button" class="account-settings-link" id="account-settings-admin" data-settings-target="admin" aria-controls="account-settings-panel-admin" aria-selected="false" role="tab">
+                <span class="settings-icon" aria-hidden="true">AD</span>
+                <span class="settings-text">
+                    <span class="settings-title">{% bilingual "Admin tools" "高级工具" %}</span>
+                    <span class="settings-desc">{% bilingual "Observability access" "观测与诊断" %}</span>
+                </span>
+            </button>
+            {% endif %}
+        </aside>
+        <div class="account-settings-body">
+            {% include "trading/includes/account/settings_profile.html" %}
+            {% include "trading/includes/account/settings_security.html" %}
+            {% include "trading/includes/account/settings_api.html" %}
+            {% if is_superuser %}
+                {% include "trading/includes/account/settings_admin.html" %}
+            {% endif %}
+        </div>
+    </div>
+</section>

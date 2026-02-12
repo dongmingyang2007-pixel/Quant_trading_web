@@ -1,0 +1,23 @@
+                <section class="account-tab-panel" data-tab-panel="history" id="account-tab-history" role="tabpanel" aria-labelledby="account-tab-btn-history">
+                    <section class="account-card account-history">
+                        <div class="account-card-head">
+                            <h2>{% bilingual "Backtest history" "历史回测记录" %}</h2>
+                            <p class="text-muted mb-0">{% bilingual "Click a record to reload its parameters and outputs." "点击任一回测即可重新加载策略参数与结果。" %}</p>
+                        </div>
+                        <div class="account-history-toolbar">
+                            <a class="btn btn-primary btn-sm" href="{% url 'trading:backtest' %}">
+                                {% bilingual "Start new backtest" "开启新回测" %}
+                            </a>
+                            {% if history_runs %}
+                                <a class="btn btn-outline-secondary btn-sm" href="{% url 'trading:export_report' %}">
+                                    {% bilingual "Export latest" "导出最近" %}
+                                </a>
+                            {% else %}
+                                <span class="btn btn-outline-secondary btn-sm disabled" aria-disabled="true">
+                                    {% bilingual "Export latest" "导出最近" %}
+                                </span>
+                            {% endif %}
+                        </div>
+                        {% include "trading/includes/history_panel.html" with history_runs=history_runs history_message=None history_error=None prefix="account-history-" accordion_id="account-history-accordion" empty_id="account-history-empty" delete_url_template=history_delete_template load_url=history_load_url compare_url=history_compare_url %}
+                    </section>
+                </section>

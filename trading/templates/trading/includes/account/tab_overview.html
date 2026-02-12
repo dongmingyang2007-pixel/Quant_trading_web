@@ -1,0 +1,148 @@
+                <section class="account-tab-panel is-active" data-tab-panel="overview" id="account-tab-overview" role="tabpanel" aria-labelledby="account-tab-btn-overview">
+                    <section class="account-overview">
+                        <div class="overview-hero{% if profile_media.feature %} has-media{% endif %}"{% if profile_media.feature %} style="--overview-hero-image: url('{{ profile_media.feature }}');"{% endif %}>
+                            <div class="overview-hero-content">
+                                <div class="overview-hero-left">
+                                <button type="button"
+                                        class="overview-hero-avatar avatar-modal-trigger"
+                                        data-bs-toggle="modal"
+                                        data-bs-target="#avatar-upload-modal"
+                                        aria-label="{% bilingual 'Update avatar' '更新头像' %}">
+                                    {% if profile_media.avatar %}
+                                        <img src="{{ profile_media.avatar }}" alt="{{ user_info.display_name|default:user_info.username }}" loading="lazy">
+                                    {% else %}
+                                        <span>{{ user_info.display_name|default:user_info.username|first|upper }}</span>
+                                    {% endif %}
+                                </button>
+                                    <div class="overview-hero-meta">
+                                        <div class="overview-hero-kicker">
+                                            {% bilingual "Account overview" "账户概览" %}
+                                            <span class="kicker-sep">·</span>
+                                            <a class="overview-hero-link" href="{% url 'trading:profile_public' profile.slug %}">
+                                                {% bilingual "Public profile" "公开主页" %}
+                                            </a>
+                                        </div>
+                                        <div class="overview-hero-title">{{ user_info.display_name|default:user_info.username }}</div>
+                                        <div class="overview-hero-subtext">
+                                            {% bilingual "Member since" "加入于" %} {{ user_info.date_joined|date:"Y-m-d" }}
+                                            · {% bilingual "Recent activity" "近期动态" %} {{ activity_entries|length }} {% bilingual "items" "条" %}
+                                            · {% bilingual "Backtests" "回测" %} {{ history_runs|length }} {% bilingual "runs" "次" %}
+                                        </div>
+                                        <div class="overview-hero-chips">
+                                            <div class="overview-hero-chip">
+                                                <span class="chip-label">{% bilingual "Username" "用户名" %}</span>
+                                                <span class="chip-value">{{ user_info.username }}</span>
+                                            </div>
+                                            <div class="overview-hero-chip">
+                                                <span class="chip-label">{% bilingual "Email status" "邮箱状态" %}</span>
+                                                <span class="chip-value">
+                                                    {% if user_info.email != "未绑定" %}
+                                                        {% bilingual "Verified" "已绑定" %}
+                                                    {% else %}
+                                                        {% bilingual "Pending" "未绑定" %}
+                                                    {% endif %}
+                                                </span>
+                                            </div>
+                                            <div class="overview-hero-chip">
+                                                <span class="chip-label">{% bilingual "Account level" "账户等级" %}</span>
+                                                <span class="chip-value">Lv. {{ level_value }}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="overview-hero-actions">
+                                    <a class="btn btn-primary btn-sm" href="#account-tab-settings" data-tab-link="settings">
+                                        {% bilingual "Manage account" "管理我的账户" %}
+                                    </a>
+                                    <a class="btn btn-outline-secondary btn-sm" href="{% url 'trading:profile_public' profile.slug %}">
+                                        {% bilingual "Public view" "公开主页" %}
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="overview-grid">
+                            <section class="account-card overview-card">
+                                <div class="account-card-head">
+                                    <h2>{% bilingual "Profile summary" "基本信息" %}</h2>
+                                </div>
+                                <div class="overview-highlights">
+                                    <div class="overview-chip">
+                                        <span class="chip-label">{% bilingual "Username" "用户名" %}</span>
+                                        <span class="chip-value">{{ user_info.username }}</span>
+                                    </div>
+                                    <div class="overview-chip">
+                                        <span class="chip-label">{% bilingual "Display name" "展示昵称" %}</span>
+                                        <span class="chip-value">{{ user_info.display_name|default:user_info.username }}</span>
+                                    </div>
+                                    <div class="overview-chip">
+                                        <span class="chip-label">{% bilingual "Member since" "加入时间" %}</span>
+                                        <span class="chip-value">{{ user_info.date_joined|date:"Y-m-d" }}</span>
+                                    </div>
+                                    <div class="overview-chip">
+                                        <span class="chip-label">{% bilingual "Backtests" "历史回测" %}</span>
+                                        <span class="chip-value">{{ history_runs|length }}</span>
+                                    </div>
+                                    <div class="overview-chip">
+                                        <span class="chip-label">{% bilingual "Recent activity" "近期动态" %}</span>
+                                        <span class="chip-value">{{ activity_entries|length }}</span>
+                                    </div>
+                                    <div class="overview-chip">
+                                        <span class="chip-label">{% bilingual "Account level" "账户等级" %}</span>
+                                        <span class="chip-value">Lv. {{ level_value }}</span>
+                                    </div>
+                                </div>
+                                <div class="overview-bio-block">
+                                    <h3>{% bilingual "Bio" "个人简介" %}</h3>
+                                    <p>
+                                        {% if profile.bio %}
+                                            {{ profile.bio|linebreaksbr }}
+                                        {% else %}
+                                            <span class="text-muted">{% bilingual "No bio yet. Update your profile to add one." "暂无简介，欢迎在资料设置中补充。" %}</span>
+                                        {% endif %}
+                                    </p>
+                                </div>
+                                <div class="overview-metrics">
+                                    {% for stat in account_stats %}
+                                        <div class="overview-metric">
+                                            <span class="metric-value">{{ stat.value }}</span>
+                                            <span class="metric-label">{{ stat.label }}</span>
+                                        </div>
+                                    {% endfor %}
+                                </div>
+                            </section>
+                            <section class="account-card overview-card overview-gallery">
+                                <div class="account-card-head">
+                                    <h2>{% bilingual "Gallery" "图集" %}</h2>
+                                    <span class="text-muted small">
+                                        {% if profile_media.gallery %}
+                                            {% bilingual "Total" "共" %} {{ profile_media.gallery|length }} {% bilingual "photos" "张" %}
+                                        {% elif profile_media.feature %}
+                                            {% bilingual "Featured cover" "展示封面" %}
+                                        {% else %}
+                                            {% bilingual "No media" "暂无照片" %}
+                                        {% endif %}
+                                    </span>
+                                </div>
+                                <div class="overview-gallery-body">
+                                    {% if profile_media.gallery %}
+                                        <div class="overview-gallery-media">
+                                            <img src="{{ profile_media.gallery.0.url }}" alt="{% bilingual 'Gallery preview' '图集预览' %}" loading="lazy">
+                                        </div>
+                                    {% elif profile_media.feature %}
+                                        <div class="overview-gallery-media">
+                                            <img src="{{ profile_media.feature }}" alt="{% bilingual 'Featured preview' '展示预览' %}" loading="lazy">
+                                        </div>
+                                    {% else %}
+                                        <div class="overview-gallery-empty">
+                                            <p class="mb-1">{% bilingual "No media yet" "暂无展示照片" %}</p>
+                                            <p class="text-muted mb-0">{% bilingual "Upload images in profile settings to enrich your profile." "可在资料设置中上传展示照片。" %}</p>
+                                        </div>
+                                    {% endif %}
+                                    <div class="overview-gallery-meta">
+                                        {% bilingual "Featured images appear on your public profile." "展示照片会应用于个人主页。" %}
+                                    </div>
+                                </div>
+                            </section>
+                        </div>
+                    </section>
+                </section>

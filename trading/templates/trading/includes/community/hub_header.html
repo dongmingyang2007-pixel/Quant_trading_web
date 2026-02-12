@@ -1,0 +1,27 @@
+<header class="community-hero community-hero-v2">
+    <div>
+        <p class="community-kicker">Social Lounge</p>
+        <h1 class="community-title">{% bilingual "Community Hub" "社区广场" %}</h1>
+        <p class="community-subtitle">
+            {% bilingual "Discuss tactics, review markets, and share trading inspiration. Pick a topic and join the conversation." "探讨策略、复盘行情、分享灵感。选择一个话题，留下你的见解。" %}
+        </p>
+    </div>
+    <div class="community-identity">
+        <span class="community-avatar">
+            {% if avatar_url %}
+                <img src="{{ avatar_url }}" alt="{{ display_name }}" loading="lazy">
+            {% else %}
+                {{ display_name|first|upper }}
+            {% endif %}
+        </span>
+        <div class="community-identity-text">
+            <p class="community-welcome">{% bilingual "Welcome," "欢迎，" %}{{ display_name }}！</p>
+            <p class="community-hint">{% bilingual "Be friendly and professional. Respect every perspective." "保持友好、专业，尊重社区成员的观点。" %}</p>
+        </div>
+    </div>
+    <div class="community-hero-actions">
+        <a class="btn btn-light community-write-cta shadow-sm" href="{% url 'trading:community_write' %}">
+            <span class="me-2">✍️</span>{% bilingual "Write post" "写文章" %}
+        </a>
+    </div>
+</header>

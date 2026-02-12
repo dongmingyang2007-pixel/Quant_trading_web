@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import date, timedelta, datetime, timezone
+from datetime import datetime, timezone
 import json
 from typing import Any
 
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, JsonResponse
-from django.shortcuts import render
+from django.shortcuts import redirect
 from django.views.decorators.http import require_http_methods
 
 from ..observability import ensure_request_id
@@ -64,17 +64,7 @@ def _serialize_positions(positions: list[dict[str, Any]]) -> list[dict[str, Any]
 
 @login_required
 def paper_trading(request):
-    """Standalone paper trading console (list/create sessions, view equity/trades)."""
-    today = date.today()
-    start_default = today - timedelta(days=365)
-    return render(
-        request,
-        "trading/paper.html",
-        {
-            "paper_start_default": start_default.isoformat(),
-            "paper_end_default": today.isoformat(),
-        },
-    )
+    return redirect("/backtest/?workspace=trade")
 
 
 @login_required

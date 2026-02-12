@@ -11,7 +11,8 @@ from .stream_registry import acquire_stream, release_stream
 from .subscriptions import update_subscription_state
 from .universe import build_universe
 from .alpaca.stream import AlpacaStreamClient
-from ..alpaca_data import fetch_stock_snapshots
+from .massive.stream import MassiveStreamClient
+from ..market_provider import fetch_stock_snapshots, resolve_market_provider
 from ..observability import record_metric
 
 GROUP_NAME = "market-data"
@@ -20,7 +21,7 @@ EXTRA_SYMBOLS_MAX = 50
 REFRESH_SECONDS = 300
 
 _LOCK = threading.Lock()
-_CLIENT: AlpacaStreamClient | None = None
+_CLIENT: AlpacaStreamClient | MassiveStreamClient | None = None
 _REF_COUNT = 0
 _LAST_REFRESH_TS = 0.0
 _LAST_SEND_TS: dict[str, float] = {}
@@ -28,6 +29,7 @@ _PREV_CLOSE: dict[str, float] = {}
 _USER_ID: str | None = None
 _EXTRA_SYMBOLS: list[str] = []
 _CURRENT_SYMBOLS: list[str] = []
+_PROVIDER: str | None = None
 
 
 def _resolve_top_symbols(user_id: str | None) -> tuple[list[str], str]:
@@ -54,10 +56,10 @@ def _resolve_stream_symbols(user_id: str | None) -> tuple[list[str], str]:
     return combined, feed
 
 
-def _seed_prev_close(symbols: list[str], *, user_id: str | None, feed: str) -> None:
+def _seed_prev_close(symbols: list[str], *, user_id: str | None, feed: str, provider: str) -> None:
     if not symbols:
         return
-    snapshots = fetch_stock_snapshots(symbols, feed=feed, user_id=user_id)
+    snapshots = fetch_stock_snapshots(symbols, feed=feed, user_id=user_id, provider=provider)
     for symbol, snapshot in (snapshots or {}).items():
         if not isinstance(snapshot, dict):
             continue
@@ -74,10 +76,10 @@ def _seed_prev_close(symbols: list[str], *, user_id: str | None, feed: str) -> N
             _PREV_CLOSE[str(symbol).upper()] = prev_close_val
 
 
-def _seed_missing_prev_close(symbols: list[str], *, user_id: str | None, feed: str) -> None:
+def _seed_missing_prev_close(symbols: list[str], *, user_id: str | None, feed: str, provider: str) -> None:
     missing = [symbol for symbol in symbols if symbol not in _PREV_CLOSE]
     if missing:
-        _seed_prev_close(missing, user_id=user_id, feed=feed)
+        _seed_prev_close(missing, user_id=user_id, feed=feed, provider=provider)
 
 
 def _apply_symbols(symbols: list[str]) -> None:
@@ -91,32 +93,63 @@ def _apply_symbols(symbols: list[str]) -> None:
 
 
 def _ensure_stream(user_id: str | None) -> None:
-    global _CLIENT, _LAST_REFRESH_TS, _USER_ID
+    global _CLIENT, _LAST_REFRESH_TS, _USER_ID, _PROVIDER
     now = time.time()
+    provider = resolve_market_provider(user_id=user_id)
     symbols, feed = _resolve_stream_symbols(user_id)
+    if provider not in {"alpaca", "massive"}:
+        if _CLIENT is not None:
+            _CLIENT.stop()
+            _CLIENT = None
+            release_stream("market_stream")
+            _CURRENT_SYMBOLS.clear()
+            _PROVIDER = None
+        _seed_missing_prev_close(symbols, user_id=user_id, feed=feed or "sip", provider=provider)
+        _LAST_REFRESH_TS = now
+        record_metric("market.ws.stream_disabled", provider=provider)
+        return
+    if _CLIENT is not None and _PROVIDER != provider:
+        _CLIENT.stop()
+        _CLIENT = None
+        release_stream("market_stream")
+        _CURRENT_SYMBOLS.clear()
+        _PROVIDER = None
     if _CLIENT is None:
         if not acquire_stream("market_stream"):
             record_metric("market.ws.stream_locked")
             return
         _USER_ID = user_id
-        _CLIENT = AlpacaStreamClient(
-            user_id=user_id,
-            feed=feed or "sip",
-            stream_url=None,
-            stream_trades=True,
-            stream_quotes=True,
-            reconnect_seconds=5,
-            on_trade=_handle_trade,
-            on_quote=_handle_quote,
-        )
+        if provider == "massive":
+            _CLIENT = MassiveStreamClient(
+                user_id=user_id,
+                stream_url=None,
+                stream_trades=True,
+                stream_quotes=True,
+                reconnect_seconds=5,
+                on_trade=_handle_trade,
+                on_quote=_handle_quote,
+            )
+        else:
+            _CLIENT = AlpacaStreamClient(
+                user_id=user_id,
+                feed=feed or "sip",
+                stream_url=None,
+                stream_trades=True,
+                stream_quotes=True,
+                reconnect_seconds=5,
+                on_trade=_handle_trade,
+                on_quote=_handle_quote,
+            )
         if not _CLIENT.start():
-            record_metric("market.ws.stream_failed")
+            record_metric("market.ws.stream_failed", provider=provider)
             release_stream("market_stream")
             _CLIENT = None
+            _PROVIDER = None
             return
+        _PROVIDER = provider
     if symbols:
         _apply_symbols(symbols)
-    _seed_missing_prev_close(symbols, user_id=user_id, feed=feed or "sip")
+    _seed_missing_prev_close(symbols, user_id=user_id, feed=feed or "sip", provider=provider)
     _LAST_REFRESH_TS = now
 
 
@@ -163,12 +196,13 @@ def request_symbols(symbols: list[str] | None, *, user_id: str | None = None) ->
 
 
 def unsubscribe() -> None:
-    global _REF_COUNT, _CLIENT
+    global _REF_COUNT, _CLIENT, _PROVIDER
     with _LOCK:
         _REF_COUNT = max(0, _REF_COUNT - 1)
         if _REF_COUNT == 0 and _CLIENT:
             _CLIENT.stop()
             _CLIENT = None
+            _PROVIDER = None
             release_stream("market_stream")
             _LAST_SEND_TS.clear()
             _PREV_CLOSE.clear()

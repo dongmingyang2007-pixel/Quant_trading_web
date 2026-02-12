@@ -1,0 +1,8 @@
+{% load i18n i18n_extras %}
+<div class="workbench-section-head">
+    <h2 class="workbench-section-title">{% bilingual "Short-term Trading Workspace" "短线交易工作区" %}</h2>
+    <p class="workbench-section-subtitle">
+        {% bilingual "Retail-oriented minute/second execution loop with switchable market data source and Alpaca execution." "面向散户的分钟/秒级交易闭环：行情源可切换，执行链路保持 Alpaca。" %}
+    </p>
+</div>
+{% include "trading/includes/backtest_shortterm_panel.html" %}

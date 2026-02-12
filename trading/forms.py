@@ -13,6 +13,52 @@ from .strategy_defaults import ADVANCED_STRATEGY_DEFAULTS
 
 
 class ApiCredentialForm(forms.Form):
+    market_data_provider = forms.ChoiceField(
+        required=False,
+        label="Market Data Provider",
+        choices=[("alpaca", "Alpaca"), ("massive", "Massive")],
+        help_text="选择行情数据源（不自动切换）。",
+    )
+    market_news_provider = forms.ChoiceField(
+        required=False,
+        label="Market News Provider",
+        choices=[("follow_data", "Follow data provider"), ("alpaca", "Alpaca"), ("massive", "Massive")],
+        help_text="新闻源可跟随行情源或独立指定。",
+    )
+    massive_api_key = forms.CharField(
+        required=False,
+        label="Massive API Key",
+        widget=forms.PasswordInput(render_value=True),
+        help_text="用于 Massive Stocks Advanced 的 API Key。",
+    )
+    massive_s3_access_key_id = forms.CharField(
+        required=False,
+        label="Massive S3 Access Key ID",
+        widget=forms.PasswordInput(render_value=True),
+        help_text="用于 Massive Flat Files (S3) 的 Access Key ID（可选）。",
+    )
+    massive_s3_secret_access_key = forms.CharField(
+        required=False,
+        label="Massive S3 Secret Access Key",
+        widget=forms.PasswordInput(render_value=True),
+        help_text="用于 Massive Flat Files (S3) 的 Secret Access Key（可选）。",
+    )
+    massive_rest_url = forms.CharField(
+        required=False,
+        label="Massive REST URL",
+        help_text="可选覆盖 Massive REST 根地址（默认官方）。",
+    )
+    massive_ws_url = forms.CharField(
+        required=False,
+        label="Massive WebSocket URL",
+        help_text="可选覆盖 Massive WebSocket 地址（默认官方）。",
+    )
+    massive_plan = forms.CharField(
+        required=False,
+        label="Massive Plan",
+        initial="stocks_advanced",
+        help_text="当前套餐标识（例如 stocks_advanced）。",
+    )
     alpaca_trading_mode = forms.ChoiceField(
         required=False,
         label="Alpaca Trading Mode",
@@ -115,6 +161,10 @@ class ApiCredentialForm(forms.Form):
         for name in self.fields:
             self.fields[name].widget.attrs.setdefault("class", "form-control")
             self.fields[name].widget.attrs.setdefault("autocomplete", "off")
+        if "market_data_provider" in self.fields:
+            self.fields["market_data_provider"].widget.attrs["class"] = "form-select"
+        if "market_news_provider" in self.fields:
+            self.fields["market_news_provider"].widget.attrs["class"] = "form-select"
         if "ai_model" in self.fields:
             choices = []
             for item in ai_model_choices or []:
@@ -198,6 +248,16 @@ class QuantStrategyForm(forms.Form):
         ("close_to_open", "Close-to-open (overnight)"),
         ("open_to_close", "Open-to-close (intraday)"),
     ]
+    TRADING_FOCUS_CHOICES_ZH = [
+        ("intraday_retail", "短线分钟级（散户优先）"),
+        ("swing_core", "日级中线（传统回测）"),
+        ("scalp_experimental", "秒级超短（实验高风险）"),
+    ]
+    TRADING_FOCUS_CHOICES_EN = [
+        ("intraday_retail", "Intraday minute (retail-first)"),
+        ("swing_core", "Swing daily (classic backtest)"),
+        ("scalp_experimental", "Second-level scalp (experimental)"),
+    ]
 
     ticker = forms.CharField(
         max_length=16,
@@ -224,6 +284,13 @@ class QuantStrategyForm(forms.Form):
         initial=ADVANCED_STRATEGY_DEFAULTS["capital"],
         label="模拟资金规模",
         help_text="用于资产配置建模，默认 250,000。",
+    )
+    trading_focus = forms.ChoiceField(
+        label="交易焦点",
+        choices=TRADING_FOCUS_CHOICES_ZH,
+        required=False,
+        initial=ADVANCED_STRATEGY_DEFAULTS["trading_focus"],
+        help_text="短线模式会优先采用盘中收益口径与更严格的执行/风控假设。",
     )
     ml_mode = forms.ChoiceField(
         label="模型类型",
@@ -480,6 +547,7 @@ class QuantStrategyForm(forms.Form):
             "start_date": ("Start date", "开始日期"),
             "end_date": ("End date", "结束日期"),
             "capital": ("Capital base", "模拟资金规模"),
+            "trading_focus": ("Trading focus", "交易焦点"),
             "ml_mode": ("Model type", "模型类型"),
             "strategy_engine": ("Strategy engine", "策略引擎"),
             "risk_profile": ("Risk profile", "风险偏好"),
@@ -525,6 +593,10 @@ class QuantStrategyForm(forms.Form):
             "capital": (
                 "Used for allocation modeling. Default 250,000.",
                 "用于资产配置建模，默认 250,000。",
+            ),
+            "trading_focus": (
+                "Choose whether this run is tuned for intraday retail trading or classic swing backtests.",
+                "选择本次运行偏向短线盘中交易，还是传统中线回测。",
             ),
             "ml_mode": (
                 "Light GBDT balances speed and stability; deep modes capture richer sequences. Fusion blends LSTM and Transformer automatically.",
@@ -663,6 +735,9 @@ class QuantStrategyForm(forms.Form):
         self.fields["strategy_engine"].choices = (
             self.STRATEGY_ENGINE_CHOICES_ZH if self.lang_is_zh else self.STRATEGY_ENGINE_CHOICES_EN
         )
+        self.fields["trading_focus"].choices = (
+            self.TRADING_FOCUS_CHOICES_ZH if self.lang_is_zh else self.TRADING_FOCUS_CHOICES_EN
+        )
         self.fields["risk_profile"].choices = (
             self.RISK_PROFILE_CHOICES_ZH if self.lang_is_zh else self.RISK_PROFILE_CHOICES_EN
         )
@@ -703,13 +778,14 @@ class QuantStrategyForm(forms.Form):
             "execution_delay_days",
         ):
             self.fields[name].widget.attrs.setdefault("class", "form-control")
-        for name in ("ticker", "benchmark_ticker", "ml_mode", "strategy_engine", "risk_profile"):
+        for name in ("ticker", "benchmark_ticker", "trading_focus", "ml_mode", "strategy_engine", "risk_profile"):
             self.fields[name].widget.attrs.setdefault("class", "form-control")
         for name in ("optimize_thresholds", "auto_apply_best_config", "enable_hyperopt", "allow_short"):
             self.fields[name].widget.attrs.setdefault("class", "form-check-input")
 
     def clean(self):
         cleaned = super().clean()
+        trading_focus = (cleaned.get("trading_focus") or ADVANCED_STRATEGY_DEFAULTS.get("trading_focus") or "").strip()
         start = cleaned.get("start_date")
         end = cleaned.get("end_date")
         if start and end:
@@ -732,6 +808,22 @@ class QuantStrategyForm(forms.Form):
                         "回测窗口少于 120 天，建议拉长周期以提高统计稳定性。",
                     )
                 )
+            span_days = (end - start).days
+            if trading_focus in {"intraday_retail", "scalp_experimental"}:
+                if span_days > 365:
+                    self.warnings.append(
+                        self._msg(
+                            "Intraday focus selected, but the date range exceeds one year. Consider narrowing to the most recent regime.",
+                            "已选择短线模式，但时间跨度超过 1 年。建议缩短到最近市场阶段。",
+                        )
+                    )
+                if span_days < 14:
+                    self.warnings.append(
+                        self._msg(
+                            "Date range is under 14 days, which may overfit short-term noise.",
+                            "时间窗口少于 14 天，短线参数可能过拟合噪声。",
+                        )
+                    )
         ticker = (cleaned.get("ticker") or "").strip().upper()
         benchmark = (cleaned.get("benchmark_ticker") or "").strip().upper()
         if benchmark and benchmark == ticker:
@@ -757,6 +849,20 @@ class QuantStrategyForm(forms.Form):
                 self._msg(
                     "Short window must be smaller than the long window.",
                     "短期均线窗口必须小于长期均线窗口。",
+                )
+            )
+        if trading_focus in {"intraday_retail", "scalp_experimental"} and cleaned.get("return_path") != "open_to_close":
+            self.warnings.append(
+                self._msg(
+                    "Short-term focus works best with open-to-close return path.",
+                    "短线模式通常更适合使用“开盘→收盘”收益口径。",
+                )
+            )
+        if trading_focus == "scalp_experimental":
+            self.warnings.append(
+                self._msg(
+                    "Second-level scalp mode is experimental and highly sensitive to latency/slippage.",
+                    "秒级超短模式属于实验能力，对延迟与滑点非常敏感。",
                 )
             )
         return cleaned

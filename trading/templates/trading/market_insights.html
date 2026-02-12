@@ -9,7 +9,8 @@
 
 {% block extra_head %}
 {% with lang_prefix=lang_prefix|default:request.LANGUAGE_CODE|default:'zh-hans'|lower|slice:":2" %}
-<link rel="stylesheet" href="{% static 'trading/css/market_insights.css' %}?v={{ STATIC_VERSION|default:'20260209-mi-hub-v40' }}">
+<link rel="stylesheet" href="{% static 'trading/css/market_insights.css' %}?v={{ STATIC_VERSION|default:'20260211-mi-hub-v44' }}">
+<link rel="stylesheet" href="{% static 'trading/css/market_shell_v2.css' %}?v={{ STATIC_VERSION|default:'20260211-market-shell-v2' }}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -28,7 +29,7 @@
 
 {% block content %}
 {% with lang_prefix=lang_prefix|default:request.LANGUAGE_CODE|default:'zh-hans'|lower|slice:":2" %}
-<div class="market-page container-xl view-list mi-density-high">
+<div class="market-page market-shell-v2 container-xl view-list mi-density-high">
     <header class="market-topbar mi-hero">
         <div class="mi-hero-grid">
             <div class="mi-hero-main">
@@ -199,53 +200,10 @@
                                 </div>
 
                                 <div class="market-status-controls mi-hub-v2-controls">
-                                    <div class="mi-control-cluster mi-control-cluster--refresh">
-                                        <button type="button" class="market-status-refresh" data-role="status-refresh">
-                                            {% if lang_prefix == 'zh' %}刷新{% else %}Refresh{% endif %}
-                                        </button>
-                                        <button type="button"
-                                                class="mi-controls-toggle"
-                                                data-role="status-controls-toggle"
-                                                aria-expanded="false"
-                                                aria-controls="market-advanced-controls">
-                                            {% if lang_prefix == 'zh' %}更多控制{% else %}More controls{% endif %}
-                                        </button>
-                                    </div>
                                     <div class="mi-control-summary" aria-live="polite">
-                                        <span class="mi-control-summary-pill" data-role="auto-refresh-summary">
-                                            {% if lang_prefix == 'zh' %}自动：关闭{% else %}Auto: Off{% endif %}
-                                        </span>
                                         <span class="mi-control-summary-pill" data-role="timezone-summary">
                                             {% if lang_prefix == 'zh' %}时区：UTC{% else %}TZ: UTC{% endif %}
                                         </span>
-                                    </div>
-                                </div>
-                                <div class="mi-hub-v2-track mi-hub-v2-track--inline" data-role="status-track-shell">
-                                    <div class="mi-hub-v2-track-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="{% if lang_prefix == 'zh' %}状态进度{% else %}Status progress{% endif %}">
-                                        <span class="mi-hub-v2-track-fill" data-role="status-track-fill"></span>
-                                    </div>
-                                    <div class="mi-hub-v2-track-text" data-role="status-track-text">
-                                        {% if lang_prefix == 'zh' %}正在加载数据…{% else %}Loading data...{% endif %}
-                                    </div>
-                                    <div class="market-status-expanded mi-hub-v2-track-extra" data-role="status-expanded" hidden>
-                                        <div class="market-status-warning" data-role="snapshot-warning" hidden>
-                                            <span class="market-warning-text" data-role="snapshot-warning-text">
-                                                {% if lang_prefix == 'zh' %}部分数据尚未就绪{% else %}Partial data pending{% endif %}
-                                            </span>
-                                            <button type="button" class="market-warning-link" data-role="snapshot-details">
-                                                {% if lang_prefix == 'zh' %}详情{% else %}Details{% endif %}
-                                            </button>
-                                            <button type="button" class="market-warning-btn" data-role="snapshot-retry">
-                                                {% if lang_prefix == 'zh' %}重试{% else %}Retry{% endif %}
-                                            </button>
-                                            <div class="market-warning-details" data-role="snapshot-details-panel" hidden>
-                                                {% if lang_prefix == 'zh' %}
-                                                    快照完成后仍在后台补齐/校验部分标的，榜单可能暂时不完整。
-                                                {% else %}
-                                                    Snapshot is complete, but some instruments are still being backfilled or validated.
-                                                {% endif %}
-                                            </div>
-                                        </div>
                                     </div>
                                 </div>
 
@@ -267,55 +225,11 @@
                                 </div>
                             </div>
 
-                            <div class="mi-hub-v2-advanced-overlay" data-role="controls-popover-backdrop" hidden></div>
-                            <div id="market-advanced-controls"
-                                 class="mi-hub-v2-advanced"
-                                 data-role="status-controls-advanced"
-                                 role="dialog"
-                                 aria-modal="true"
-                                 aria-labelledby="market-advanced-controls-title"
-                                 hidden>
-                                <div class="mi-hub-v2-advanced-head">
-                                    <p id="market-advanced-controls-title" class="mi-hub-v2-advanced-title">
-                                        {% if lang_prefix == 'zh' %}更多控制{% else %}More controls{% endif %}
-                                    </p>
-                                    <button type="button"
-                                            class="mi-hub-v2-advanced-close"
-                                            data-role="controls-popover-close"
-                                            aria-label="{% if lang_prefix == 'zh' %}关闭更多控制{% else %}Close controls{% endif %}">
-                                        &times;
-                                    </button>
-                                </div>
-                                <div class="mi-control-cluster mi-control-cluster--auto">
-                                    <div class="market-toggle-block" role="group" aria-label="{% if lang_prefix == 'zh' %}自动刷新{% else %}Auto refresh{% endif %}">
-                                        <span class="market-toggle-label">{% if lang_prefix == 'zh' %}自动{% else %}Auto{% endif %}</span>
-                                        <div class="market-toggle-group" data-role="auto-refresh-toggle" role="tablist">
-                                            <button type="button" class="toggle-btn" data-interval="0" role="tab" aria-pressed="false">
-                                                {% if lang_prefix == 'zh' %}关闭{% else %}Off{% endif %}
-                                            </button>
-                                            <button type="button" class="toggle-btn" data-interval="15000" role="tab" aria-pressed="false">15s</button>
-                                            <button type="button" class="toggle-btn" data-interval="30000" role="tab" aria-pressed="false">30s</button>
-                                            <button type="button" class="toggle-btn" data-interval="60000" role="tab" aria-pressed="false">60s</button>
-                                        </div>
-                                        <button type="button" class="market-toggle-link" data-role="auto-refresh-pause">
-                                            {% if lang_prefix == 'zh' %}暂停{% else %}Pause{% endif %}
-                                        </button>
-                                        <span class="market-countdown" data-role="auto-refresh-countdown">
-                                            {% if lang_prefix == 'zh' %}下次刷新：—{% else %}Next refresh: —{% endif %}
-                                        </span>
-                                    </div>
-                                </div>
-                                <div class="mi-control-cluster mi-control-cluster--timezone">
-                                    <div class="market-toggle-block" role="group" aria-label="{% if lang_prefix == 'zh' %}时区{% else %}Time zone{% endif %}">
-                                        <span class="market-toggle-label">{% if lang_prefix == 'zh' %}时区{% else %}Time{% endif %}</span>
-                                        <div class="market-toggle-group" data-role="timezone-toggle" role="tablist">
-                                            <button type="button" class="toggle-btn is-active" data-tz="utc" role="tab" aria-pressed="true">UTC</button>
-                                            <button type="button" class="toggle-btn" data-tz="local" role="tab" aria-pressed="false">
-                                                {% if lang_prefix == 'zh' %}本地{% else %}Local{% endif %}
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
+                            <div class="market-toggle-group market-toggle-group--compact" data-role="timezone-toggle" role="tablist" hidden>
+                                <button type="button" class="toggle-btn is-active" data-tz="utc" role="tab" aria-pressed="true">UTC</button>
+                                <button type="button" class="toggle-btn" data-tz="local" role="tab" aria-pressed="false">
+                                    {% if lang_prefix == 'zh' %}本地{% else %}Local{% endif %}
+                                </button>
                             </div>
 
                             <div class="mi-hub-v2-content">
@@ -417,8 +331,8 @@
                         <span class="status-chip__dot"></span>
                         <span class="status-chip__label" data-role="detail-status-text">—</span>
                     </div>
-                    <a class="status-chip__cta" data-role="detail-status-cta" href="/realtime/monitor/" hidden>
-                        {% if lang_prefix == 'zh' %}查看监控{% else %}Monitor{% endif %}
+                    <a class="status-chip__cta" data-role="detail-status-cta" href="/backtest/?workspace=trade" hidden>
+                        {% if lang_prefix == 'zh' %}打开短线工作台{% else %}Open short-term workbench{% endif %}
                     </a>
                     <div class="instrument-updated">
                         <span class="instrument-updated-label">{% if lang_prefix == 'zh' %}更新{% else %}Updated{% endif %}</span>
@@ -1338,8 +1252,8 @@
                             <span class="detail-status-meta" data-role="detail-status-card-meta"></span>
                         </div>
                         <div class="detail-status-actions">
-                            <a class="detail-status-cta" data-role="detail-status-card-cta" href="/realtime/monitor/">
-                                {% if lang_prefix == 'zh' %}查看实时引擎{% else %}Open realtime monitor{% endif %}
+                            <a class="detail-status-cta" data-role="detail-status-card-cta" href="/backtest/?workspace=trade">
+                                {% if lang_prefix == 'zh' %}打开短线工作台{% else %}Open short-term workbench{% endif %}
                             </a>
                             <button type="button" class="detail-status-reconnect" data-role="detail-status-reconnect">
                                 {% if lang_prefix == 'zh' %}重连{% else %}Reconnect{% endif %}
@@ -1416,5 +1330,5 @@
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js" nonce="{{ csp_nonce }}" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/technicalindicators@3.1.0/dist/browser.es6.js" nonce="{{ csp_nonce }}" defer></script>
 <script src="{% static 'trading/js/market_insights_state.js' %}?v={{ STATIC_VERSION|default:'20260208-mi-hub-v37' }}" nonce="{{ csp_nonce }}" defer></script>
-<script src="{% static 'trading/js/market_insights.js' %}?v={{ STATIC_VERSION|default:'20260209-mi-hub-v40' }}" nonce="{{ csp_nonce }}" defer></script>
+<script src="{% static 'trading/js/market_insights.js' %}?v={{ STATIC_VERSION|default:'20260212-mi-hub-v46' }}" nonce="{{ csp_nonce }}" defer></script>
 {% endblock %}

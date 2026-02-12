@@ -337,7 +337,7 @@ def community(request):
     if is_htmx:
         return render(
             request,
-            "trading/includes/_post_list.html",
+            "trading/includes/community/hub_feed_chunk.html",
             {
                 "posts": enriched_posts,
                 "avatar_url": resolve_media(avatar_path),

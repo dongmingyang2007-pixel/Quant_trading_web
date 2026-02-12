@@ -1,0 +1,54 @@
+<section class="write-canvas write-container">
+    {% if post_error %}
+        <div class="alert alert-danger write-alert">{{ post_error }}</div>
+    {% endif %}
+
+    <div class="write-cover-hero" data-role="cover-hero">
+        <input id="write-cover"
+               type="file"
+               name="cover_image"
+               accept="image/*"
+               class="d-none"
+               data-role="cover-input">
+        <div class="write-cover-placeholder" data-role="cover-placeholder">
+            <button type="button" class="write-cover-button" data-role="cover-picker">
+                <span aria-hidden="true">+</span>
+                <span>{% bilingual "Add Cover Image" "添加封面图" %}</span>
+            </button>
+            <span class="write-cover-hint">
+                {% bilingual "JPG or PNG, up to 5MB" "JPG 或 PNG，最大 5MB" %}
+            </span>
+        </div>
+        <div class="write-cover-preview d-none" data-role="cover-preview">
+            <img class="write-cover-image"
+                 data-role="cover-image"
+                 alt="{% bilingual 'Cover image preview' '封面预览' %}">
+            <div class="write-cover-overlay">
+                <button type="button" class="write-cover-action" data-role="cover-change">
+                    {% bilingual "Change" "更换" %}
+                </button>
+                <button type="button" class="write-cover-action write-cover-remove" data-role="cover-remove">
+                    {% bilingual "Remove" "移除" %}
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="write-title-wrap">
+        <label class="visually-hidden" for="post-title">{% bilingual "Title" "标题" %}</label>
+        <input id="post-title"
+               type="text"
+               name="title"
+               maxlength="200"
+               class="write-title-input"
+               value="{{ title_value }}"
+               placeholder="{% bilingual 'Enter a title' '请输入标题' %}">
+    </div>
+
+    <textarea name="content" class="d-none" data-role="content-input">{{ content_value }}</textarea>
+    <div class="write-editor">
+        <div id="editor"
+             data-role="editor"
+             data-placeholder="{% bilingual 'Start writing here...' '在此输入正文內容...' %}"></div>
+    </div>
+</section>

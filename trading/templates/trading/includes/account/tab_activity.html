@@ -1,0 +1,92 @@
+                <section class="account-tab-panel" data-tab-panel="activity" id="account-tab-activity" role="tabpanel" aria-labelledby="account-tab-btn-activity">
+                    <section class="account-card account-timeline">
+                        <div class="account-card-head activity-head">
+                            <div class="activity-toolbar">
+                                <h2>{% bilingual "Activity" "我的动态" %}</h2>
+                                <div class="timeline-filters" data-role="timeline-filters" role="tablist" aria-label="{% bilingual 'Activity filters' '动态筛选' %}">
+                                    <button type="button" class="timeline-filter-btn is-active" data-timeline-filter="all">
+                                        {% bilingual "All" "全部" %}
+                                    </button>
+                                    <button type="button" class="timeline-filter-btn" data-timeline-filter="post">
+                                        {% bilingual "Posts" "帖子" %}
+                                    </button>
+                                    <button type="button" class="timeline-filter-btn" data-timeline-filter="comment">
+                                        {% bilingual "Comments" "评论" %}
+                                    </button>
+                                    <button type="button" class="timeline-filter-btn" data-timeline-filter="like">
+                                        {% bilingual "Likes" "点赞" %}
+                                    </button>
+                                </div>
+                            </div>
+                            <p class="text-muted mb-0 activity-subtext">{% bilingual "Latest posts, comments, and likes at a glance." "最近发布、评论与点赞一览。" %}</p>
+                        </div>
+                        {% if activity_entries %}
+                            <ul class="account-timeline-list">
+                                {% for entry in activity_entries %}
+                                <li class="timeline-item" data-timeline-item="{{ entry.kind }}">
+                                    <div class="timeline-marker" aria-hidden="true">{{ entry.kind|slice:":1"|upper }}</div>
+                                    <div class="timeline-main">
+                                        <div class="timeline-action">
+                                            <span class="timeline-kind">
+                                                {% if entry.kind == "post" %}
+                                                    {% bilingual "Post" "帖子" %}
+                                                {% elif entry.kind == "comment" %}
+                                                    {% bilingual "Comment" "评论" %}
+                                                {% elif entry.kind == "like" %}
+                                                    {% bilingual "Like" "点赞" %}
+                                                {% else %}
+                                                    {% bilingual "Activity" "动态" %}
+                                                {% endif %}
+                                            </span>
+                                            <span class="timeline-title">{{ entry.title }}</span>
+                                        </div>
+                                        {% with body=entry.content %}
+                                            {% if not body %}
+                                                {% with body=entry.excerpt %}
+                                                    {% if body %}
+                                                        <p class="timeline-summary">{{ body|truncatechars:220|linebreaksbr }}</p>
+                                                    {% endif %}
+                                                {% endwith %}
+                                            {% else %}
+                                                <p class="timeline-summary">{{ body|truncatechars:220|linebreaksbr }}</p>
+                                            {% endif %}
+                                        {% endwith %}
+                                        {% if entry.topic %}
+                                        <div class="timeline-tags">
+                                            <span class="timeline-tag">#{{ entry.topic }}</span>
+                                        </div>
+                                        {% endif %}
+                                        {% if entry.image %}
+                                            <figure class="timeline-media">
+                                                <button type="button"
+                                                        class="timeline-media-trigger"
+                                                        data-role="timeline-media-trigger"
+                                                        data-bs-toggle="modal"
+                                                        data-bs-target="#timeline-media-modal"
+                                                        data-image="{{ entry.image }}"
+                                                        aria-label="{% bilingual 'View image' '查看图片' %}">
+                                                    <img src="{{ entry.image }}" alt="{% bilingual 'Timeline media' '动态配图' %}" loading="lazy">
+                                                </button>
+                                            </figure>
+                                            <button type="button"
+                                                    class="timeline-media-link"
+                                                    data-role="timeline-media-trigger"
+                                                    data-bs-toggle="modal"
+                                                    data-bs-target="#timeline-media-modal"
+                                                    data-image="{{ entry.image }}">
+                                                {% bilingual "View full image" "查看原图" %}
+                                            </button>
+                                        {% endif %}
+                                    </div>
+                                    <span class="timeline-time">{{ entry.display_time }}</span>
+                                </li>
+                                {% endfor %}
+                            </ul>
+                        {% else %}
+                            <div class="timeline-empty">
+                                <p class="mb-1">{% bilingual "No activity yet" "暂无动态" %}</p>
+                                <p class="text-muted mb-0">{% bilingual "Share a post or leave a like in the community to get started." "快去社区发布首条帖子或点赞互动，让这里充实起来。" %}</p>
+                            </div>
+                        {% endif %}
+                    </section>
+                </section>

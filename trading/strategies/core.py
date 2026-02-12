@@ -10,14 +10,10 @@ import json
 import numpy as np
 import pandas as pd
 
-from django.conf import settings
-
-
 from ..data_sources import AuxiliaryData
 from ..rl_agents import build_rl_agent
 from ..http_client import http_client, HttpClientError
-from ..network import get_requests_session, resolve_retry_config, retry_call_result
-from ..alpaca_data import fetch_stock_bars_frame, resolve_alpaca_data_credentials
+from ..market_provider import fetch_stock_bars_frame, resolve_market_provider
 from .config import (
     QuantStrategyError,
     StrategyInput,
@@ -283,9 +279,10 @@ def fetch_price_data(
     *,
     user_id: str | None = None,
 ) -> Tuple[pd.DataFrame, list[str]]:
-    """Fetch historical price data using yfinance with local cache fallback."""
+    """Fetch historical price data with configured provider and local cache fallback."""
     warnings: list[str] = []
-    data_source = "yfinance"
+    provider = resolve_market_provider(user_id=user_id)
+    data_source = provider
     cache_path: str | None = None
 
     def _shorten_error(exc: Exception | None) -> str:
@@ -299,69 +296,53 @@ def fetch_price_data(
         return message
     download_error: Exception | None = None
     data = pd.DataFrame()
-    key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
-    if key_id and secret:
-        try:
-            alpaca_end = end + timedelta(days=1)
+    try:
+        frame_end = end + timedelta(days=1)
+        if provider == "alpaca":
             frame = fetch_stock_bars_frame(
                 [ticker],
                 start=start,
-                end=alpaca_end,
+                end=frame_end,
                 timeframe="1Day",
                 feed="sip",
                 adjustment="split",
                 user_id=user_id,
+                provider=provider,
             )
-            if isinstance(frame, pd.DataFrame) and not frame.empty:
-                if isinstance(frame.columns, pd.MultiIndex):
-                    try:
-                        data = frame.xs(ticker.upper(), axis=1, level=1)
-                    except (KeyError, ValueError):
-                        data = pd.DataFrame()
-                else:
-                    data = frame
-                if isinstance(data, pd.DataFrame) and not data.empty:
-                    data_source = "alpaca"
-        except Exception as exc:
-            download_error = exc
-
-    if data.empty:
-        try:
-            import yfinance as yf
-        except ImportError as exc:  # pragma: no cover - dependency load
-            raise QuantStrategyError(
-                "缺少可用行情源。请配置 Alpaca API Key，或安装 yfinance 后再试。"
-            ) from exc
-
-        retry_config = resolve_retry_config(
-            retries=os.environ.get("MARKET_FETCH_MAX_RETRIES"),
-            backoff=os.environ.get("MARKET_FETCH_RETRY_BACKOFF"),
-            default_timeout=getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", None),
-        )
-        session = get_requests_session(retry_config.timeout)
-
-        def _empty_frame(value: object) -> bool:
-            return not isinstance(value, pd.DataFrame) or value.empty
-
-        try:
-            def _download() -> pd.DataFrame:
-                return yf.download(
-                    ticker,
+            if not isinstance(frame, pd.DataFrame) or frame.empty:
+                frame = fetch_stock_bars_frame(
+                    [ticker],
                     start=start,
-                    end=end,
-                    progress=False,
-                    auto_adjust=False,
-                    actions=False,
-                    repair=True,
-                    threads=False,
-                    timeout=retry_config.timeout,
-                    session=session,
+                    end=frame_end,
+                    timeframe="1Day",
+                    feed="iex",
+                    adjustment="split",
+                    user_id=user_id,
+                    provider=provider,
                 )
+        else:
+            frame = fetch_stock_bars_frame(
+                [ticker],
+                start=start,
+                end=frame_end,
+                timeframe="1Day",
+                adjustment="split",
+                user_id=user_id,
+                provider=provider,
+            )
 
-            data = retry_call_result(_download, config=retry_config, should_retry=_empty_frame)
-        except Exception as exc:  # pragma: no cover - network failure
-            download_error = exc
-            data = pd.DataFrame()
+        if isinstance(frame, pd.DataFrame) and not frame.empty:
+            if isinstance(frame.columns, pd.MultiIndex):
+                try:
+                    data = frame.xs(ticker.upper(), axis=1, level=1)
+                except (KeyError, ValueError):
+                    data = pd.DataFrame()
+            else:
+                data = frame
+            if isinstance(data, pd.DataFrame) and not data.empty:
+                data_source = provider
+    except Exception as exc:
+        download_error = exc
 
     if data.empty:
         cache_file = DATA_CACHE_DIR / f"{ticker.upper()}.csv"
@@ -386,16 +367,16 @@ def fetch_price_data(
                 f"已从本地缓存 {cache_file} 读取数据。若需最新行情，请联网后刷新缓存。"
             )
             data = cached.loc[(cached.index.date >= start) & (cached.index.date <= end)]
-            data_source = "csv_cache"
+            data_source = f"{provider}_cache"
             cache_path = os.fspath(cache_file)
             data.attrs["data_fetch_note"] = fallback_note
         else:
             if download_error:
                 raise QuantStrategyError(
-                    "无法从 Yahoo Finance 下载行情，请确认网络可用或在 "
-                    f"{DATA_CACHE_DIR} 放置名为 {ticker.upper()}.csv 的历史数据文件。"
+                    f"无法从 {provider} 下载行情，请检查凭证/网络，或在 "
+                    f"{DATA_CACHE_DIR} 放置 {ticker.upper()}.csv 历史文件。"
                 ) from download_error
-            raise QuantStrategyError("No market data was returned. Check the ticker and dates.")
+            raise QuantStrategyError(f"{provider} 未返回行情数据。请检查代码和时间范围。")
 
     if isinstance(data.columns, pd.MultiIndex):
         try:

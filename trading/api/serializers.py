@@ -18,6 +18,7 @@ class StrategyTaskSerializer(serializers.Serializer):
     start_date = serializers.DateField()
     end_date = serializers.DateField()
     capital = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    trading_focus = serializers.CharField(required=False, allow_blank=True)
     ml_mode = serializers.CharField(required=False, allow_blank=True)
     strategy_engine = serializers.CharField(required=False, allow_blank=True)
     risk_profile = serializers.CharField(required=False, allow_blank=True)

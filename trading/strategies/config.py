@@ -29,6 +29,7 @@ class StrategyInput:
     show_ai_thoughts: bool
     risk_profile: str
     capital: float
+    trading_focus: str = "intraday_retail"
     strategy_engine: str = "ml_momentum"
     volatility_target: float = 0.15
     transaction_cost_bps: float = 8.0

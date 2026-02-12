@@ -3,9 +3,11 @@ from __future__ import annotations
 import csv
 import io
 import logging
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime, timedelta, timezone as dt_timezone
 from dataclasses import asdict
 from typing import Any
+
+import pandas as pd
 from django.utils import timezone
 from django.core.cache import cache
 from django.db.models import Q
@@ -35,7 +37,28 @@ from ..history import update_history_meta
 from ..views.api import _build_screener_snapshot
 from ..views.dashboard import build_strategy_input
 from ..models import RealtimeProfile, StrategyPreset
+from ..market_provider import (
+    fetch_news as provider_fetch_news,
+    fetch_stock_bars_frame as provider_fetch_stock_bars_frame,
+    fetch_stock_snapshots as provider_fetch_stock_snapshots,
+    fetch_stock_trades as provider_fetch_stock_trades,
+    has_market_data_credentials,
+    provider_caps,
+    resolve_market_provider,
+    resolve_massive_plan,
+)
+from ..massive_data import resolve_massive_ws_url
+from ..api_usage import get_provider_api_usage
 from ..realtime.storage import read_ndjson_tail, read_state
+from ..services.strategy_workbench import (
+    SHORTTERM_TRADING_MODE_MIGRATION,
+    SHORTTERM_WORKBENCH_MIGRATION,
+    WORKSPACE_CHOICES,
+    apply_strategy_trading_mode,
+    build_strategy_workbench_payload,
+    describe_strategy_trading_mode,
+    trade_source_unavailable,
+)
 from ..preprocessing import sanitize_price_history
 from paper.engine import create_session, serialize_session
 from paper.models import PaperTradingSession, PaperTrade
@@ -62,6 +85,19 @@ def _clamp_pagination(request, *, default_limit: int = 20, max_limit: int = 100)
     limit = max(1, min(max_limit, limit))
     offset = max(0, offset)
     return limit, offset
+
+
+def _boolish(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 class CsvRenderer(BaseRenderer):
@@ -603,6 +639,276 @@ class StrategyPresetDetailView(APIView):
         return Response({"deleted": True, "preset_id": preset_id, "request_id": request_id})
 
 
+SHORTTERM_MIGRATION_HINT = {
+    "deprecated": True,
+    "migration": SHORTTERM_WORKBENCH_MIGRATION,
+}
+
+
+class ShortTermWorkbenchView(APIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [BasicAuthentication, SessionAuthentication]
+
+    def get(self, request):
+        request_id = ensure_request_id(request)
+        response = build_strategy_workbench_payload(request.user, request_id=request_id, workspace="trade")
+        response["deprecated"] = True
+        response["migration"] = SHORTTERM_WORKBENCH_MIGRATION
+        return Response(response, status=status.HTTP_200_OK)
+
+
+class ShortTermTradingModeView(APIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [BasicAuthentication, SessionAuthentication]
+
+    def get(self, request):
+        request_id = ensure_request_id(request)
+        response = describe_strategy_trading_mode(request.user, request_id=request_id)
+        response["deprecated"] = True
+        response["migration"] = SHORTTERM_TRADING_MODE_MIGRATION
+        return Response(response, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        request_id = ensure_request_id(request)
+        status_code, response = apply_strategy_trading_mode(
+            request.user,
+            request.data if isinstance(request.data, dict) else {},
+            request_id=request_id,
+        )
+        response["deprecated"] = True
+        response["migration"] = SHORTTERM_TRADING_MODE_MIGRATION
+        return Response(response, status=status_code)
+
+
+class StrategyWorkbenchView(APIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [BasicAuthentication, SessionAuthentication]
+
+    def get(self, request):
+        request_id = ensure_request_id(request)
+        workspace = str(request.GET.get("workspace") or "trade").strip().lower()
+        if workspace not in WORKSPACE_CHOICES:
+            return Response(
+                {
+                    "error_code": "invalid_workspace",
+                    "message": "Workspace must be trade, backtest, or review.",
+                    "request_id": request_id,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        response = build_strategy_workbench_payload(request.user, request_id=request_id, workspace=workspace)
+        if workspace == "trade" and trade_source_unavailable(response.get("trade")):
+            market_data_source = str(response.get("market_data_source") or response.get("source") or "alpaca")
+            source_label = market_data_source.upper()
+            message = f"{source_label} market data is unavailable."
+            return Response(
+                {
+                    "error_code": "market_data_unavailable",
+                    "legacy_error_code": "alpaca_unavailable" if market_data_source == "alpaca" else "",
+                    "provider": market_data_source,
+                    "message": message,
+                    "request_id": request_id,
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response(response, status=status.HTTP_200_OK)
+
+
+class StrategyTradingModeView(APIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [BasicAuthentication, SessionAuthentication]
+
+    def get(self, request):
+        request_id = ensure_request_id(request)
+        response = describe_strategy_trading_mode(request.user, request_id=request_id)
+        return Response(response, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        request_id = ensure_request_id(request)
+        status_code, response = apply_strategy_trading_mode(
+            request.user,
+            request.data if isinstance(request.data, dict) else {},
+            request_id=request_id,
+        )
+        return Response(response, status=status_code)
+
+
+class DataSourceDiagnoseView(APIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [BasicAuthentication, SessionAuthentication]
+
+    def post(self, request):
+        request_id = ensure_request_id(request)
+        body = request.data if isinstance(request.data, dict) else {}
+        configured_provider = resolve_market_provider(user=request.user)
+        requested_provider = str(body.get("provider") or configured_provider).strip().lower()
+        if requested_provider not in {"alpaca", "massive"}:
+            return Response(
+                {
+                    "error_code": "provider_not_supported",
+                    "message": "Provider must be alpaca or massive.",
+                    "request_id": request_id,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        check_news = _boolish(body.get("check_news"), default=True)
+        check_ws = _boolish(body.get("check_ws"), default=True)
+        plan = resolve_massive_plan(user=request.user) if requested_provider == "massive" else "alpaca"
+        caps = provider_caps(requested_provider, plan)
+        checks: dict[str, dict[str, Any]] = {}
+        credentials_ready = has_market_data_credentials(user=request.user, provider=requested_provider)
+        checks["credentials"] = {"ok": credentials_ready}
+
+        if not credentials_ready:
+            checks["bars"] = {"ok": False, "detail": "missing_credentials"}
+            checks["snapshot"] = {"ok": False, "detail": "missing_credentials"}
+            checks["trades"] = {"ok": False, "detail": "missing_credentials"}
+        else:
+            try:
+                end_dt = datetime.now(dt_timezone.utc)
+                start_dt = end_dt - timedelta(days=5)
+                bars_frame = provider_fetch_stock_bars_frame(
+                    ["SPY"],
+                    start=start_dt,
+                    end=end_dt,
+                    timeframe="1Day",
+                    provider=requested_provider,
+                    user=request.user,
+                    timeout=8,
+                )
+            except Exception as exc:  # pragma: no cover - network/runtime variability
+                checks["bars"] = {"ok": False, "detail": str(exc)}
+            else:
+                bars_ok = isinstance(bars_frame, pd.DataFrame) and not bars_frame.empty
+                checks["bars"] = {
+                    "ok": bars_ok,
+                    "rows": int(getattr(bars_frame, "shape", [0])[0]) if isinstance(bars_frame, pd.DataFrame) else 0,
+                    "detail": "ok" if bars_ok else "empty",
+                }
+
+            try:
+                snapshots = provider_fetch_stock_snapshots(
+                    ["SPY"],
+                    provider=requested_provider,
+                    user=request.user,
+                    timeout=8,
+                )
+            except Exception as exc:  # pragma: no cover - network/runtime variability
+                checks["snapshot"] = {"ok": False, "detail": str(exc)}
+            else:
+                checks["snapshot"] = {
+                    "ok": isinstance(snapshots, dict) and bool(snapshots.get("SPY")),
+                    "detail": "ok" if isinstance(snapshots, dict) and bool(snapshots.get("SPY")) else "empty",
+                }
+
+            try:
+                trades, _next_token, _downgrade_to, _downgrade_message = provider_fetch_stock_trades(
+                    "SPY",
+                    limit=10,
+                    max_pages=1,
+                    sort="desc",
+                    provider=requested_provider,
+                    user=request.user,
+                    timeout=8,
+                )
+            except Exception as exc:  # pragma: no cover - network/runtime variability
+                checks["trades"] = {"ok": False, "detail": str(exc)}
+            else:
+                checks["trades"] = {"ok": isinstance(trades, list), "count": len(trades or [])}
+
+        if check_news:
+            if not bool(caps.get("news")):
+                checks["news"] = {
+                    "ok": False,
+                    "error_code": "massive_news_not_entitled",
+                    "detail": "Current plan does not include Massive news.",
+                }
+            elif not credentials_ready:
+                checks["news"] = {
+                    "ok": False,
+                    "detail": "missing_credentials",
+                }
+            else:
+                try:
+                    items = provider_fetch_news(
+                        symbols=["SPY"],
+                        limit=5,
+                        max_pages=1,
+                        provider=requested_provider,
+                        user=request.user,
+                        timeout=8,
+                    )
+                except Exception as exc:  # pragma: no cover - network/runtime variability
+                    checks["news"] = {"ok": False, "detail": str(exc)}
+                else:
+                    checks["news"] = {"ok": isinstance(items, list) and bool(items), "count": len(items or [])}
+
+        if check_ws:
+            if requested_provider == "massive":
+                ws_url = resolve_massive_ws_url(user=request.user)
+                checks["websocket"] = {"ok": bool(ws_url), "url": ws_url}
+            else:
+                checks["websocket"] = {"ok": credentials_ready}
+
+        check_values = [bool(item.get("ok")) for item in checks.values()]
+        ok = bool(check_values) and all(check_values)
+        failed_checks = []
+        for name, item in checks.items():
+            if bool(item.get("ok")):
+                continue
+            detail = str(item.get("detail") or item.get("error_code") or "failed")
+            failed_checks.append({"name": name, "detail": detail})
+
+        message = "All checks passed." if ok else "One or more checks failed."
+        error_code = None
+        if not ok:
+            if not credentials_ready and requested_provider == "massive":
+                error_code = "massive_credentials_missing"
+                message = "Massive credentials are missing. Save Massive API Key in API settings first."
+            elif not credentials_ready and requested_provider == "alpaca":
+                error_code = "market_data_unavailable"
+                message = "Alpaca credentials are missing. Save Alpaca API keys in API settings first."
+            elif checks.get("news", {}).get("error_code") == "massive_news_not_entitled":
+                error_code = "massive_news_not_entitled"
+                message = "Current Massive plan does not include news entitlement."
+            if error_code is None:
+                error_code = "market_data_unavailable"
+            if failed_checks:
+                failed_summary = ", ".join(f"{item['name']}:{item['detail']}" for item in failed_checks[:4])
+                if failed_summary:
+                    message = f"{message} Failed checks: {failed_summary}."
+
+        response_payload: dict[str, Any] = {
+            "ok": ok,
+            "provider": requested_provider,
+            "plan": plan,
+            "checks": checks,
+            "failed_checks": failed_checks,
+            "message": message,
+            "request_id": request_id,
+        }
+        if error_code:
+            response_payload["error_code"] = error_code
+        return Response(response_payload, status=status.HTTP_200_OK if ok else status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+class ApiUsageView(APIView):
+    permission_classes = [IsAuthenticated]
+    authentication_classes = [BasicAuthentication, SessionAuthentication]
+
+    def get(self, request):
+        request_id = ensure_request_id(request)
+        usage = get_provider_api_usage(user_id=str(getattr(request.user, "id", "") or ""))
+        return Response(
+            {
+                **usage,
+                "request_id": request_id,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class RealtimeProfileView(APIView):
     def get(self, request):
         request_id = ensure_request_id(request)
@@ -626,6 +932,7 @@ class RealtimeProfileView(APIView):
             "active_profile_id": getattr(active_profile, "profile_id", None),
             "request_id": request_id,
         }
+        payload.update(SHORTTERM_MIGRATION_HINT)
         return Response(payload)
 
     def post(self, request):
@@ -655,6 +962,7 @@ class RealtimeProfileView(APIView):
             "updated_at": profile.updated_at,
             "request_id": request_id,
         }
+        response.update(SHORTTERM_MIGRATION_HINT)
         return Response(response, status=status.HTTP_201_CREATED)
 
 
@@ -702,6 +1010,7 @@ class RealtimeProfileDetailView(APIView):
             "updated_at": profile.updated_at,
             "request_id": request_id,
         }
+        response.update(SHORTTERM_MIGRATION_HINT)
         return Response(response)
 
     def delete(self, request, profile_id: str):
@@ -710,7 +1019,9 @@ class RealtimeProfileDetailView(APIView):
         if not profile:
             return Response({"error": "not_found", "request_id": request_id}, status=status.HTTP_404_NOT_FOUND)
         profile.delete()
-        return Response({"deleted": True, "profile_id": profile_id, "request_id": request_id})
+        response = {"deleted": True, "profile_id": profile_id, "request_id": request_id}
+        response.update(SHORTTERM_MIGRATION_HINT)
+        return Response(response)
 
 
 class RealtimeSignalsView(APIView):
@@ -737,4 +1048,6 @@ class RealtimeSignalsView(APIView):
                 signals = raw[-limit:]
             else:
                 signals = []
-        return Response({"signals": signals, "request_id": request_id})
+        response = {"signals": signals, "request_id": request_id}
+        response.update(SHORTTERM_MIGRATION_HINT)
+        return Response(response)

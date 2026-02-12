@@ -149,6 +149,58 @@ def _normalize_history_snapshot(payload: dict[str, Any]) -> None:
     payload["metadata"] = metadata
 
 
+def _apply_trading_focus_defaults(config: dict[str, Any]) -> None:
+    focus = str(config.get("trading_focus") or "").strip().lower()
+    if not focus:
+        focus = str(ADVANCED_STRATEGY_DEFAULTS.get("trading_focus") or "intraday_retail").strip().lower()
+        config["trading_focus"] = focus
+
+    def _set_if_default(key: str, value: Any) -> None:
+        baseline = ADVANCED_STRATEGY_DEFAULTS.get(key)
+        current = config.get(key)
+        if current == baseline or current is None or current == "":
+            config[key] = value
+
+    if focus == "intraday_retail":
+        _set_if_default("strategy_engine", "ml_momentum")
+        _set_if_default("risk_profile", "balanced")
+        _set_if_default("return_path", "open_to_close")
+        _set_if_default("short_window", 8)
+        _set_if_default("long_window", 34)
+        _set_if_default("rsi_period", 9)
+        _set_if_default("transaction_cost_bps", 8.0)
+        _set_if_default("slippage_bps", 6.0)
+        _set_if_default("min_holding_days", 0)
+        _set_if_default("train_window", 180)
+        _set_if_default("test_window", 10)
+        _set_if_default("entry_threshold", 0.56)
+        _set_if_default("exit_threshold", 0.47)
+        _set_if_default("max_leverage", 2.0)
+        _set_if_default("max_drawdown_stop", 0.12)
+        _set_if_default("daily_exposure_limit", 1.0)
+        _set_if_default("execution_delay_days", 0)
+    elif focus == "scalp_experimental":
+        _set_if_default("strategy_engine", "mean_reversion")
+        _set_if_default("risk_profile", "balanced")
+        _set_if_default("return_path", "open_to_close")
+        _set_if_default("short_window", 5)
+        _set_if_default("long_window", 20)
+        _set_if_default("rsi_period", 7)
+        _set_if_default("transaction_cost_bps", 10.0)
+        _set_if_default("slippage_bps", 8.0)
+        _set_if_default("max_adv_participation", 0.06)
+        _set_if_default("execution_liquidity_buffer", 0.08)
+        _set_if_default("min_holding_days", 0)
+        _set_if_default("train_window", 120)
+        _set_if_default("test_window", 5)
+        _set_if_default("entry_threshold", 0.62)
+        _set_if_default("exit_threshold", 0.52)
+        _set_if_default("max_leverage", 1.4)
+        _set_if_default("max_drawdown_stop", 0.08)
+        _set_if_default("daily_exposure_limit", 0.8)
+        _set_if_default("execution_delay_days", 0)
+
+
 def build_strategy_input(cleaned: dict[str, Any], *, request_id: str, user) -> tuple[StrategyInput, dict[str, Any]]:
     config = ADVANCED_STRATEGY_DEFAULTS.copy()
     benchmark = cleaned.get("benchmark_ticker") or config["benchmark_ticker"]
@@ -173,6 +225,7 @@ def build_strategy_input(cleaned: dict[str, Any], *, request_id: str, user) -> t
         config[key] = cast(val) if cast else val
 
     _override("strategy_engine", str)
+    _override("trading_focus", str)
     _override("risk_profile", str)
     _override("short_window", int)
     _override("long_window", int)
@@ -203,6 +256,7 @@ def build_strategy_input(cleaned: dict[str, Any], *, request_id: str, user) -> t
     _override("daily_exposure_limit", float)
     _override("allow_short", bool)
     _override("execution_delay_days", int)
+    _apply_trading_focus_defaults(config)
 
     user_id = str(user.id) if getattr(user, "is_authenticated", False) else None
 
@@ -218,6 +272,7 @@ def build_strategy_input(cleaned: dict[str, Any], *, request_id: str, user) -> t
         show_ai_thoughts=config["show_ai_thoughts"],
         risk_profile=config["risk_profile"],
         capital=capital,
+        trading_focus=config.get("trading_focus", ADVANCED_STRATEGY_DEFAULTS.get("trading_focus", "intraday_retail")),
         strategy_engine=config["strategy_engine"],
         volatility_target=config["volatility_target"],
         transaction_cost_bps=config["transaction_cost_bps"],
@@ -334,6 +389,7 @@ def backtest(request):
                         "tb_up": config["tb_up"],
                         "tb_down": config["tb_down"],
                         "tb_max_holding": config["tb_max_holding"],
+                        "trading_focus": config.get("trading_focus"),
                         "strategy_engine": config["strategy_engine"],
                         "ml_model": config["ml_model"],
                         "ml_task": config["ml_task"],

@@ -20,16 +20,22 @@ class ProfileCredentialEncryptionTests(TestCase):
             {
                 "alpaca_api_key_id": "key-id-123",
                 "alpaca_api_secret_key": "secret-key-123",
+                "massive_s3_access_key_id": "s3-akid-123",
+                "massive_s3_secret_access_key": "s3-secret-123",
             },
         )
         profile = UserProfile.objects.get(user=self.user)
         self.assertEqual(result["alpaca_api_key_id"], "key-id-123")
+        self.assertEqual(result["massive_s3_access_key_id"], "s3-akid-123")
         self.assertEqual(profile.api_credentials, {})
         self.assertTrue(profile.api_credentials_encrypted)
         self.assertNotIn("key-id-123", profile.api_credentials_encrypted)
+        self.assertNotIn("s3-akid-123", profile.api_credentials_encrypted)
         loaded = load_api_credentials(str(self.user.id))
         self.assertEqual(loaded["alpaca_api_key_id"], "key-id-123")
         self.assertEqual(loaded["alpaca_api_secret_key"], "secret-key-123")
+        self.assertEqual(loaded["massive_s3_access_key_id"], "s3-akid-123")
+        self.assertEqual(loaded["massive_s3_secret_access_key"], "s3-secret-123")
 
     def test_load_api_credentials_migrates_legacy_plaintext(self):
         profile = UserProfile.objects.get(user=self.user)

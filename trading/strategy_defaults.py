@@ -22,6 +22,7 @@ HYPEROPT_TRIALS = _env_int("HYPEROPT_TRIALS", 8)
 HYPEROPT_TIMEOUT = _env_int("HYPEROPT_TIMEOUT", 90)
 
 ADVANCED_STRATEGY_DEFAULTS = {
+    "trading_focus": "intraday_retail",
     "benchmark_ticker": "SPY",
     "capital": 250000.0,
     "short_window": 35,

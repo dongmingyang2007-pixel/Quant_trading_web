@@ -7462,7 +7462,7 @@ html[data-theme="dark"] .market-page { color: inherit; }
 
 .market-page.mi-density-high .market-status.mi-hub-v2 .mi-hub-v2-toolbar {
     display: grid;
-    grid-template-columns: minmax(170px, auto) minmax(220px, 1fr) minmax(180px, 1.1fr) minmax(190px, auto);
+    grid-template-columns: minmax(170px, auto) minmax(220px, 1fr) minmax(190px, auto);
     align-items: center;
     gap: 8px 10px;
     border: 1px solid var(--mi-hub-v2-border-soft);
@@ -7527,7 +7527,7 @@ html[data-theme="dark"] .market-page { color: inherit; }
     justify-content: flex-end;
     flex-wrap: wrap;
     gap: 6px;
-    grid-column: 4;
+    grid-column: 3;
     justify-self: end;
 }
 
@@ -7793,7 +7793,6 @@ html[data-theme="dark"] .market-page { color: inherit; }
 
     .market-page.mi-density-high .market-status.mi-hub-v2 .mi-hub-v2-status,
     .market-page.mi-density-high .market-status.mi-hub-v2 .mi-hub-v2-controls,
-    .market-page.mi-density-high .market-status.mi-hub-v2 .mi-hub-v2-track.mi-hub-v2-track--inline,
     .market-page.mi-density-high .market-status.mi-hub-v2 .mi-hub-v2-meta {
         grid-column: auto;
         justify-self: stretch;

@@ -1,0 +1,162 @@
+                            <section class="account-settings-panel is-active" data-settings-panel="profile" id="account-settings-panel-profile" role="tabpanel" aria-labelledby="account-settings-profile">
+                                <section class="account-card profile-summary-card" id="settings-pane" data-role="settings-card" data-settings-open="{% if profile_success or profile_error or profile_form.errors %}1{% else %}0{% endif %}">
+                                    <div class="account-card-head compact">
+                                        <h2>{% bilingual "Profile summary" "公开形象摘要" %}</h2>
+                                    </div>
+                                    <div class="profile-summary">
+                                        <div class="profile-summary-left">
+                                            <div class="profile-summary-identity">
+                                                <button type="button"
+                                                        class="profile-preview-avatar avatar-modal-trigger"
+                                                        data-bs-toggle="modal"
+                                                        data-bs-target="#avatar-upload-modal"
+                                                        aria-label="{% bilingual 'Update avatar' '更新头像' %}">
+                                                    {% if profile_media.avatar %}
+                                                        <img src="{{ profile_media.avatar }}" alt="{{ user_info.display_name|default:user_info.username }}" loading="lazy">
+                                                    {% else %}
+                                                        <span>{{ user_info.display_name|default:user_info.username|first|upper }}</span>
+                                                    {% endif %}
+                                                </button>
+                                                <div class="profile-preview-meta">
+                                                    <p class="preview-name">{{ user_info.display_name|default:user_info.username }}</p>
+                                                    <p class="text-muted mb-1">@{{ user_info.username }}</p>
+                                                    <p class="preview-bio">
+                                                        {% if profile.bio %}
+                                                            {{ profile.bio|truncatechars:120 }}
+                                                        {% else %}
+                                                            {% bilingual "Add a short bio to build trust with collaborators." "添加简介可提升合作伙伴对你的了解。" %}
+                                                        {% endif %}
+                                                    </p>
+                                                    <ul class="preview-highlights">
+                                                        <li>{% bilingual "Backtests" "回测次数" %}: {{ history_runs|length }}</li>
+                                                        <li>{% bilingual "Joined" "加入时间" %}: {{ user_info.date_joined|date:"Y-m-d" }}</li>
+                                                    </ul>
+                                                </div>
+                                            </div>
+                                            {% if profile_media.feature %}
+                                                <div class="profile-preview-thumb">
+                                                    <img src="{{ profile_media.feature }}" alt="{% bilingual 'Featured banner' '展示横幅' %}" loading="lazy">
+                                                </div>
+                                            {% endif %}
+                                        </div>
+                                        <div class="profile-summary-right">
+                                            <div class="profile-summary-actions">
+                                                <a class="btn btn-outline-secondary btn-sm" href="{% url 'trading:profile_public' profile.slug %}">
+                                                    {% bilingual "Public view" "公开视图" %}
+                                                </a>
+                                                <button type="button"
+                                                        class="btn btn-primary btn-sm"
+                                                        data-role="toggle-settings"
+                                                        data-label-open="{% bilingual 'Collapse' '收起' %}"
+                                                        data-label-closed="{% bilingual 'Edit profile' '编辑资料' %}">
+                                                    {% if profile_success or profile_error or profile_form.errors %}{% bilingual "Collapse" "收起" %}{% else %}{% bilingual "Edit profile" "编辑资料" %}{% endif %}
+                                                </button>
+                                                {% if profile_media.feature %}
+                                                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#profile-preview-modal">
+                                                    {% bilingual "View large preview" "查看大图预览" %}
+                                                </button>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {% if profile_success %}
+                                        <div class="alert alert-success mt-2">{{ profile_success }}</div>
+                                    {% endif %}
+                                    {% if profile_error %}
+                                        <div class="alert alert-danger mt-2">{{ profile_error }}</div>
+                                    {% endif %}
+                                    <div class="account-settings-form{% if not profile_success and not profile_error and not profile_form.errors %} d-none{% endif %}" data-role="settings-body">
+                                        <form method="post" class="account-profile-form" id="account-profile-form" action="{% url 'trading:account_update_profile' %}" novalidate enctype="multipart/form-data">
+                                                {% csrf_token %}
+                                                <div class="card mb-3">
+                                                    <div class="card-header">
+                                                        {% bilingual "Basic info" "基础信息" %}
+                                                    </div>
+                                                    <div class="card-body">
+                                                        <div class="row g-3">
+                                                            <div class="col-12 col-md-6">
+                                                                <label class="form-label">{% bilingual "Username" "用户名" %}</label>
+                                                                <input type="text" class="form-control" value="{{ user_info.username }}" readonly>
+                                                            </div>
+                                                            <div class="col-12 col-md-6">
+                                                                <label class="form-label">{% bilingual "Email" "邮箱" %}</label>
+                                                                <input type="text" class="form-control" value="{{ user_info.email }}" readonly>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div class="card">
+                                                    <div class="card-header">
+                                                        {% bilingual "Public profile" "公开资料" %}
+                                                    </div>
+                                                    <div class="card-body">
+                                                        <div class="row g-3">
+                                                            <div class="col-12 col-md-6">
+                                                                <label class="form-label" for="{{ profile_form.display_name.id_for_label }}">{% bilingual "Display name" "展示昵称" %}</label>
+                                                                {{ profile_form.display_name }}
+                                                                {% if profile_form.display_name.help_text %}
+                                                                    <div class="form-text">{{ profile_form.display_name.help_text }}</div>
+                                                                {% endif %}
+                                                                {% if profile_form.display_name.errors %}
+                                                                    <div class="invalid-feedback d-block">
+                                                                        {% for error in profile_form.display_name.errors %}{{ error }}{% if not forloop.last %}<br>{% endif %}{% endfor %}
+                                                                    </div>
+                                                                {% endif %}
+                                                            </div>
+                                                            <div class="col-12 col-md-6">
+                                                                <label class="form-label" for="{{ profile_form.cover_color.id_for_label }}">{% bilingual "Cover color" "背景主色" %}</label>
+                                                                {{ profile_form.cover_color }}
+                                                                <div class="form-text">{% bilingual "Pick a primary accent color for your profile header." "选择一个喜欢的主色作为个人页背景。" %}</div>
+                                                                {% if profile_form.cover_color.errors %}
+                                                                    <div class="invalid-feedback d-block">
+                                                                        {% for error in profile_form.cover_color.errors %}{{ error }}{% if not forloop.last %}<br>{% endif %}{% endfor %}
+                                                                    </div>
+                                                                {% endif %}
+                                                            </div>
+                                                            <div class="col-12 col-md-6">
+                                                                <label class="form-label" for="{{ profile_form.feature_image.id_for_label }}">{% bilingual "Featured photo" "展示照片" %}</label>
+                                                                <div class="feature-upload" data-role="feature-uploader" data-initial-image="{{ profile_media.feature }}">
+                                                                    {{ profile_form.feature_image }}
+                                                                    {{ profile_form.feature_cropped_data }}
+                                                                    <div class="feature-placeholder" data-role="feature-placeholder">
+                                                                        <p class="text-muted mb-2 small">{% bilingual "Add a hero image to highlight your public profile. The preview area below is only for editing feedback and stays compact." "为个人主页添加展示照片（下方预览仅用于编辑反馈，体积很小）。" %}</p>
+                                                                        <div class="d-flex gap-2 flex-wrap">
+                                                                            <button type="button" class="btn btn-outline-secondary btn-sm" data-role="feature-pick">{% bilingual "Choose photo" "选择照片" %}</button>
+                                                                            <span class="text-muted small" data-role="feature-status"></span>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="feature-preview d-none" data-role="feature-preview">
+                                                                        <figure class="feature-preview-frame">
+                                                                            <img src="" alt="{% bilingual 'Featured photo preview' '展示照片预览' %}" data-role="feature-preview-image">
+                                                                        </figure>
+                                                                        <div class="btn-group btn-group-sm mt-2" role="group">
+                                                                            <button type="button" class="btn btn-outline-secondary" data-role="feature-replace">{% bilingual "Replace" "更换" %}</button>
+                                                                            <button type="button" class="btn btn-outline-danger" data-role="feature-remove">{% bilingual "Remove" "移除" %}</button>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                                {% if profile_form.feature_image.errors %}
+                                                                    <div class="invalid-feedback d-block">
+                                                                        {% for error in profile_form.feature_image.errors %}{{ error }}{% if not forloop.last %}<br>{% endif %}{% endfor %}
+                                                                    </div>
+                                                                {% endif %}
+                                                            </div>
+                                                            <div class="col-12">
+                                                                <label class="form-label" for="{{ profile_form.bio.id_for_label }}">{% bilingual "Bio" "个人简介" %}</label>
+                                                                {{ profile_form.bio }}
+                                                                {% if profile_form.bio.errors %}
+                                                                    <div class="invalid-feedback d-block">
+                                                                        {% for error in profile_form.bio.errors %}{{ error }}{% if not forloop.last %}<br>{% endif %}{% endfor %}
+                                                                    </div>
+                                                                {% endif %}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="card-footer text-end">
+                                                        <button type="submit" class="btn btn-primary">{% bilingual "Save changes" "保存更改" %}</button>
+                                                    </div>
+                                                </div>
+                                            </form>
+                                        </div>
+                                </section>
+                            </section>

@@ -1,0 +1,27 @@
+<div id="community-feed-pagination"
+     class="community-feed-pagination{% if not next_page_url %} is-finished{% endif %}"
+     {% if is_htmx %}hx-swap-oob="true"{% endif %}>
+    {% if next_page_url %}
+        <button type="button"
+                class="btn btn-outline-primary rounded-pill community-load-more-btn"
+                data-role="load-more-button"
+                data-label-idle="{% bilingual 'Load more posts' '加载更多帖子' %}"
+                data-label-loading="{% bilingual 'Loading...' '加载中...' %}"
+                hx-get="{{ next_page_url }}"
+                hx-target="#community-post-list"
+                hx-swap="beforeend"
+                hx-push-url="false">
+            {% bilingual "Load more posts" "加载更多帖子" %}
+        </button>
+        <div class="community-feed-loading text-muted small d-none" data-role="load-more-loading">
+            {% bilingual "Loading more updates…" "正在加载更多内容…" %}
+        </div>
+    {% else %}
+        <div class="community-feed-end text-muted small">
+            {% bilingual "You've reached the end." "已经到底啦。" %}
+        </div>
+    {% endif %}
+    <div class="alert alert-warning d-none mt-2 mb-0 py-2 px-3" data-role="load-more-error">
+        {% bilingual "Unable to load more posts. Please retry." "加载更多失败，请重试。" %}
+    </div>
+</div>

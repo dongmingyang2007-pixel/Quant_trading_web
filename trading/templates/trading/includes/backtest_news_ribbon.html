@@ -1,0 +1,68 @@
+{% load i18n i18n_extras html_filters %}
+{% with stories=focus_feed|slice:":10" %}
+{% if stories %}
+<section class="news-ribbon" id="news-ribbon" aria-label="{% bilingual 'Market highlights' '市场焦点' %}" data-story-count="{{ stories|length }}" data-scroll-speed="118">
+    <div class="news-ribbon-head">
+        <span class="news-ribbon-title">{% bilingual "Market Flash" "市场快讯" %}</span>
+        <span class="news-ribbon-meta">{% bilingual "Ranked by traction · auto-scroll (pause on hover) · swipe for more" "按热度筛选 · 自动滚动（悬停可暂停），滑动查看更多" %}</span>
+    </div>
+    <div class="news-ribbon-viewport">
+        <div class="news-ribbon-track">
+            {% for story in stories %}
+            {% with image=story.image|default:focus_placeholder %}
+            <article class="news-card tilt-card{% if not story.image %} news-card-fallback{% endif %}" tabindex="0" role="article" {% if story.url %}data-url="{{ story.url }}"{% endif %}>
+                <div class="news-card-media">
+                    <img src="{{ image }}" alt="{{ story.title|default:_('Market highlight') }}" loading="lazy">
+                </div>
+                <div class="news-card-body">
+                    <div class="news-card-meta">
+                        <span class="news-card-badge">
+                            {{ story.source|default:"Global Markets" }}
+                            {% if story.readers %}
+                                <span class="news-card-heat">{% heat_display story.readers %}</span>
+                            {% endif %}
+                        </span>
+                        {% if story.published %}<span class="news-card-time">{{ story.published }}</span>{% endif %}
+                    </div>
+                    <h2 class="news-card-title">{{ story.title|default:_("Market update") }}</h2>
+                    <p class="news-card-snippet">
+                        {% if story.snippet %}
+                            {{ story.snippet|truncatechars:140 }}
+                        {% else %}
+                            {% bilingual "Tap to read the full brief and stay on top of the move." "点击查看详情，掌握最新市场动向。" %}
+                        {% endif %}
+                    </p>
+                </div>
+            </article>
+            {% endwith %}
+            {% endfor %}
+        </div>
+    </div>
+</section>
+{% else %}
+<section class="news-ribbon news-ribbon--empty" id="news-ribbon" aria-label="{% bilingual 'Market highlight placeholder' '市场焦点占位' %}" aria-live="polite" aria-busy="true" data-story-count="0">
+    <div class="news-ribbon-head">
+        <span class="news-ribbon-title">{% bilingual "Market Flash" "市场快讯" %}</span>
+        <span class="news-ribbon-meta">{% bilingual "Curating relevant angles · new briefs arrive soon" "精选相关线索 · 最新资讯即将更新" %}</span>
+    </div>
+    <div class="news-ribbon-viewport" aria-hidden="true">
+        <div class="news-ribbon-track news-ribbon-skeleton">
+            {% for _ in "123"|make_list %}
+            <article class="news-card news-card--skeleton" aria-hidden="true" tabindex="-1">
+                <div class="news-card-media skeleton-block skeleton-block--media"></div>
+                <div class="news-card-body">
+                    <span class="skeleton-line skeleton-line--chip"></span>
+                    <span class="skeleton-line skeleton-line--title"></span>
+                    <span class="skeleton-line skeleton-line--text"></span>
+                    <span class="skeleton-line skeleton-line--text"></span>
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+    </div>
+    <p class="news-empty-hint">
+        {% bilingual "Strategy briefs are assembling. Run a backtest or refresh shortly to see curated headlines." "策略情报正在整理中。运行一次回测或稍后刷新，即可看到精选的市场头条。" %}
+    </p>
+</section>
+{% endif %}
+{% endwith %}

@@ -21,12 +21,16 @@ from trading.observability import record_metric
 from .alpaca_data import (
     DEFAULT_DATA_URL,
     DEFAULT_FEED,
-    fetch_stock_bars_frame,
     fetch_stock_snapshots,
     resolve_alpaca_data_credentials,
 )
+from .market_provider import (
+    fetch_stock_bars_frame as provider_fetch_stock_bars_frame,
+    fetch_stock_snapshots as provider_fetch_stock_snapshots,
+    resolve_market_provider,
+)
 
-RATE_LIMIT_PER_WINDOW = int(os.environ.get("MARKET_FETCH_RATE_LIMIT", "10000") or 0)
+RATE_LIMIT_PER_WINDOW = int(os.environ.get("MARKET_FETCH_RATE_LIMIT", "12000") or 0)
 RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("MARKET_FETCH_RATE_WINDOW", "60") or 0)
 
 _RATE_LOCK = threading.Lock()
@@ -53,6 +57,73 @@ _ALPACA_INTERVAL_MAP = {
     "1h": "1Hour",
     "1d": "1Day",
 }
+
+
+def _coerce_number(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        text = str(value).strip().replace(",", "")
+    except Exception:
+        return None
+    if not text:
+        return None
+    try:
+        return float(text)
+    except Exception:
+        return None
+
+
+def _coerce_positive_number(value: object) -> float | None:
+    numeric = _coerce_number(value)
+    if numeric is None or numeric <= 0:
+        return None
+    return numeric
+
+
+def _resolve_snapshot_last_price(
+    snapshot: dict[str, object] | None,
+    *,
+    prev_close: float | None = None,
+    allow_quote_fallback: bool = False,
+) -> float | None:
+    if not isinstance(snapshot, dict):
+        return None
+    latest_trade = snapshot.get("latestTrade") or snapshot.get("latest_trade") or {}
+    daily_bar = snapshot.get("dailyBar") or snapshot.get("daily_bar") or {}
+    minute_bar = snapshot.get("minuteBar") or snapshot.get("minute_bar") or {}
+    latest_quote = snapshot.get("latestQuote") or snapshot.get("latest_quote") or {}
+    for candidate in (
+        _coerce_positive_number((minute_bar or {}).get("c")),
+        _coerce_positive_number((daily_bar or {}).get("c")),
+        _coerce_positive_number((latest_trade or {}).get("p") or (latest_trade or {}).get("price")),
+    ):
+        if candidate is not None:
+            return candidate
+    if not allow_quote_fallback:
+        return None
+    bid = _coerce_positive_number((latest_quote or {}).get("bp"))
+    ask = _coerce_positive_number((latest_quote or {}).get("ap"))
+    if bid is not None and ask is not None and ask >= bid:
+        midpoint = (bid + ask) / 2.0
+        if midpoint > 0:
+            spread_ratio = (ask - bid) / midpoint
+            if spread_ratio <= 0.5:
+                return midpoint
+            if prev_close not in (None, 0):
+                return bid if abs(bid - float(prev_close)) <= abs(ask - float(prev_close)) else ask
+        return bid
+    if bid is not None:
+        return bid
+    if ask is not None:
+        if prev_close not in (None, 0):
+            ratio = ask / float(prev_close)
+            if ratio < 0.1 or ratio > 10.0:
+                return None
+        return ask
+    return None
 
 
 def _has_parquet_engine() -> bool:
@@ -329,17 +400,10 @@ def fetch_most_actives(
             snapshot = snapshots.get(entry["symbol"]) if isinstance(snapshots, dict) else None
             if not isinstance(snapshot, dict):
                 continue
-            latest_trade = snapshot.get("latestTrade") or snapshot.get("latest_trade") or {}
-            latest_quote = snapshot.get("latestQuote") or snapshot.get("latest_quote") or {}
             daily_bar = snapshot.get("dailyBar") or snapshot.get("daily_bar") or {}
             prev_bar = snapshot.get("prevDailyBar") or snapshot.get("prev_daily_bar") or {}
-            price = (
-                latest_trade.get("p")
-                or daily_bar.get("c")
-                or prev_bar.get("c")
-                or latest_quote.get("ap")
-                or latest_quote.get("bp")
-            )
+            prev_close = _coerce_positive_number((prev_bar or {}).get("c"))
+            price = _resolve_snapshot_last_price(snapshot, prev_close=prev_close, allow_quote_fallback=False)
             if price is not None:
                 try:
                     entry["price"] = float(price)
@@ -516,7 +580,8 @@ def fetch(
     """Fetch market data with simple TTL caching and disk fallback."""
 
     unique = [sym for sym in dict.fromkeys(symbols) if sym]
-    cache_key = build_cache_key("market-data", "alpaca", sorted(unique), period or start, end, interval, fields)
+    selected_provider = resolve_market_provider(user_id=user_id)
+    cache_key = build_cache_key("market-data", selected_provider, sorted(unique), period or start, end, interval, fields)
     def _cache_paths(key: str) -> tuple[Path, Path]:
         digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
         base = digest[:24]
@@ -550,7 +615,7 @@ def fetch(
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
                 if not isinstance(meta, dict):
                     continue
-                if meta.get("source") != "alpaca":
+                if meta.get("source") != selected_provider:
                     continue
                 ts = float(meta.get("timestamp", 0))
                 if time.time() - ts > DISK_CACHE_TTL_SECONDS:
@@ -580,7 +645,7 @@ def fetch(
                 "symbols": unique,
                 "fields": fields,
                 "cache_key": cache_key,
-                "source": "alpaca",
+                "source": selected_provider,
             }
             _write_parquet_atomic(df, path)
             _write_json_atomic(meta_path, meta)
@@ -598,24 +663,43 @@ def fetch(
             end=end,
             timeframe=timeframe,
         )
-        key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
-        if key_id and secret:
-            for feed in _feed_candidates(DEFAULT_FEED):
-                try:
-                    frame = fetch_stock_bars_frame(
-                        unique,
-                        start=alpaca_start,
-                        end=alpaca_end,
-                        timeframe=timeframe,
-                        feed=feed,
-                        adjustment="split",
-                        user_id=user_id,
-                        timeout=alpaca_timeout,
-                    )
-                except Exception:
-                    continue
-                if isinstance(frame, pd.DataFrame) and not frame.empty:
-                    return frame
+        if selected_provider == "alpaca":
+            key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
+            if key_id and secret:
+                for feed in _feed_candidates(DEFAULT_FEED):
+                    try:
+                        frame = provider_fetch_stock_bars_frame(
+                            unique,
+                            start=alpaca_start,
+                            end=alpaca_end,
+                            timeframe=timeframe,
+                            feed=feed,
+                            adjustment="split",
+                            user_id=user_id,
+                            timeout=alpaca_timeout,
+                            provider=selected_provider,
+                        )
+                    except Exception:
+                        continue
+                    if isinstance(frame, pd.DataFrame) and not frame.empty:
+                        return frame
+        else:
+            try:
+                frame = provider_fetch_stock_bars_frame(
+                    unique,
+                    start=alpaca_start,
+                    end=alpaca_end,
+                    timeframe=timeframe,
+                    feed=None,
+                    adjustment="split",
+                    user_id=user_id,
+                    timeout=alpaca_timeout,
+                    provider=selected_provider,
+                )
+            except Exception:
+                frame = pd.DataFrame()
+            if isinstance(frame, pd.DataFrame) and not frame.empty:
+                return frame
         return pd.DataFrame()
 
     if not cache:
@@ -681,43 +765,57 @@ def fetch_recent_window(
         if sym and sym not in seen:
             seen.add(sym)
             unique_symbols.append(sym)
-    key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
-    if key_id and secret:
-        timeframe = _resolve_alpaca_timeframe(interval)
-        data = pd.DataFrame()
+    provider = resolve_market_provider(user_id=user_id)
+    timeframe = _resolve_alpaca_timeframe(interval)
+    data = pd.DataFrame()
+    if provider == "alpaca":
         for feed in _feed_candidates(DEFAULT_FEED):
             try:
-                data = fetch_stock_bars_frame(
+                data = provider_fetch_stock_bars_frame(
                     unique_symbols,
                     timeframe=timeframe,
                     limit=limit,
                     feed=feed,
                     adjustment="split",
                     user_id=user_id,
+                    provider=provider,
                 )
             except Exception:
                 data = pd.DataFrame()
             if isinstance(data, pd.DataFrame) and not data.empty:
                 break
-        if isinstance(data, pd.DataFrame) and not data.empty:
-            result: dict[str, pd.DataFrame] = {}
-            if isinstance(data.columns, pd.MultiIndex):
-                for sym in unique_symbols:
-                    try:
-                        sub = data.xs(sym, level=1, axis=1).dropna().tail(limit)
-                        if not sub.empty:
-                            result[sym] = sub
-                    except Exception:
-                        continue
-            else:
+    else:
+        try:
+            data = provider_fetch_stock_bars_frame(
+                unique_symbols,
+                timeframe=timeframe,
+                limit=limit,
+                feed=None,
+                adjustment="split",
+                user_id=user_id,
+                provider=provider,
+            )
+        except Exception:
+            data = pd.DataFrame()
+    if isinstance(data, pd.DataFrame) and not data.empty:
+        result: dict[str, pd.DataFrame] = {}
+        if isinstance(data.columns, pd.MultiIndex):
+            for sym in unique_symbols:
                 try:
-                    frame = data.dropna().tail(limit)
-                    if not frame.empty:
-                        result[unique_symbols[0]] = frame
+                    sub = data.xs(sym, level=1, axis=1).dropna().tail(limit)
+                    if not sub.empty:
+                        result[sym] = sub
                 except Exception:
-                    pass
-            if result:
-                return result
+                    continue
+        else:
+            try:
+                frame = data.dropna().tail(limit)
+                if not frame.empty:
+                    result[unique_symbols[0]] = frame
+            except Exception:
+                pass
+        if result:
+            return result
     return {}
 
 
@@ -730,25 +828,19 @@ def fetch_latest_quote(
     """Fetch the latest quote for a symbol. Returns {'price': float, 'as_of': datetime}."""
     if not symbol:
         return {}
-    key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
-    if key_id and secret:
-        snapshots = fetch_stock_snapshots([symbol], user_id=user_id)
-        snap = snapshots.get(symbol.upper()) if isinstance(snapshots, dict) else None
-        if isinstance(snap, dict):
-            latest_trade = snap.get("latestTrade") or snap.get("latest_trade") or {}
-            latest_quote = snap.get("latestQuote") or snap.get("latest_quote") or {}
-            daily_bar = snap.get("dailyBar") or snap.get("daily_bar") or {}
-            prev_bar = snap.get("prevDailyBar") or snap.get("prev_daily_bar") or {}
-            price = (
-                latest_trade.get("p")
-                or daily_bar.get("c")
-                or prev_bar.get("c")
-                or latest_quote.get("ap")
-                or latest_quote.get("bp")
-            )
-            ts = latest_trade.get("t") or latest_quote.get("t") or daily_bar.get("t")
-            if price is not None:
-                as_of = pd.to_datetime(ts, utc=True, errors="coerce") if ts else None
-                as_of_val = as_of.to_pydatetime() if as_of is not None and not pd.isna(as_of) else None
-                return {"price": float(price), "as_of": as_of_val, "source": "alpaca"}
+    provider = resolve_market_provider(user_id=user_id)
+    snapshots = provider_fetch_stock_snapshots([symbol], user_id=user_id, provider=provider)
+    snap = snapshots.get(symbol.upper()) if isinstance(snapshots, dict) else None
+    if isinstance(snap, dict):
+        daily_bar = snap.get("dailyBar") or snap.get("daily_bar") or {}
+        prev_bar = snap.get("prevDailyBar") or snap.get("prev_daily_bar") or {}
+        latest_trade = snap.get("latestTrade") or snap.get("latest_trade") or {}
+        latest_quote = snap.get("latestQuote") or snap.get("latest_quote") or {}
+        prev_close = _coerce_positive_number((prev_bar or {}).get("c"))
+        price = _resolve_snapshot_last_price(snap, prev_close=prev_close, allow_quote_fallback=True)
+        ts = latest_trade.get("t") or latest_quote.get("t") or daily_bar.get("t")
+        if price is not None:
+            as_of = pd.to_datetime(ts, utc=True, errors="coerce") if ts else None
+            as_of_val = as_of.to_pydatetime() if as_of is not None and not pd.isna(as_of) else None
+            return {"price": float(price), "as_of": as_of_val, "source": provider}
     return {}

@@ -27,6 +27,11 @@
   const langPrefix = ((langMeta && langMeta.getAttribute('content')) || docLang || navigator.language || 'zh')
     .toLowerCase()
     .slice(0, 2);
+  const formatPrice4 = (value) => {
+    const numeric = typeof value === 'number' ? value : Number.parseFloat(value);
+    return Number.isFinite(numeric) ? numeric.toFixed(4) : '--';
+  };
+  const CHART_PRICE_FORMAT = { type: 'price', precision: 4, minMove: 0.0001 };
 
   const listContainer = document.querySelector('[data-role="ranking-list"]');
   const rankingChangeHeader = document.querySelector('[data-role="ranking-change-header"]');
@@ -327,6 +332,9 @@
   let typeaheadActiveIndex = -1;
   let retryTimer = null;
   let lastRequest = { query: '', options: {} };
+  let rankingRequestController = null;
+  let rankingRequestKey = '';
+  let rankingRequestNonce = 0;
   let marketSocket = null;
   let socketRetryTimer = null;
   let detailManager = null;
@@ -384,6 +392,7 @@
   let chartTickPollTimer = null;
   let chartTickPollInFlight = false;
   let chartTickCursor = null;
+  let chartDataContextVersion = 0;
   const MAX_CHART_TRADE_BUFFER = 2000;
   const DEFAULT_AUTO_REFRESH_MS = 60 * 1000;
   const AUTO_REFRESH_OPTIONS = [0, 15000, 30000, 60000];
@@ -704,6 +713,8 @@
         closedFallback: '闭市，已展示上一交易日榜单',
         justNow: '刚刚',
         retrying: '请求过快，正在重试',
+        keepPreviousOnRate: '请求受限，沿用上一版数据。',
+        keepPreviousOnError: '加载异常，沿用上一版数据。',
         refreshSkipped: '刷新中，已忽略重复请求',
         countdownPrefix: '下次刷新',
         paused: '已暂停',
@@ -749,7 +760,7 @@
         detailFallback: (requested, used) => `无 ${requested} 数据，已显示 ${used} 历史`,
         volumeLabel: '成交量',
         detailLive: '实时流更新中…',
-        detailLiveWaiting: '实时流暂未收到更新，请确认实时引擎已启动。',
+        detailLiveWaiting: '实时流暂未收到更新，请确认短线引擎服务已启动。',
         detailStatusLabels: {
           live: '实时',
           delayed: '延迟',
@@ -763,7 +774,7 @@
           disconnected: '实时连接已断开。',
         },
         detailStatusMeta: (age) => (age ? `最后更新：${age}前` : ''),
-        detailStatusMonitor: '查看实时引擎',
+        detailStatusMonitor: '打开短线工作台',
         detailStatusReconnect: '重连',
         detailStatusReconnectAttempt: (count) => (count ? `重连中（第 ${count} 次）` : ''),
         detailStatusCloseCode: (code, reason) =>
@@ -852,6 +863,7 @@
         sourcePrefix: '数据来源：',
         sourceLabels: {
           alpaca: 'Alpaca',
+          massive: 'Massive',
           cache: '缓存',
           unknown: '未知',
         },
@@ -955,6 +967,8 @@
         closedFallback: 'Market closed, showing previous session movers',
         justNow: 'just now',
         retrying: 'Rate limited, retrying',
+        keepPreviousOnRate: 'Rate limited, keeping previous data.',
+        keepPreviousOnError: 'Request failed, keeping previous data.',
         refreshSkipped: 'Refresh already in progress',
         countdownPrefix: 'Next refresh',
         paused: 'Paused',
@@ -1000,7 +1014,7 @@
         detailFallback: (requested, used) => `No ${requested} data, showing ${used} history`,
         volumeLabel: 'Volume',
         detailLive: 'Live stream updating…',
-        detailLiveWaiting: 'No live ticks yet. Check the realtime engine.',
+        detailLiveWaiting: 'No live ticks yet. Check the short-term engine service.',
         detailStatusLabels: {
           live: 'Live',
           delayed: 'Delayed',
@@ -1014,7 +1028,7 @@
           disconnected: 'Realtime connection is offline.',
         },
         detailStatusMeta: (age) => (age ? `Last update: ${age} ago` : ''),
-        detailStatusMonitor: 'Open realtime monitor',
+        detailStatusMonitor: 'Open short-term workbench',
         detailStatusReconnect: 'Reconnect',
         detailStatusReconnectAttempt: (count) => (count ? `Reconnecting (${count})` : ''),
         detailStatusCloseCode: (code, reason) =>
@@ -1103,6 +1117,7 @@
         sourcePrefix: 'Data source: ',
         sourceLabels: {
           alpaca: 'Alpaca',
+          massive: 'Massive',
           cache: 'Cache',
           unknown: 'Unknown',
         },
@@ -2362,10 +2377,12 @@
         borderVisible: false,
         wickUpColor: '#16a34a',
         wickDownColor: '#ef4444',
+        priceFormat: CHART_PRICE_FORMAT,
       });
       this.lineSeries = this.chart.addLineSeries({
         color: '#2563eb',
         lineWidth: 2,
+        priceFormat: CHART_PRICE_FORMAT,
       });
       if (this.lineSeries) {
         this.lineSeries.applyOptions({ visible: false });
@@ -4095,10 +4112,10 @@
       });
       const parts = [
         `${TEXT.chartTooltipTime || 'Time'}: ${timeLabel}`,
-        `${TEXT.chartTooltipOpen || 'O'}: ${ohlc.open.toFixed(2)}`,
-        `${TEXT.chartTooltipHigh || 'H'}: ${ohlc.high.toFixed(2)}`,
-        `${TEXT.chartTooltipLow || 'L'}: ${ohlc.low.toFixed(2)}`,
-        `${TEXT.chartTooltipClose || 'C'}: ${ohlc.close.toFixed(2)}`,
+        `${TEXT.chartTooltipOpen || 'O'}: ${formatPrice4(ohlc.open)}`,
+        `${TEXT.chartTooltipHigh || 'H'}: ${formatPrice4(ohlc.high)}`,
+        `${TEXT.chartTooltipLow || 'L'}: ${formatPrice4(ohlc.low)}`,
+        `${TEXT.chartTooltipClose || 'C'}: ${formatPrice4(ohlc.close)}`,
       ];
       if (tickIndex !== null) {
         parts.unshift(`${TEXT.chartTooltipTick || 'T'}: ${tickIndex}`);
@@ -4913,7 +4930,7 @@
 
   function setDetailPriceValue(price) {
     if (detailPriceEl) {
-      detailPriceEl.textContent = Number.isFinite(price) ? price.toFixed(2) : '--';
+      detailPriceEl.textContent = Number.isFinite(price) ? formatPrice4(price) : '--';
     }
     updateTradeEstimates();
   }
@@ -6671,7 +6688,7 @@
       const priceEl = card.querySelector('[data-role="price"]');
       const dayEl = card.querySelector('[data-role="day-change"]');
       if (priceEl && Number.isFinite(price)) {
-        priceEl.textContent = price.toFixed(2);
+        priceEl.textContent = formatPrice4(price);
       }
       if (dayEl && Number.isFinite(changePct)) {
         dayEl.textContent = formatChange(changePct);
@@ -6685,7 +6702,7 @@
       const priceCell = cells[1];
       const changeCell = cells[2];
       if (priceCell && Number.isFinite(price)) {
-        priceCell.textContent = price.toFixed(2);
+        priceCell.textContent = formatPrice4(price);
       }
       if (!changeCell || !Number.isFinite(changePct)) return;
       const isRankingRow = Boolean(row.closest('[data-role="ranking-list"]'));
@@ -6842,6 +6859,9 @@
     if (chartTickPollInFlight) return;
     if (!chartVisible || !detailSymbol || !detailManager) return;
     if (isChartRealtimeActive()) return;
+    const chartContext = getChartContextSnapshot();
+    const symbol = detailSymbol;
+    const rangeKey = detailRange;
     chartTickPollInFlight = true;
     try {
       const endTs = Date.now() / 1000;
@@ -6850,7 +6870,8 @@
         startTs = Math.max(startTs, chartTickCursor + 1e-6);
       }
       if (!Number.isFinite(startTs) || startTs >= endTs) return;
-      const payload = await fetchChartBars(detailSymbol, detailRange, '1t', { startTs, endTs });
+      const payload = await fetchChartBars(symbol, rangeKey, '1t', { startTs, endTs });
+      if (!isChartContextCurrent(chartContext)) return;
       const bars = payload && Array.isArray(payload.bars) ? payload.bars : [];
       if (!bars.length) return;
       let lastPrice = null;
@@ -6918,11 +6939,15 @@
     if (!chartVisible || !detailSymbol) return;
     if (!shouldPollChart(detailInterval)) return;
     if (chartSocketReady && isChartRealtimeActive()) return;
+    const chartContext = getChartContextSnapshot();
+    const symbol = detailSymbol;
+    const rangeKey = detailRange;
     chartPollInFlight = true;
     try {
-      const intervalKey = normalizeIntervalKey(detailInterval) || resolveDefaultInterval(detailRange);
+      const intervalKey = normalizeIntervalKey(detailInterval) || resolveDefaultInterval(rangeKey);
       if (!intervalKey) return;
-      const payload = await fetchChartBars(detailSymbol, detailRange, intervalKey);
+      const payload = await fetchChartBars(symbol, rangeKey, intervalKey);
+      if (!isChartContextCurrent(chartContext)) return;
       if (!payload || !Array.isArray(payload.bars) || !payload.bars.length) return;
       const intervalSpec = resolveIntervalSpec(intervalKey);
       if (detailManager) {
@@ -6958,7 +6983,10 @@
   async function loadOlderChartBars() {
     if (chartLazyLoading || chartLazyExhausted) return;
     if (!detailSymbol || !detailManager) return;
-    const intervalKey = normalizeIntervalKey(detailInterval) || resolveDefaultInterval(detailRange);
+    const chartContext = getChartContextSnapshot();
+    const symbol = detailSymbol;
+    const rangeKey = detailRange;
+    const intervalKey = normalizeIntervalKey(detailInterval) || resolveDefaultInterval(rangeKey);
     const intervalSpec = resolveIntervalSpec(intervalKey);
     if (!intervalSpec) return;
     const earliest =
@@ -6968,14 +6996,15 @@
     setDetailLazy(true);
     try {
       const step = intervalSpec.unit === 'tick' ? 0.000001 : Math.max(1, intervalSpec.seconds || 1);
-      const rangeSpan = resolveRangeWindowSeconds(detailRange);
+      const rangeSpan = resolveRangeWindowSeconds(rangeKey);
       const jumpSeconds = Math.max(CHART_LAZY_MIN_JUMP_SECONDS, Math.ceil(rangeSpan));
       let probeCursor = earliest;
       let inserted = false;
       let latestTradeTs = null;
       for (let attempt = 0; attempt < CHART_LAZY_EMPTY_RETRY_ATTEMPTS; attempt += 1) {
         const endTs = probeCursor - step;
-        const payload = await fetchChartBars(detailSymbol, detailRange, intervalKey, { endTs });
+        const payload = await fetchChartBars(symbol, rangeKey, intervalKey, { endTs });
+        if (!isChartContextCurrent(chartContext)) return;
         const bars = payload && Array.isArray(payload.bars) ? payload.bars : [];
         if (bars.length && detailManager.prependData(bars)) {
           inserted = true;
@@ -7782,9 +7811,7 @@
   }
 
   function formatPriceValue(value) {
-    const num = typeof value === 'number' ? value : Number.parseFloat(value);
-    if (!Number.isFinite(num)) return '--';
-    return num.toFixed(2);
+    return formatPrice4(value);
   }
 
   function setStatValue(el, value, formatter) {
@@ -8984,13 +9011,17 @@
       ? Promise.resolve(chartPayload)
       : fetchChartBars(symbol, rangeKey, intervalKey)
           .then((payload) => {
+            const payloadIntervalKey =
+              normalizeIntervalKey(
+                (payload && payload.interval && payload.interval.key) || payload.downgrade_to || intervalKey
+              ) || intervalKey;
             if (payload && payload.downgrade_to) {
               const normalized = normalizeIntervalKey(payload.downgrade_to);
               if (normalized && normalized !== detailInterval) {
                 setDetailInterval(normalized, { persist: true, skipReload: true });
               }
             }
-            storeDetailChartCache(symbol, rangeKey, intervalKey, payload.bars || [], payload);
+            storeDetailChartCache(symbol, rangeKey, payloadIntervalKey, payload.bars || [], payload);
             return payload;
           });
 
@@ -9043,14 +9074,18 @@
   }
 
   function setDetailRange(rangeKey) {
-    detailRange = rangeKey;
+    const normalizedRange = (rangeKey || '').toString().trim().toLowerCase();
+    if (normalizedRange !== detailRange) {
+      bumpChartContextVersion();
+    }
+    detailRange = normalizedRange;
     if (detailSymbol) {
       resetWaveAnalysisState({ keepStatus: true });
     }
     detailRangeButtons.forEach((btn) => {
-      btn.classList.toggle('is-active', btn.dataset.range === rangeKey);
+      btn.classList.toggle('is-active', btn.dataset.range === normalizedRange);
     });
-    const guard = guardHighFreqRange(rangeKey, detailInterval);
+    const guard = guardHighFreqRange(normalizedRange, detailInterval);
     if (guard.downgraded && guard.intervalKey && guard.intervalKey !== detailInterval) {
       setDetailInterval(guard.intervalKey, { persist: true, skipReload: true });
       const label = getIntervalLabel(guard.intervalKey);
@@ -9063,6 +9098,11 @@
     chartLazyCursor = null;
     chartTickCursor = null;
     lastFallbackUpdateAt = 0;
+    chartTradeBuffer = [];
+    if (chartTradeFlushHandle) {
+      cancelAnimationFrame(chartTradeFlushHandle);
+      chartTradeFlushHandle = null;
+    }
     updateDataStatusUI();
   }
 
@@ -9205,6 +9245,7 @@
   }
 
   function setDetailInterval(nextKey, { persist = true, skipReload = false } = {}) {
+    const previousInterval = normalizeIntervalKey(detailInterval) || '';
     let normalized = normalizeIntervalKey(nextKey);
     if (!normalized) {
       setDetailStatus(TEXT.intervalInvalid, true);
@@ -9215,6 +9256,9 @@
       normalized = guard.intervalKey;
       const label = getIntervalLabel(normalized);
       setDetailStatus(TEXT.detailRangeGuard(label));
+    }
+    if (normalized !== previousInterval) {
+      bumpChartContextVersion();
     }
     detailInterval = normalized;
     if (detailSymbol) {
@@ -9239,8 +9283,16 @@
     if (detailManager) {
       const spec = resolveIntervalSpec(normalized);
       if (spec) {
-        detailManager.setIntervalSpec(spec, { preserveData: true });
+        // Prevent mixed granularity: clear old bars before the new-interval payload arrives.
+        detailManager.setIntervalSpec(spec, { preserveData: false });
+        detailManager.setData([], { intervalSpec: spec, fitContent: true });
+        detailLastChartKey = '';
       }
+    }
+    chartTradeBuffer = [];
+    if (chartTradeFlushHandle) {
+      cancelAnimationFrame(chartTradeFlushHandle);
+      chartTradeFlushHandle = null;
     }
     lastLiveUpdateAt = 0;
     lastChartSocketUpdateAt = 0;
@@ -9360,6 +9412,7 @@
   }
 
   function openDetailPanel(symbol) {
+    bumpChartContextVersion();
     detailSymbol = symbol;
     lastLiveUpdateAt = 0;
     lastChartSocketUpdateAt = 0;
@@ -10412,6 +10465,30 @@
     return '1m';
   }
 
+  function buildChartContextKey(symbol = detailSymbol, rangeKey = detailRange, intervalKey = detailInterval) {
+    const normalizedSymbol = normalizeSymbol(symbol);
+    const normalizedRange = (rangeKey || '').toString().trim().toLowerCase();
+    const normalizedInterval = normalizeIntervalKey(intervalKey) || '';
+    return `${normalizedSymbol}|${normalizedRange}|${normalizedInterval}`;
+  }
+
+  function getChartContextSnapshot(symbol = detailSymbol, rangeKey = detailRange, intervalKey = detailInterval) {
+    return {
+      version: chartDataContextVersion,
+      key: buildChartContextKey(symbol, rangeKey, intervalKey),
+    };
+  }
+
+  function isChartContextCurrent(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return false;
+    return snapshot.version === chartDataContextVersion && snapshot.key === buildChartContextKey();
+  }
+
+  function bumpChartContextVersion() {
+    chartDataContextVersion += 1;
+    return chartDataContextVersion;
+  }
+
   function resolveRangeWindowSeconds(rangeKey) {
     const key = (rangeKey || '').toString().trim().toLowerCase();
     if (key.endsWith('mo') && /^\d+mo$/.test(key)) {
@@ -10643,10 +10720,40 @@
     return (payload && (payload.message || payload.error)) || TEXT.genericError;
   }
 
+  function hasRenderedRankingRows() {
+    if (!listContainer) return false;
+    return Boolean(listContainer.querySelector('tr[data-symbol]'));
+  }
+
+  function buildSnapshotMetaFromPayload(payload) {
+    if (!payload || typeof payload !== 'object') return null;
+    if (payload.snapshot_refresh && typeof payload.snapshot_refresh === 'object') {
+      return payload.snapshot_refresh;
+    }
+    const state = payload.snapshot_state;
+    if (!state || typeof state !== 'object') return null;
+    const building = Boolean(state.building);
+    const progress = Number(state.building_progress);
+    const generatedAt = state.active_generated_at;
+    const meta = {
+      status: building ? 'running' : 'idle',
+      latest_summary: generatedAt ? { generated_at: generatedAt, generated_ts: generatedAt } : {},
+    };
+    if (building) {
+      meta.progress = {
+        status: 'running',
+        chunks_completed: Number.isFinite(progress) ? Math.max(0, Math.min(100, progress)) : 0,
+        total_chunks: 100,
+      };
+    }
+    return meta;
+  }
+
   async function loadData(query = '', options = {}) {
     const rawQuery = (query || '').toString().trim();
     const normalizedQuery = normalizeSymbol(rawQuery);
     const activeListType = normalizeListType(options.listType || currentListType);
+    const requestedTimeframeKey = currentTimeframe;
     const skipListRender = Boolean(options.skipListRender);
     const keepListType = Boolean(options.keepListType);
     const openDetail = options.openDetail !== false;
@@ -10655,9 +10762,42 @@
     const pageSize = Number.isFinite(pageSizeCandidate) ? pageSizeCandidate : RANK_PAGE_SIZE;
     const offset = Number.isFinite(options.offset) ? Number(options.offset) : 0;
     if (activeListType === 'all') {
+      if (rankingRequestController && !rankingRequestController.signal.aborted) {
+        rankingRequestController.abort();
+      }
+      rankingRequestController = null;
+      rankingRequestKey = '';
       await loadAllStocks({ query: rawQuery, page: 1 });
       return;
     }
+    const requestKey = JSON.stringify({
+      timeframe: currentTimeframe,
+      list: activeListType,
+      query: normalizedQuery,
+      offset: isAppend ? offset : 0,
+      limit: pageSize,
+      mode: options.watchAction || options.recentAction || normalizedQuery ? 'post' : 'get',
+    });
+    if (
+      requestKey === rankingRequestKey &&
+      rankingRequestController &&
+      !rankingRequestController.signal.aborted
+    ) {
+      if (!isAppend) {
+        setStatus(TEXT.refreshSkipped, { forceState: 'refreshing', forceMessage: true });
+      }
+      return;
+    }
+    if (!isAppend && rankingRequestController && !rankingRequestController.signal.aborted) {
+      rankingRequestController.abort();
+    }
+    const requestController = new AbortController();
+    rankingRequestController = requestController;
+    rankingRequestKey = requestKey;
+    const requestNonce = ++rankingRequestNonce;
+    const isCurrentRequest = () =>
+      rankingRequestController === requestController && rankingRequestNonce === requestNonce;
+    const preserveRowsWhileLoading = !isAppend && !skipListRender && hasRenderedRankingRows();
     if (!isAppend) {
       resetRankPaging(pageSize);
       lastRequest = { query: normalizedQuery || '', options: { ...options, listType: activeListType } };
@@ -10703,7 +10843,7 @@
       setStatus(`${TEXT.loading} ${TEXT.timeframes[currentTimeframe] || currentTimeframe} ${TEXT.dataSuffix}`, {
         forceState: 'refreshing',
       });
-      if (!skipListRender) {
+      if (!skipListRender && !preserveRowsWhileLoading) {
         setListLoading(listContainer);
       }
       showChipSkeleton(recentChips, 3);
@@ -10731,6 +10871,7 @@
           },
           credentials: 'same-origin',
           body: JSON.stringify(requestPayload),
+          signal: requestController.signal,
         });
       } else {
         const params = new URLSearchParams({ timeframe: currentTimeframe, list: activeListType });
@@ -10746,14 +10887,32 @@
         response = await fetch(`${endpoint}?${params.toString()}`, {
           headers: { 'X-Requested-With': 'XMLHttpRequest' },
           credentials: 'same-origin',
+          signal: requestController.signal,
         });
+      }
+      if (!isCurrentRequest() || requestController.signal.aborted) {
+        return;
       }
       const parsed = await parseApiResponse(response);
       const payload = parsed.payload && typeof parsed.payload === 'object' ? parsed.payload : {};
       if (response.status === 429 || payload.rate_limited) {
         const retryAfterHeader = Number.parseInt(response.headers.get('retry-after') || '', 10);
         const retryAfterSeconds = payload.retry_after_seconds || (Number.isFinite(retryAfterHeader) ? retryAfterHeader : null);
-        setRetryingState(retryAfterSeconds);
+        const snapshotKey =
+          (payload.ranking_timeframe && payload.ranking_timeframe.key) ||
+          (payload.timeframe && payload.timeframe.key) ||
+          currentTimeframe;
+        const snapshotMeta = buildSnapshotMetaFromPayload(payload);
+        if (snapshotMeta) {
+          setSnapshotStatus(snapshotMeta, snapshotKey);
+        }
+        if (preserveRowsWhileLoading && hasRenderedRankingRows()) {
+          setStatus(TEXT.keepPreviousOnRate, { forceState: 'stale', forceMessage: true });
+          hideChipSkeleton(recentChips);
+          hideChipSkeleton(watchlistChips);
+        } else {
+          setRetryingState(retryAfterSeconds);
+        }
         return;
       }
       if (!response.ok) {
@@ -10773,6 +10932,16 @@
         throw new Error(payload.error || payload.message || TEXT.genericError);
       }
       const responseListType = normalizeListType(payload.list_type || activeListType);
+      const responseTimeframeKey =
+        (payload.timeframe && payload.timeframe.key) ||
+        (payload.ranking_timeframe && payload.ranking_timeframe.key) ||
+        requestedTimeframeKey;
+      if (
+        responseListType !== activeListType ||
+        (responseTimeframeKey && responseTimeframeKey !== requestedTimeframeKey)
+      ) {
+        return;
+      }
       if (!keepListType && payload.list_type && responseListType !== currentListType) {
         setActiveListType(responseListType);
       }
@@ -10782,10 +10951,21 @@
           items = payload.losers || [];
         } else if (responseListType === 'most_active') {
           items = payload.most_actives || [];
+        } else if (responseListType === 'top_turnover') {
+          items = payload.top_turnover || [];
         } else {
           items = payload.gainers || [];
         }
       }
+      const payloadDataState = typeof payload.data_state === 'string' ? payload.data_state : '';
+      const hasIncomingItems = Array.isArray(items) && items.length > 0;
+      const keepExistingRowsForState =
+        !isAppend &&
+        preserveRowsWhileLoading &&
+        hasRenderedRankingRows() &&
+        !skipListRender &&
+        !hasIncomingItems &&
+        ['building', 'stale', 'limited'].includes(payloadDataState);
       const incomingItems = Array.isArray(items) ? items.slice() : [];
       const isRankingList = responseListType !== 'all' && listContainer && listContainer.tagName === 'TBODY';
       const shouldUpdateRanking = !skipListRender;
@@ -10812,7 +10992,9 @@
       }
       updateDenseStrip();
       if (!skipListRender) {
-        if (isAppend && rankSort === 'default') {
+        if (keepExistingRowsForState) {
+          setStatus(TEXT.keepPreviousOnRate, { forceState: 'stale', forceMessage: true });
+        } else if (isAppend && rankSort === 'default') {
           appendList(listContainer, rankUpdate.appended, payload.timeframe, responseListType);
         } else {
           renderList(listContainer, items, payload.timeframe, responseListType);
@@ -10851,6 +11033,20 @@
         const tfLabel = payload.timeframe && (langPrefix === 'zh' ? payload.timeframe.label : payload.timeframe.label_en);
         const statusNotes = [];
         const rankingTimeframe = payload.ranking_timeframe;
+        const snapshotStatePayload =
+          payload.snapshot_state && typeof payload.snapshot_state === 'object' ? payload.snapshot_state : null;
+        const dataState = typeof payload.data_state === 'string' ? payload.data_state : '';
+        if (snapshotStatePayload && snapshotStatePayload.served_from === 'building_fallback') {
+          statusNotes.push(TEXT.keepPreviousOnRate);
+        } else if (dataState === 'building') {
+          statusNotes.push(langPrefix === 'zh' ? '构建中' : 'Building');
+        } else if (dataState === 'ready') {
+          statusNotes.push(langPrefix === 'zh' ? '就绪' : 'Ready');
+        } else if (dataState === 'stale') {
+          statusNotes.push(langPrefix === 'zh' ? '沿用旧版' : 'Using previous');
+        } else if (dataState === 'limited') {
+          statusNotes.push(langPrefix === 'zh' ? '等待首轮构建' : 'Waiting first build');
+        }
         if (
           rankingTimeframe &&
           rankingTimeframe.key &&
@@ -10881,15 +11077,27 @@
           (payload.ranking_timeframe && payload.ranking_timeframe.key) ||
           (payload.timeframe && payload.timeframe.key) ||
           currentTimeframe;
-        setSnapshotStatus(payload.snapshot_refresh, snapshotKey);
+        const snapshotMeta = buildSnapshotMetaFromPayload(payload);
+        if (snapshotMeta) {
+          setSnapshotStatus(snapshotMeta, snapshotKey);
+        }
         setSource(payload.data_source);
         if (normalizedQuery && openDetail) {
           openDetailPanel(normalizedQuery);
         }
       }
     } catch (error) {
+      if (requestController.signal.aborted || (error && error.name === 'AbortError')) {
+        return;
+      }
       if (isAppend) {
         setRankingLoadingMore(false);
+        return;
+      }
+      if (preserveRowsWhileLoading && hasRenderedRankingRows()) {
+        setStatus(TEXT.keepPreviousOnError, { forceState: 'stale', forceMessage: true });
+        hideChipSkeleton(recentChips);
+        hideChipSkeleton(watchlistChips);
         return;
       }
       renderError(listContainer, error && error.message);
@@ -10898,13 +11106,22 @@
       hideChipSkeleton(recentChips);
       hideChipSkeleton(watchlistChips);
     } finally {
+      const requestIsCurrent = isCurrentRequest();
+      if (requestIsCurrent) {
+        rankingRequestController = null;
+        rankingRequestKey = '';
+      }
       if (isAppend) {
-        rankIsLoadingMore = false;
-        setRankingLoadingMore(false);
+        if (requestIsCurrent || !requestController.signal.aborted) {
+          rankIsLoadingMore = false;
+          setRankingLoadingMore(false);
+        }
       } else {
-        isListLoading = false;
-        scheduleAutoRefresh();
-        refreshStatusState();
+        if (requestIsCurrent || !requestController.signal.aborted) {
+          isListLoading = false;
+          scheduleAutoRefresh();
+          refreshStatusState();
+        }
       }
     }
   }
@@ -11011,7 +11228,7 @@
         : typeof item.last === 'number'
           ? item.last
           : Number.parseFloat(item.price);
-    priceCell.textContent = Number.isFinite(priceValue) ? priceValue.toFixed(2) : '--';
+    priceCell.textContent = Number.isFinite(priceValue) ? formatPrice4(priceValue) : '--';
 
     const changeCell = document.createElement('td');
     changeCell.className = 'col-metric';
@@ -11062,7 +11279,7 @@
       renderMissingReasonValue(prevCloseCell, missingReasons.prev_close);
     } else {
       clearMissingReasonState(prevCloseCell);
-      prevCloseCell.textContent = prevCloseValue.toFixed(2);
+      prevCloseCell.textContent = formatPrice4(prevCloseValue);
     }
     prevCloseCell.classList.add('is-neutral');
 
@@ -11073,7 +11290,7 @@
       renderMissingReasonValue(openCell, missingReasons.open);
     } else {
       clearMissingReasonState(openCell);
-      openCell.textContent = openValue.toFixed(2);
+      openCell.textContent = formatPrice4(openValue);
     }
     openCell.classList.add('is-neutral');
 
@@ -11154,7 +11371,7 @@
         symbolLink.href = item.url || `https://www.tradingview.com/symbols/${item.symbol || ''}/`;
       }
       if (priceEl) {
-        priceEl.textContent = typeof item.price === 'number' ? item.price.toFixed(2) : '--';
+        priceEl.textContent = typeof item.price === 'number' ? formatPrice4(item.price) : '--';
       }
       if (primaryLabelEl) {
         if (meta.useMetricLabel) {

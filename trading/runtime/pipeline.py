@@ -53,10 +53,31 @@ class LiveTradingPipeline:
         results: list[dict[str, Any]] = []
         account_state = self.latest_account or self.refresh_account()
         equity = max(account_state.equity, 0.0)
+        guard_blocked = False
+        guard_reason = None
+        check_guard = getattr(self.risk_manager, "check_kill_switch", None)
+        if callable(check_guard):
+            try:
+                guard_blocked, guard_reason = check_guard(account_state.equity)
+            except Exception:
+                guard_blocked, guard_reason = False, None
+        snapshot_fn = getattr(self.risk_manager, "snapshot", None)
+        if callable(snapshot_fn):
+            try:
+                self.metadata["risk_guard"] = snapshot_fn()
+            except Exception:
+                self.metadata["risk_guard"] = {}
         order_type = str(self.execution_config.get("order_type", "market") or "market").lower()
         time_in_force = str(self.execution_config.get("time_in_force", "day") or "day").lower()
         max_orders_per_minute = int(self.execution_config.get("max_orders_per_minute", 60) or 60)
         now_ts = None
+        if guard_blocked:
+            status = f"risk_blocked:{guard_reason or 'guard'}"
+            for signal in signals:
+                if not signal.symbol or signal.weight == 0:
+                    continue
+                results.append({"signal": signal, "order": OrderResult(order_id=None, status=status)})
+            return results
         for signal in signals:
             if not signal.symbol or signal.weight == 0:
                 continue

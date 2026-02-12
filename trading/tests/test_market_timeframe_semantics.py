@@ -32,6 +32,21 @@ class MarketTimeframeSemanticsTests(TestCase):
         self.client.force_login(self.user)
         self.market_url = reverse("trading:market_insights_data")
         self.assets_url = reverse("trading:market_assets_data")
+        self._background_only_patcher = mock.patch(
+            "trading.views.market.MARKET_RANKINGS_BACKGROUND_ONLY",
+            False,
+        )
+        self._background_only_patcher.start()
+        self._trigger_patcher = mock.patch(
+            "trading.views.market._maybe_trigger_snapshot_refresh_nonblocking",
+            return_value=None,
+        )
+        self._trigger_patcher.start()
+
+    def tearDown(self):
+        self._trigger_patcher.stop()
+        self._background_only_patcher.stop()
+        super().tearDown()
 
     def _meta_map(self):
         return {
@@ -65,6 +80,9 @@ class MarketTimeframeSemanticsTests(TestCase):
             "trading.views.market._resolve_universe_window_rankings",
             side_effect=_window_rows,
         ), mock.patch(
+            "trading.views.market._load_timeframe_snapshot_rows",
+            return_value=None,
+        ), mock.patch(
             "trading.views.market._build_snapshot_rankings",
             return_value=[],
         ), mock.patch(
@@ -83,6 +101,59 @@ class MarketTimeframeSemanticsTests(TestCase):
         self.assertEqual(daily_items[0].get("symbol"), "AAA")
         self.assertEqual(monthly_items[0].get("symbol"), "BBB")
         self.assertEqual(monthly.json().get("ranking_timeframe", {}).get("key"), "1mo")
+
+    def test_most_active_non_1d_does_not_fallback_to_1d_snapshot(self):
+        snapshot_rows = [
+            {
+                "symbol": "AAA",
+                "price": 10.0,
+                "change_pct_period": 1.0,
+                "change_pct_day": 1.0,
+                "volume": 5_000.0,
+                "dollar_volume": 50_000.0,
+            }
+        ]
+        universe_rows = [
+            {
+                "symbol": "BBB",
+                "price": 20.0,
+                "change_pct_period": 2.0,
+                "change_pct_day": 2.0,
+                "volume": 10_000.0,
+                "dollar_volume": 200_000.0,
+            }
+        ]
+
+        with mock.patch(
+            "trading.views.market.resolve_market_provider",
+            return_value="massive",
+        ), mock.patch(
+            "trading.views.market.has_market_data_credentials",
+            return_value=True,
+        ), mock.patch(
+            "trading.views.market._load_timeframe_snapshot_rows",
+            return_value=None,
+        ), mock.patch(
+            "trading.views.market._resolve_universe_window_rankings",
+            return_value=([], "unknown"),
+        ), mock.patch(
+            "trading.views.market._build_snapshot_rankings",
+            return_value=snapshot_rows,
+        ) as build_snapshot_rankings, mock.patch(
+            "trading.views.market._resolve_universe_rankings",
+            return_value=(universe_rows, "massive"),
+        ) as resolve_universe_rankings, mock.patch(
+            "trading.views.market._build_asset_meta_map",
+            return_value=self._meta_map(),
+        ):
+            response = self.client.get(self.market_url, {"list": "most_active", "timeframe": "1mo"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload.get("items"), [])
+        self.assertIsNone(payload.get("ranking_timeframe"))
+        build_snapshot_rankings.assert_not_called()
+        resolve_universe_rankings.assert_not_called()
 
     def test_top_turnover_respects_timeframe_semantics(self):
         snapshot_rows = [
@@ -108,6 +179,9 @@ class MarketTimeframeSemanticsTests(TestCase):
             "trading.views.market._build_snapshot_rankings",
             return_value=snapshot_rows,
         ), mock.patch(
+            "trading.views.market._load_timeframe_snapshot_rows",
+            return_value=None,
+        ), mock.patch(
             "trading.views.market._resolve_universe_window_rankings",
             side_effect=_window_rows,
         ), mock.patch(
@@ -126,6 +200,105 @@ class MarketTimeframeSemanticsTests(TestCase):
         self.assertEqual(daily_items[0].get("symbol"), "AAA")
         self.assertEqual(half_year_items[0].get("symbol"), "BBB")
         self.assertEqual(half_year.json().get("ranking_timeframe", {}).get("key"), "6mo")
+
+    def test_gainers_non_1d_prefers_timeframe_rankings_over_1d_snapshot_fallback(self):
+        timeframe_rows = [
+            {
+                "symbol": "BBB",
+                "price": 22.0,
+                "change_pct_period": 8.0,
+                "change_pct_day": 0.5,
+                "volume": 700.0,
+                "dollar_volume": 15_400.0,
+                "open": 21.5,
+                "prev_close": 21.0,
+                "range_pct": 3.0,
+            }
+        ]
+        snapshot_rows = [
+            {
+                "symbol": "AAA",
+                "price": 10.0,
+                "change_pct_period": 1.0,
+                "change_pct_day": 1.0,
+                "volume": 900.0,
+                "dollar_volume": 9_000.0,
+                "open": 9.8,
+                "prev_close": 9.6,
+                "range_pct": 2.0,
+            }
+        ]
+
+        with mock.patch(
+            "trading.views.market.resolve_market_provider",
+            return_value="massive",
+        ), mock.patch(
+            "trading.views.market.has_market_data_credentials",
+            return_value=True,
+        ), mock.patch(
+            "trading.views.market._load_timeframe_snapshot_rows",
+            return_value=None,
+        ), mock.patch(
+            "trading.views.market._resolve_universe_timeframe_rankings",
+            return_value=(timeframe_rows, "massive"),
+        ), mock.patch(
+            "trading.views.market._build_snapshot_rankings",
+            return_value=snapshot_rows,
+        ), mock.patch(
+            "trading.views.market._build_asset_meta_map",
+            return_value=self._meta_map(),
+        ), mock.patch(
+            "trading.views.market._enrich_rows_with_window_metrics",
+            side_effect=lambda rows, **_kwargs: rows,
+        ):
+            response = self.client.get(self.market_url, {"list": "gainers", "timeframe": "1mo"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        items = payload.get("items", [])
+        self.assertTrue(items)
+        self.assertEqual(items[0].get("symbol"), "BBB")
+        self.assertEqual(payload.get("ranking_timeframe", {}).get("key"), "1mo")
+
+    def test_build_snapshot_rankings_sets_open_and_prev_close(self):
+        from trading.views import market as market_view
+
+        snapshot_payload = {
+            "SPY": {
+                "latestTrade": {"p": 12.0},
+                "dailyBar": {"o": 11.0, "h": 12.4, "l": 10.8, "c": 12.0, "v": 1000},
+                "prevDailyBar": {"c": 10.5, "v": 900},
+            }
+        }
+        assets_payload = [{"symbol": "SPY", "name": "SPY ETF", "exchange": "ARCA"}]
+
+        with mock.patch(
+            "trading.views.market.resolve_market_provider",
+            return_value="massive",
+        ), mock.patch(
+            "trading.views.market.MARKET_RANKINGS_DISABLE_FILTERS",
+            True,
+        ), mock.patch(
+            "trading.views.market.MARKET_RANKINGS_BACKGROUND_ONLY",
+            False,
+        ), mock.patch(
+            "trading.views.market._load_snapshot_rankings_latest_rows",
+            return_value=None,
+        ), mock.patch(
+            "trading.views.market.cache_memoize",
+            side_effect=lambda _k, builder, _ttl, **_kwargs: builder(),
+        ), mock.patch(
+            "trading.views.market._load_assets_master",
+            return_value=assets_payload,
+        ), mock.patch(
+            "trading.views.market.fetch_stock_snapshots",
+            return_value=snapshot_payload,
+        ):
+            rows = market_view._build_snapshot_rankings(str(self.user.id))
+
+        self.assertTrue(rows)
+        self.assertEqual(rows[0].get("open"), 11.0)
+        self.assertEqual(rows[0].get("prev_close"), 10.5)
 
     def test_market_assets_timeframe_and_period_change_fields(self):
         frame = _build_ohlcv_frame(
@@ -387,7 +560,7 @@ class MarketTimeframeSemanticsTests(TestCase):
         self.assertTrue(meta.get("has_more"))
         self.assertEqual(meta.get("next_offset"), 130)
 
-    def test_most_active_window_failure_falls_back_without_500(self):
+    def test_most_active_window_failure_non_1d_returns_empty_without_500(self):
         snapshot_rows = [
             {
                 "symbol": "AAA",
@@ -414,6 +587,9 @@ class MarketTimeframeSemanticsTests(TestCase):
             "trading.views.market._resolve_universe_window_rankings",
             side_effect=RuntimeError("boom"),
         ), mock.patch(
+            "trading.views.market._load_timeframe_snapshot_rows",
+            return_value=None,
+        ), mock.patch(
             "trading.views.market._build_snapshot_rankings",
             return_value=snapshot_rows,
         ), mock.patch(
@@ -424,8 +600,49 @@ class MarketTimeframeSemanticsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertTrue(payload.get("items"))
-        self.assertEqual(payload.get("ranking_timeframe", {}).get("key"), "1d")
+        self.assertEqual(payload.get("items"), [])
+        self.assertIsNone(payload.get("ranking_timeframe"))
+
+    def test_non_1d_background_mode_never_falls_back_to_1d(self):
+        with mock.patch(
+            "trading.views.market.resolve_market_provider",
+            return_value="massive",
+        ), mock.patch(
+            "trading.views.market.MARKET_RANKINGS_BACKGROUND_ONLY",
+            True,
+        ), mock.patch(
+            "trading.views.market.has_market_data_credentials",
+            return_value=True,
+        ), mock.patch(
+            "trading.views.market._load_timeframe_snapshot_rows",
+            return_value=None,
+        ), mock.patch(
+            "trading.views.market._build_snapshot_rankings",
+            return_value=[
+                {
+                    "symbol": "AAA",
+                    "price": 10.0,
+                    "change_pct_period": 9.9,
+                    "change_pct_day": 9.9,
+                    "volume": 9_999_999.0,
+                    "dollar_volume": 99_999_999.0,
+                }
+            ],
+        ), mock.patch(
+            "trading.views.market._resolve_universe_window_rankings",
+        ) as resolve_window_rankings, mock.patch(
+            "trading.views.market._build_asset_meta_map",
+            return_value=self._meta_map(),
+        ):
+            response = self.client.get(self.market_url, {"list": "most_active", "timeframe": "1mo"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload.get("items"), [])
+        ranking_timeframe = payload.get("ranking_timeframe") or {}
+        ranking_timeframe_key = ranking_timeframe.get("key") if isinstance(ranking_timeframe, dict) else None
+        self.assertNotEqual(ranking_timeframe_key, "1d")
+        resolve_window_rankings.assert_not_called()
 
     @override_settings(
         MARKET_LIST_TIMEFRAME_SUPPORT={
@@ -482,7 +699,106 @@ class MarketTimeframeSemanticsTests(TestCase):
         self.assertIn("gainers", capabilities)
         self.assertEqual(capabilities.get("gainers"), ["1d", "5d", "1mo", "6mo"])
 
-    def test_top_turnover_falls_back_when_window_rows_have_no_turnover(self):
+    def test_most_active_1d_massive_skips_alpaca_screener(self):
+        snapshot_rows = [
+            {
+                "symbol": "AAA",
+                "price": 11.0,
+                "change_pct_period": 1.0,
+                "change_pct_day": 1.0,
+                "volume": 1000.0,
+                "dollar_volume": 11_000.0,
+                "open": 10.8,
+                "prev_close": 10.5,
+                "range_pct": 2.8,
+            }
+        ]
+        with mock.patch(
+            "trading.views.market.resolve_market_provider",
+            return_value="massive",
+        ), mock.patch(
+            "trading.views.market.has_market_data_credentials",
+            return_value=True,
+        ), mock.patch(
+            "trading.views.market._build_snapshot_rankings",
+            return_value=snapshot_rows,
+        ), mock.patch(
+            "trading.views.market._build_asset_meta_map",
+            return_value=self._meta_map(),
+        ), mock.patch(
+            "trading.views.market.market_data.fetch_most_actives",
+            side_effect=AssertionError("should not call alpaca screener for massive source"),
+        ):
+            response = self.client.get(self.market_url, {"list": "most_active", "timeframe": "1d"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload.get("data_source"), "massive")
+        self.assertTrue(payload.get("items"))
+
+    def test_fetch_history_cache_key_tracks_provider(self):
+        from trading.views import market as market_view
+
+        observed: dict[str, str] = {}
+
+        def _capture_cache_key(key, _builder, _ttl, **_kwargs):
+            observed["key"] = key
+            return ({}, "massive")
+
+        with mock.patch(
+            "trading.views.market.resolve_market_provider",
+            return_value="massive",
+        ), mock.patch(
+            "trading.views.market.cache_memoize",
+            side_effect=_capture_cache_key,
+        ):
+            market_view._fetch_history(["AAA"], market_view.TIMEFRAMES["1d"], user_id=str(self.user.id))
+
+        self.assertIn("massive", observed.get("key", ""))
+        self.assertNotIn("alpaca", observed.get("key", ""))
+
+    def test_top_turnover_1d_keeps_open_prev_close_without_missing_reason(self):
+        snapshot_rows = [
+            {
+                "symbol": "SPY",
+                "name": "SPY ETF",
+                "exchange": "ARCA",
+                "price": 690.62,
+                "change_pct_period": 1.92,
+                "change_pct_day": 1.92,
+                "volume": 89_100_000.0,
+                "dollar_volume": 61_600_000_000.0,
+                "range_pct": 1.69,
+                "open": 683.20,
+                "prev_close": 677.62,
+            }
+        ]
+        with mock.patch(
+            "trading.views.market.resolve_market_provider",
+            return_value="massive",
+        ), mock.patch(
+            "trading.views.market.has_market_data_credentials",
+            return_value=True,
+        ), mock.patch(
+            "trading.views.market._build_snapshot_rankings",
+            return_value=snapshot_rows,
+        ), mock.patch(
+            "trading.views.market._build_asset_meta_map",
+            return_value=self._meta_map(),
+        ):
+            response = self.client.get(self.market_url, {"list": "top_turnover", "timeframe": "1d"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload.get("items"))
+        item = payload["items"][0]
+        reasons = item.get("missing_reasons", {})
+        self.assertNotIn("open", reasons)
+        self.assertNotIn("prev_close", reasons)
+        self.assertEqual(item.get("open"), 683.2)
+        self.assertEqual(item.get("prev_close"), 677.62)
+
+    def test_top_turnover_non_1d_does_not_fallback_when_window_rows_have_no_turnover(self):
         timeframe_rows = [
             {
                 "symbol": "AAA",
@@ -521,9 +837,8 @@ class MarketTimeframeSemanticsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertTrue(payload.get("items"))
-        self.assertEqual(payload["items"][0]["symbol"], "BBB")
-        self.assertEqual(payload.get("ranking_timeframe", {}).get("key"), "1d")
+        self.assertEqual(payload.get("items"), [])
+        self.assertIsNone(payload.get("ranking_timeframe"))
 
     def test_window_rankings_fetch_history_in_chunks(self):
         assets_payload = [
@@ -571,6 +886,9 @@ class MarketTimeframeSemanticsTests(TestCase):
                 "BBB": assets_payload[1],
                 "CCC": assets_payload[2],
             },
+        ), mock.patch(
+            "trading.views.market._load_timeframe_snapshot_rows",
+            return_value=None,
         ), mock.patch(
             "trading.views.market.market_data.fetch",
             side_effect=_fetch_side_effect,

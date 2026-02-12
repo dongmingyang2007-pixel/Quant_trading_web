@@ -1,0 +1,165 @@
+{% load i18n i18n_extras %}
+<div class="shortterm-root" data-shortterm-root data-workbench-root
+     data-workbench-endpoint="{% url 'trading:api_v1_strategy_workbench' %}"
+     data-mode-endpoint="{% url 'trading:api_v1_strategy_trading_mode' %}"
+     data-order-endpoint="{% url 'trading:market_manual_order' %}"
+     data-lang="{{ request.LANGUAGE_CODE|default:'zh-hans'|lower|slice:':2' }}">
+    <header class="shortterm-header">
+        <div>
+            <p class="shortterm-kicker">{% bilingual "Retail-first" "散户优先" %}</p>
+            <h2 class="shortterm-title">{% bilingual "Short-term Realtime Trading Workbench" "短线实时交易工作台" %}</h2>
+            <p class="shortterm-subtitle">{% bilingual "Simple intraday workflow: watch key symbols, read clear signals, then decide." "简化的日内流程：看重点标的、读清晰信号、再做交易决策。" %}</p>
+        </div>
+        <div class="shortterm-actions">
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-shortterm-role="refresh">{% bilingual "Refresh" "刷新" %}</button>
+        </div>
+    </header>
+
+    <section class="shortterm-toolbar card shadow-sm">
+        <div class="card-body">
+            <div class="shortterm-toolbar-row">
+                <div class="shortterm-group">
+                    <span class="shortterm-group-label">{% bilingual "Templates" "模板" %}</span>
+                    <button type="button" class="btn btn-sm btn-outline-primary" data-shortterm-role="template" data-template="retail_minute">{% bilingual "Minute" "分钟级" %}</button>
+                    <button type="button" class="btn btn-sm btn-outline-primary" data-shortterm-role="template" data-template="retail_second">{% bilingual "Second" "秒级" %}</button>
+                </div>
+                <div class="shortterm-group">
+                    <span class="shortterm-group-label">{% bilingual "Mode" "模式" %}</span>
+                    <button type="button" class="btn btn-sm btn-primary" data-shortterm-role="mode" data-mode="paper">Paper</button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" data-shortterm-role="mode" data-mode="live">Live</button>
+                </div>
+                <div class="shortterm-group shortterm-group--status">
+                    <span class="shortterm-status" data-shortterm-role="status">{% bilingual "Loading..." "加载中..." %}</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="shortterm-kpis">
+        <article class="shortterm-kpi card shadow-sm">
+            <div class="card-body">
+                <p class="shortterm-kpi-label">{% bilingual "Engine" "引擎" %}</p>
+                <p class="shortterm-kpi-value" data-shortterm-role="engine-online">—</p>
+            </div>
+        </article>
+        <article class="shortterm-kpi card shadow-sm">
+            <div class="card-body">
+                <p class="shortterm-kpi-label">{% bilingual "Mode" "模式" %}</p>
+                <p class="shortterm-kpi-value" data-shortterm-role="mode-value">—</p>
+            </div>
+        </article>
+        <article class="shortterm-kpi card shadow-sm">
+            <div class="card-body">
+                <p class="shortterm-kpi-label">{% bilingual "Focus Symbols" "关注标的" %}</p>
+                <p class="shortterm-kpi-value" data-shortterm-role="counts-universe">—</p>
+            </div>
+        </article>
+        <article class="shortterm-kpi card shadow-sm">
+            <div class="card-body">
+                <p class="shortterm-kpi-label">{% bilingual "Signals / Executions" "信号 / 执行" %}</p>
+                <p class="shortterm-kpi-value" data-shortterm-role="counts-flow">—</p>
+            </div>
+        </article>
+        <article class="shortterm-kpi card shadow-sm">
+            <div class="card-body">
+                <p class="shortterm-kpi-label">{% bilingual "Risk Status" "风险状态" %}</p>
+                <p class="shortterm-kpi-value" data-shortterm-role="risk-guard">—</p>
+            </div>
+        </article>
+    </section>
+
+    <section class="shortterm-grid">
+        <article class="card shadow-sm shortterm-card">
+            <div class="card-body">
+                <h3 class="shortterm-card-title">{% bilingual "Focus Symbols" "Focus 标的" %}</h3>
+                <div class="table-responsive shortterm-table-wrap">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>#</th>
+                                <th>{% bilingual "Symbol" "标的" %}</th>
+                                <th>{% bilingual "Joined" "进入时间" %}</th>
+                            </tr>
+                        </thead>
+                        <tbody data-shortterm-role="focus-rows"></tbody>
+                    </table>
+                </div>
+            </div>
+        </article>
+
+        <article class="card shadow-sm shortterm-card">
+            <div class="card-body">
+                <h3 class="shortterm-card-title">{% bilingual "Latest Signals" "最新信号" %}</h3>
+                <div class="table-responsive shortterm-table-wrap">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>{% bilingual "Time" "时间" %}</th>
+                                <th>{% bilingual "Symbol" "标的" %}</th>
+                                <th>{% bilingual "Action" "建议" %}</th>
+                                <th>{% bilingual "Strength" "强度" %}</th>
+                            </tr>
+                        </thead>
+                        <tbody data-shortterm-role="signal-rows"></tbody>
+                    </table>
+                </div>
+            </div>
+        </article>
+
+        <article class="card shadow-sm shortterm-card">
+            <div class="card-body">
+                <h3 class="shortterm-card-title">{% bilingual "Recent Orders" "最近订单" %}</h3>
+                <div class="table-responsive shortterm-table-wrap">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>{% bilingual "Time" "时间" %}</th>
+                                <th>{% bilingual "Symbol" "标的" %}</th>
+                                <th>{% bilingual "Action" "方向" %}</th>
+                                <th>{% bilingual "Status" "状态" %}</th>
+                            </tr>
+                        </thead>
+                        <tbody data-shortterm-role="order-rows"></tbody>
+                    </table>
+                </div>
+            </div>
+        </article>
+
+        <article class="card shadow-sm shortterm-card">
+            <div class="card-body">
+                <h3 class="shortterm-card-title">{% bilingual "Manual Order" "手动下单" %}</h3>
+                <form class="shortterm-order-form" data-shortterm-role="manual-order-form">
+                    <div class="row g-2">
+                        <div class="col-12 col-md-4">
+                            <input type="text" class="form-control form-control-sm" name="symbol" placeholder="AAPL" required>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <input type="number" class="form-control form-control-sm" name="notional" min="1" step="0.01" placeholder="1000" required>
+                        </div>
+                        <div class="col-12 col-md-4 d-flex gap-2">
+                            <button type="submit" class="btn btn-sm btn-success flex-fill" data-side="buy">{% bilingual "Buy" "买入" %}</button>
+                            <button type="submit" class="btn btn-sm btn-danger flex-fill" data-side="sell">{% bilingual "Sell" "卖出" %}</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </article>
+    </section>
+
+    <dialog class="shortterm-live-dialog" data-shortterm-role="live-dialog">
+        <form method="dialog" class="shortterm-live-form" data-shortterm-role="live-dialog-form">
+            <h3>{% bilingual "Enable Live Trading" "启用实盘交易" %}</h3>
+            <p>{% bilingual "Confirm the risks before switching to Live mode." "切换到 Live 前请确认风险。" %}</p>
+            <label class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" data-shortterm-role="live-confirm-check">
+                <span class="form-check-label">{% bilingual "I understand this will send real orders." "我已知悉将发出真实订单。" %}</span>
+            </label>
+            <label class="form-label">{% bilingual "Type LIVE to continue" "输入 LIVE 继续" %}</label>
+            <input type="text" class="form-control" data-shortterm-role="live-confirm-input" placeholder="LIVE">
+            <div class="shortterm-live-actions">
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-shortterm-role="live-cancel">{% bilingual "Cancel" "取消" %}</button>
+                <button type="button" class="btn btn-danger btn-sm" data-shortterm-role="live-submit">{% bilingual "Confirm" "确认切换" %}</button>
+            </div>
+        </form>
+    </dialog>
+</div>

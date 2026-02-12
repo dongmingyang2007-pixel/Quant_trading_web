@@ -1,0 +1,41 @@
+<header class="write-topbar">
+    <div class="write-topbar-inner">
+        <div class="write-topbar-left">
+            <a class="write-back" href="{% url 'trading:community' %}">
+                <span class="write-back-icon" aria-hidden="true">&larr;</span>
+                <span class="visually-hidden">{% bilingual "Back" "返回" %}</span>
+            </a>
+        </div>
+        <div class="write-topbar-center">
+            <span class="write-status"
+                  data-role="draft-status"
+                  data-saving-text="{% bilingual 'Auto-saving...' '自动保存中...' %}"
+                  data-saved-text="{% bilingual 'Saved' '已保存' %}"
+                  data-failed-text="{% bilingual 'Save failed. Please try again.' '保存失败，请稍后重试。' %}">
+                {% bilingual "Auto-saving..." "自动保存中..." %}
+            </span>
+        </div>
+        <div class="write-topbar-right">
+            <button type="button"
+                    class="write-drafts-btn"
+                    data-role="open-drafts"
+                    data-bs-toggle="offcanvas"
+                    data-bs-target="#draftsDrawer"
+                    aria-controls="draftsDrawer">
+                <span class="write-drafts-icon" aria-hidden="true">📁</span>
+                <span>{% bilingual "Drafts" "草稿箱" %}</span>
+            </button>
+            <button type="submit" class="btn btn-primary write-publish-btn">
+                {% bilingual "Publish" "发布" %}
+            </button>
+            <button type="button"
+                    class="write-more-btn"
+                    data-bs-toggle="offcanvas"
+                    data-bs-target="#writeMetaDrawer"
+                    aria-controls="writeMetaDrawer"
+                    aria-label="{% bilingual 'Open settings' '打开设置' %}">
+                ...
+            </button>
+        </div>
+    </div>
+</header>

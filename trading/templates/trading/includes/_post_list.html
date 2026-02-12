@@ -268,17 +268,3 @@
         </div>
     {% endif %}
 {% endif %}
-
-{% if is_htmx %}
-    <div id="community-post-trigger"
-         hx-swap-oob="true"
-         class="community-load-trigger invisible{% if not next_page_url %} d-none{% endif %}"
-         {% if next_page_url %}
-             hx-get="{{ next_page_url }}"
-             hx-trigger="revealed"
-             hx-target="#community-post-list"
-             hx-swap="beforeend"
-         {% endif %}
-         aria-hidden="true"
-         style="height: 1px;"></div>
-{% endif %}

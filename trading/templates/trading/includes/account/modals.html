@@ -1,0 +1,155 @@
+{% if profile_media.feature %}
+<div class="modal fade" id="profile-preview-modal" tabindex="-1" aria-labelledby="profile-preview-modal-label" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content profile-preview-modal">
+            <div class="modal-header">
+                <h5 class="modal-title" id="profile-preview-modal-label">{% bilingual "Public preview" "公开视图预览" %}</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{% bilingual 'Close' '关闭' %}"></button>
+            </div>
+            <div class="modal-body">
+                <img src="{{ profile_media.feature }}" alt="{% bilingual 'Featured banner' '展示横幅' %}" class="profile-preview-modal-image" loading="lazy">
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="modal fade" id="avatar-upload-modal" tabindex="-1" aria-labelledby="avatar-upload-modal-label" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content avatar-upload-modal" data-role="avatar-uploader">
+            <div class="modal-header">
+                <h5 class="modal-title" id="avatar-upload-modal-label">{% bilingual "Update avatar" "更新头像" %}</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{% bilingual 'Close' '关闭' %}"></button>
+            </div>
+            <div class="modal-body">
+                <div class="avatar-dropzone p-4 text-center" data-role="avatar-dropzone">
+                    <input
+                        type="file"
+                        name="avatar"
+                        id="id_avatar"
+                        class="form-control d-none"
+                        data-role="avatar-input"
+                        accept="image/*"
+                        form="account-profile-form">
+                    <input
+                        type="hidden"
+                        name="avatar_cropped_data"
+                        data-role="avatar-cropped"
+                        form="account-profile-form">
+                    <div class="avatar-dropzone-inner">
+                        <div class="dropzone-title">{% bilingual "Drag & drop your avatar here" "拖拽头像到这里" %}</div>
+                        <div class="dropzone-subtext">
+                            {% if profile_form.avatar.help_text %}
+                                {{ profile_form.avatar.help_text }}
+                            {% else %}
+                                {% bilingual "JPG/PNG recommended, 400x400 or larger." "支持 JPG/PNG，建议 400x400 以上。" %}
+                            {% endif %}
+                        </div>
+                        <button type="button" class="btn btn-outline-secondary btn-sm mt-2" data-role="avatar-pick">
+                            {% bilingual "Choose image" "选择图片" %}
+                        </button>
+                    </div>
+                </div>
+                <div class="avatar-cropper d-none" data-role="avatar-cropper">
+                    <div class="cropper-stage avatar-cropper-stage" data-role="avatar-crop-stage">
+                        <div class="cropper-mask cropper-mask--circle" data-role="avatar-crop-frame">
+                            <img src="" alt="{% bilingual 'Avatar crop preview' '头像裁剪预览' %}" data-role="avatar-crop-image">
+                        </div>
+                    </div>
+                    <div class="avatar-cropper-controls mt-3">
+                        <span class="cropper-zoom-icon" aria-hidden="true">
+                            <svg class="bi bi-dash-lg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M2 8a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11A.5.5 0 0 1 2 8"/>
+                            </svg>
+                        </span>
+                        <label class="form-label visually-hidden" for="avatar-crop-zoom">{% bilingual "Zoom" "缩放" %}</label>
+                        <input
+                            type="range"
+                            min="1"
+                            max="3"
+                            step="0.01"
+                            value="1"
+                            id="avatar-crop-zoom"
+                            class="form-range"
+                            data-role="avatar-crop-zoom">
+                        <span class="cropper-zoom-icon" aria-hidden="true">
+                            <svg class="bi bi-plus-lg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                            </svg>
+                        </span>
+                    </div>
+                </div>
+                <div class="avatar-upload-status text-muted small mt-2" data-role="avatar-status"></div>
+                {% if profile_form.avatar.errors %}
+                    <div class="invalid-feedback d-block">
+                        {% for error in profile_form.avatar.errors %}{{ error }}{% if not forloop.last %}<br>{% endif %}{% endfor %}
+                    </div>
+                {% endif %}
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                    {% bilingual "Cancel" "取消" %}
+                </button>
+                <button type="submit" class="btn btn-primary" data-role="avatar-save" form="account-profile-form">
+                    {% bilingual "Save avatar" "保存头像" %}
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="timeline-media-modal" tabindex="-1" aria-labelledby="timeline-media-modal-label" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content timeline-media-modal">
+            <div class="modal-header">
+                <h5 class="modal-title" id="timeline-media-modal-label">{% bilingual "Activity media" "动态附件" %}</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{% bilingual 'Close' '关闭' %}"></button>
+            </div>
+            <div class="modal-body">
+                <img src="" alt="{% bilingual 'Activity media' '动态附件' %}" class="timeline-media-modal-image" data-role="timeline-modal-image" loading="lazy">
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="profile-cropper-modal d-none" data-role="feature-cropper" aria-hidden="true">
+    <div class="cropper-dialog">
+        <div class="cropper-header">
+            <h2 class="cropper-title">{% bilingual "Crop featured photo" "裁剪展示照片" %}</h2>
+            <button type="button" class="btn-close" data-role="crop-cancel" aria-label="{% bilingual 'Close' '关闭' %}"></button>
+        </div>
+        <div class="cropper-body">
+            <div class="cropper-stage" data-role="crop-stage">
+                <div class="cropper-mask cropper-mask--rect" data-role="crop-frame">
+                    <img src="" alt="{% bilingual 'Image to crop' '待裁剪图片' %}" data-role="crop-image">
+                </div>
+            </div>
+            <div class="cropper-controls mt-3">
+                <span class="cropper-zoom-icon" aria-hidden="true">
+                    <svg class="bi bi-dash-lg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M2 8a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11A.5.5 0 0 1 2 8"/>
+                    </svg>
+                </span>
+                <label class="form-label visually-hidden" for="feature-crop-zoom">{% bilingual "Zoom" "缩放" %}</label>
+                <input
+                    type="range"
+                    min="1"
+                    max="3"
+                    step="0.01"
+                    value="1"
+                    id="feature-crop-zoom"
+                    class="form-range"
+                    data-role="crop-zoom">
+                <span class="cropper-zoom-icon" aria-hidden="true">
+                    <svg class="bi bi-plus-lg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+                    </svg>
+                </span>
+            </div>
+        </div>
+        <div class="cropper-footer">
+            <button type="button" class="btn btn-outline-secondary" data-role="crop-skip">{% bilingual "Use original" "使用原图" %}</button>
+            <button type="button" class="btn btn-primary" data-role="crop-confirm">{% bilingual "Crop & apply" "裁剪并使用" %}</button>
+        </div>
+    </div>
+</div>

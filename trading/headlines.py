@@ -10,8 +10,7 @@ from typing import Any, Dict, List
 
 from django.conf import settings
 
-from .network import get_requests_session, resolve_retry_config, retry_call
-from .alpaca_data import fetch_news
+from .market_provider import fetch_news, resolve_news_provider
 
 from .file_utils import atomic_write_json
 
@@ -213,14 +212,15 @@ def _has_fresh_story(stories: List[Dict[str, Any]]) -> bool:
     return False
 
 
-def _fetch_alpaca_headlines(user_id: str | None = None) -> List[Dict[str, str]]:
+def _fetch_provider_headlines(user_id: str | None = None) -> List[Dict[str, str]]:
     symbols_raw = os.environ.get("ALPACA_NEWS_SYMBOLS", "SPY,QQQ,AAPL,MSFT,NVDA")
     symbols = [sym.strip() for sym in symbols_raw.split(",") if sym.strip()]
     try:
         limit = int(os.environ.get("ALPACA_NEWS_LIMIT", str(AGGREGATE_TARGET)))
     except ValueError:
         limit = AGGREGATE_TARGET
-    items = fetch_news(symbols=symbols, limit=limit, user_id=user_id)
+    provider = resolve_news_provider(user_id=user_id)
+    items = fetch_news(symbols=symbols, limit=limit, user_id=user_id, provider=provider)
     if not items:
         return []
     aggregated: List[Dict[str, str]] = []
@@ -260,146 +260,12 @@ def _fetch_alpaca_headlines(user_id: str | None = None) -> List[Dict[str, str]]:
 
 
 def _fetch_remote_headlines(user_id: str | None = None) -> tuple[List[Dict[str, str]], bool]:
-    alpaca_headlines = _fetch_alpaca_headlines(user_id=user_id)
-    if alpaca_headlines:
-        return (alpaca_headlines, False)
-    # 先尝试用 yfinance 自带新闻源，命中则可直接使用
-    yf_headlines = _fetch_yfinance_headlines()
-    if yf_headlines:
-        return (yf_headlines, False)
-    if os.environ.get("ENABLE_WEB_SEARCH", "1") == "0":
+    provider_items = _fetch_provider_headlines(user_id=user_id)
+    if not provider_items:
         return (DEFAULT_HEADLINES, True)
-    try:
-        from ddgs import DDGS  # type: ignore
-    except ImportError:
-        try:
-            from duckduckgo_search import DDGS  # type: ignore
-        except ImportError:
-            return (DEFAULT_HEADLINES, True)
-
-    queries = [
-        "global stock market news today",
-        "wall street market wrap",
-        "asia markets opening news",
-        "europe market close recap",
-        "宏观 市场 今日 要闻 股票",
-        "科技股 最新 动态",
-    ]
-    region = os.environ.get("DDG_REGION", "wt-wt")
-    safesearch = os.environ.get("DDG_SAFESEARCH", "off")
-    proxy = os.environ.get("DDG_PROXY")
-    proxies = {"http": proxy, "https": proxy} if proxy else None
-    retry_config = resolve_retry_config()
-    timeout_seconds = max(1, int(retry_config.timeout))
-
-    def _build_ddg_client(client_cls):
-        try:
-            return client_cls(proxies=proxies, timeout=timeout_seconds)  # type: ignore[arg-type]
-        except TypeError:
-            proxy_value = None
-            if isinstance(proxies, dict):
-                proxy_value = proxies.get("http") or proxies.get("https")
-            elif isinstance(proxies, str):
-                proxy_value = proxies
-            try:
-                return client_cls(proxy=proxy_value, timeout=timeout_seconds)  # type: ignore[arg-type]
-            except TypeError:
-                return client_cls()
-
-    aggregated: List[Dict[str, str]] = []
-    seen_urls: set[str] = set()
-    try:
-        with _build_ddg_client(DDGS) as ddgs:  # type: ignore
-            for query in queries:
-                try:
-                    def _news_query():
-                        return list(
-                            ddgs.news(  # type: ignore
-                                query,
-                                region=region,
-                                safesearch=safesearch,
-                                max_results=DDG_MAX_RESULTS,
-                            )
-                        )
-
-                    results = retry_call(_news_query, config=retry_config)
-                except Exception:
-                    try:
-                        def _text_query():
-                            return list(
-                                ddgs.text(  # type: ignore
-                                    query,
-                                    region=region,
-                                    safesearch=safesearch,
-                                    max_results=DDG_MAX_RESULTS,
-                                )
-                            )
-
-                        results = retry_call(_text_query, config=retry_config)
-                    except Exception:
-                        results = []
-                for raw in results:
-                    normalized = _normalize_item(raw)
-                    url = normalized.get("url")
-                    if not url or url in seen_urls:
-                        continue
-                    seen_urls.add(url)
-                    normalized["score"] = _score_item(normalized)
-                    aggregated.append(normalized)
-                if len(aggregated) >= AGGREGATE_TARGET:
-                    break
-    except Exception:
-        return (DEFAULT_HEADLINES, True)
-
-    if not aggregated:
-        return (DEFAULT_HEADLINES, True)
-
-    aggregated.sort(key=lambda x: x.get("score", 0), reverse=True)
-
-    now_utc = datetime.now(timezone.utc)
-    max_age_cutoff = now_utc - HEADLINE_MAX_AGE
-    fresh_items: List[Dict[str, str]] = []
-    stale_items: List[Dict[str, str]] = []
-    undated_items: List[Dict[str, str]] = []
-    unique_by_title: Dict[str, Dict[str, str]] = {}
-    for item in aggregated:
-        key = item["title"]
-        if key not in unique_by_title:
-            unique_by_title[key] = item
-    cutoff = now_utc - FRESHNESS_THRESHOLD
-    for item in unique_by_title.values():
-        published_iso = item.get("published_dt") or ""
-        published_dt = None
-        if published_iso:
-            try:
-                published_dt = datetime.fromisoformat(published_iso)
-            except ValueError:
-                published_dt = None
-        if published_dt and published_dt < max_age_cutoff:
-            continue  # 丢弃超过一周的旧新闻
-        if published_dt and published_dt >= cutoff:
-            fresh_items.append(item)
-        elif published_dt:
-            stale_items.append(item)
-        else:
-            undated_items.append(item)
-
-    selected: List[Dict[str, str]] = list(fresh_items)
-    if len(selected) < MIN_HEADLINES:
-        for pool in (stale_items, undated_items):
-            for entry in pool:
-                if len(selected) >= MAX_HEADLINES:
-                    break
-                selected.append(entry)
-            if len(selected) >= MAX_HEADLINES:
-                break
-
-    if not selected:
-        return (DEFAULT_HEADLINES, True)
-
-    top_items = selected[:MAX_HEADLINES]
+    top_items = provider_items[:MAX_HEADLINES]
     for item in top_items:
-        heat = item.pop("score", 0)
+        heat = int(item.pop("score", 0) or 0)
         story_id = item.get("id") or hashlib.sha256(item.get("title", "").encode("utf-8")).hexdigest()[:16]
         item["readers"] = estimate_readers(story_id, heat)
     return (top_items, False)
@@ -430,74 +296,3 @@ def get_global_headlines(refresh: bool = False, *, user_id: str | None = None) -
         _save_cache(payload)
 
     return stories
-def _fetch_yfinance_headlines() -> List[Dict[str, str]]:
-    """Use yfinance ticker news as a lightweight, dependency-free headline source."""
-    try:
-        import yfinance as yf  # type: ignore
-    except Exception:
-        return []
-
-    tickers = [sym.strip() for sym in os.environ.get("HEADLINE_TICKERS", "SPY,QQQ,GLD,BTC-USD").split(",") if sym.strip()]
-    aggregated: List[Dict[str, str]] = []
-    seen_urls: set[str] = set()
-    retry_config = resolve_retry_config()
-    session = get_requests_session(retry_config.timeout)
-
-    def _extract_image(thumbnail: Dict[str, Any] | None) -> str:
-        if not thumbnail:
-            return ""
-        if thumbnail.get("originalUrl"):
-            return thumbnail["originalUrl"]
-        resolutions = thumbnail.get("resolutions") or []
-        for res in resolutions:
-            if res.get("url"):
-                return res["url"]
-        return ""
-
-    for symbol in tickers:
-        try:
-            def _download_news():
-                ticker = yf.Ticker(symbol, session=session)
-                return ticker.news or []
-
-            news_items = retry_call(_download_news, config=retry_config)
-        except Exception:
-            continue
-        for entry in news_items:
-            content = entry.get("content") or {}
-            title = content.get("title")
-            if not title:
-                continue
-            url = (
-                (content.get("canonicalUrl") or {}).get("url")
-                or (content.get("clickThroughUrl") or {}).get("url")
-                or ""
-            )
-            if not url or url in seen_urls:
-                continue
-            seen_urls.add(url)
-            summary = content.get("summary") or content.get("description") or ""
-            provider = (content.get("provider") or {}).get("displayName") or symbol.upper()
-            published = content.get("pubDate") or content.get("displayTime") or ""
-            published_display, published_iso = _parse_datetime(published)
-            thumbnail = _extract_image(content.get("thumbnail"))
-            story_id = entry.get("id") or hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
-            heat = int(entry.get("heat", 0) or 0)
-            aggregated.append(
-                {
-                    "id": story_id,
-                    "title": title.strip(),
-                    "url": url,
-                    "snippet": summary.strip(),
-                    "image": thumbnail,
-                    "source": provider,
-                    "published": published_display,
-                    "published_dt": published_iso,
-                    "heat": heat,
-                }
-            )
-            if len(aggregated) >= AGGREGATE_TARGET:
-                break
-        if len(aggregated) >= AGGREGATE_TARGET:
-            break
-    return aggregated

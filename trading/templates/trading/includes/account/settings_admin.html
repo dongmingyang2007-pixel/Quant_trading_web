@@ -1,0 +1,16 @@
+<section class="account-settings-panel" data-settings-panel="admin" id="account-settings-panel-admin" role="tabpanel" aria-labelledby="account-settings-admin">
+    <section class="account-card">
+        <div class="account-card-head">
+            <h2>{% bilingual "Admin tools" "高级工具" %}</h2>
+            <span class="badge bg-warning text-dark">{% bilingual "Superuser only" "仅超级用户" %}</span>
+        </div>
+        <div class="settings-split">
+            <div class="settings-split-main">
+                <p class="text-muted mb-0">{% bilingual "Access internal observability dashboards for telemetry and diagnostics." "进入内部可观测性面板以查看遥测与诊断信息。" %}</p>
+            </div>
+            <div class="settings-split-side">
+                <a class="btn btn-outline-secondary w-100" href="{% url 'trading:observability' %}">{% bilingual "Open observability" "打开可观测性" %}</a>
+            </div>
+        </div>
+    </section>
+</section>

@@ -1,0 +1,26 @@
+<div class="community-toolbar community-toolbar-v2">
+    <div class="community-topic-meta">
+        <div class="topic-name">#{{ active_topic.name }}</div>
+        <div class="topic-intro text-muted">
+            {% if active_topic.description %}
+                {{ active_topic.description }}
+            {% else %}
+                {% bilingual "Kick off the discussion anytime." "欢迎开始讨论。" %}
+            {% endif %}
+        </div>
+    </div>
+    <div class="community-toolbar-actions">
+        <div class="community-sort-tabs btn-group" role="tablist" aria-label="{% bilingual 'Sort posts' '帖子排序' %}">
+            <a class="btn btn-outline-secondary btn-sm{% if sort == 'trending' %} active{% endif %}"
+               role="tab"
+               href="?topic={{ active_topic.topic_id }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}&sort=trending">
+                🔥 {% bilingual "Trending" "趋势" %}
+            </a>
+            <a class="btn btn-outline-secondary btn-sm{% if sort == 'latest' %} active{% endif %}"
+               role="tab"
+               href="?topic={{ active_topic.topic_id }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}&sort=latest">
+                🕒 {% bilingual "Latest" "最新" %}
+            </a>
+        </div>
+    </div>
+</div>

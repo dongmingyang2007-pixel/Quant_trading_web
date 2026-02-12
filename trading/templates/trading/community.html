@@ -9,7 +9,8 @@
 <link rel="stylesheet" href="https://unpkg.com/mathlive@0.101.0/dist/mathlive.core.css">
 <link rel="stylesheet" href="https://unpkg.com/mathlive@0.101.0/dist/mathlive.css">
 <link rel="stylesheet" href="https://unpkg.com/mathlive@0.101.0/dist/mathlive-fonts.css">
-<link rel="stylesheet" href="{% static 'trading/css/community.css' %}">
+<link rel="stylesheet" href="{% static 'trading/css/community.css' %}?v={{ STATIC_VERSION|default:'20260211-community-v2-base' }}">
+<link rel="stylesheet" href="{% static 'trading/css/community_hub_v2.css' %}?v={{ STATIC_VERSION|default:'20260211-community-v2' }}">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css">
 {% endblock %}
 
@@ -18,114 +19,24 @@
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" nonce="{{ csp_nonce }}" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.min.js" nonce="{{ csp_nonce }}" defer></script>
 <script src="https://unpkg.com/mathlive@0.101.0/dist/mathlive.min.js" nonce="{{ csp_nonce }}" defer></script>
-<script src="{% static 'trading/js/community.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
+<script src="{% static 'trading/js/community.js' %}?v={{ STATIC_VERSION|default:'20260211-community-js-v2' }}" nonce="{{ csp_nonce }}" defer></script>
 {% endblock %}
 
 {% block content %}
-<div class="community-page container-xl"
+<div class="community-page community-page-v2 container-xl"
      data-like-endpoint="{% url 'trading:community_like' %}"
      data-comment-endpoint="{% url 'trading:community_comment' %}"
      data-active-topic-id="{{ active_topic.topic_id }}"
      data-active-topic-name="{{ active_topic.name }}"
      data-share-history-id="{{ share_history_id }}"
      data-backtest-base="{% url 'trading:backtest' %}">
-    <header class="community-hero">
-        <div>
-            <p class="community-kicker">Social Lounge</p>
-            <h1 class="community-title">{% bilingual "Community Hub" "社区广场" %}</h1>
-            <p class="community-subtitle">
-                {% bilingual "Discuss tactics, review markets, and share trading inspiration. Pick a topic and join the conversation." "探讨策略、复盘行情、分享灵感。选择一个话题，留下你的见解。" %}
-            </p>
-        </div>
-        <div class="community-identity">
-            <span class="community-avatar">
-                {% if avatar_url %}
-                    <img src="{{ avatar_url }}" alt="{{ display_name }}" loading="lazy">
-                {% else %}
-                    {{ display_name|first|upper }}
-                {% endif %}
-            </span>
-            <div class="community-identity-text">
-                <p class="community-welcome">{% bilingual "Welcome," "欢迎，" %}{{ display_name }}！</p>
-                <p class="community-hint">{% bilingual "Be friendly and professional. Respect every perspective." "保持友好、专业，尊重社区成员的观点。" %}</p>
-            </div>
-        </div>
-        <div class="community-hero-actions">
-            <a class="btn btn-light community-write-cta shadow-sm" href="{% url 'trading:community_write' %}">
-                <span class="me-2">✍️</span>{% bilingual "Write post" "写文章" %}
-            </a>
-        </div>
-    </header>
+    {% include "trading/includes/community/hub_header.html" %}
+    {% include "trading/includes/community/hub_search.html" %}
 
-    <section class="community-search-hero" aria-label="{% bilingual 'Search community posts' '搜索社区内容' %}">
-        <div class="search-hero-inner">
-            <form class="search-hero-form" method="get" action="">
-                <input type="hidden" name="topic" value="{{ active_topic.topic_id }}">
-                {% if sort %}
-                    <input type="hidden" name="sort" value="{{ sort }}">
-                {% endif %}
-                <div class="input-group input-group-lg search-hero-group rounded-pill shadow-sm">
-                    <span class="input-group-text search-hero-icon">🔍</span>
-                    <input type="search"
-                           name="q"
-                           class="form-control search-hero-input"
-                           value="{{ search_query }}"
-                           placeholder="{% bilingual 'Search strategy ideas, API guides, or discussions...' '搜索策略灵感、API 教程或用户讨论...' %}"
-                           aria-label="{% bilingual 'Search posts' '搜索帖子' %}">
-                    <button class="btn btn-primary search-hero-submit" type="submit">
-                        {% bilingual "Search" "搜索" %}
-                    </button>
-                </div>
-            </form>
-            <div class="search-hero-pills" role="tablist" aria-label="{% bilingual 'Topic filters' '话题筛选' %}">
-                <a class="topic-pill{% if active_topic.topic_id == 'topic-general' %} is-active{% endif %}"
-                   href="?topic=topic-general{% if search_query %}&q={{ search_query|urlencode }}{% endif %}{% if sort %}&sort={{ sort }}{% endif %}"
-                   hx-get="?topic=topic-general{% if search_query %}&q={{ search_query|urlencode }}{% endif %}{% if sort %}&sort={{ sort }}{% endif %}"
-                   hx-target="#community-post-list"
-                   hx-swap="innerHTML"
-                   hx-push-url="true">
-                    {% bilingual "All" "全部" %}
-                </a>
-                {% for topic in topics %}
-                    {% if topic.topic_id != 'topic-general' %}
-                    <a class="topic-pill{% if topic.topic_id == active_topic.topic_id %} is-active{% endif %}"
-                       href="?topic={{ topic.topic_id }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}{% if sort %}&sort={{ sort }}{% endif %}"
-                       hx-get="?topic={{ topic.topic_id }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}{% if sort %}&sort={{ sort }}{% endif %}"
-                       hx-target="#community-post-list"
-                       hx-swap="innerHTML"
-                       hx-push-url="true">
-                        #{{ topic.name }}
-                    </a>
-                    {% endif %}
-                {% endfor %}
-            </div>
-        </div>
-    </section>
+    <div class="community-layout community-layout-v2">
+        {% include "trading/includes/community/hub_topics_sidebar.html" %}
 
-    <div class="community-layout">
-        <aside class="community-topics">
-            <div class="topic-head">
-                <span>{% bilingual "Topics" "话题广场" %}</span>
-            </div>
-            <ul class="topic-list" data-role="topic-list">
-                {% for topic in topics %}
-                <li class="topic-item{% if topic.topic_id == active_topic.topic_id %} is-active{% endif %}">
-                    <a href="?topic={{ topic.topic_id }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}{% if sort %}&sort={{ sort }}{% endif %}" data-topic-id="{{ topic.topic_id }}">
-                        #{{ topic.name }}
-                    </a>
-                    <span class="topic-desc text-muted">
-                        {% if topic.description %}
-                            {{ topic.description }}
-                        {% else %}
-                            {% bilingual "Feel free to chat." "随便聊聊吧。" %}
-                        {% endif %}
-                    </span>
-                </li>
-                {% endfor %}
-            </ul>
-        </aside>
-
-        <main class="community-main">
+        <main class="community-main community-main-v2">
             <div class="alert d-none" data-role="post-alert"></div>
             {% if post_success %}
                 <div class="alert alert-success">{{ post_success }}</div>
@@ -134,48 +45,8 @@
                 <div class="alert alert-danger">{{ post_error }}</div>
             {% endif %}
 
-            <div class="community-toolbar">
-                <div class="community-topic-meta">
-                    <div class="topic-name">#{{ active_topic.name }}</div>
-                    <div class="topic-intro text-muted">
-                        {% if active_topic.description %}
-                            {{ active_topic.description }}
-                        {% else %}
-                            {% bilingual "Kick off the discussion anytime." "欢迎开始讨论。" %}
-                        {% endif %}
-                    </div>
-                </div>
-                <div class="community-toolbar-actions">
-                    <div class="community-sort-tabs btn-group" role="tablist" aria-label="{% bilingual 'Sort posts' '帖子排序' %}">
-                        <a class="btn btn-outline-secondary btn-sm{% if sort == 'trending' %} active{% endif %}"
-                           role="tab"
-                           href="?topic={{ active_topic.topic_id }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}&sort=trending">
-                            🔥 {% bilingual "Trending" "趋势" %}
-                        </a>
-                        <a class="btn btn-outline-secondary btn-sm{% if sort == 'latest' %} active{% endif %}"
-                           role="tab"
-                           href="?topic={{ active_topic.topic_id }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}&sort=latest">
-                            🕒 {% bilingual "Latest" "最新" %}
-                        </a>
-                    </div>
-                </div>
-            </div>
-
-            <section class="community-feed" data-role="feed">
-                <div id="community-post-list">
-                    {% include "trading/includes/_post_list.html" %}
-                </div>
-                <div id="community-post-trigger"
-                     class="community-load-trigger invisible{% if not next_page_url %} d-none{% endif %}"
-                     {% if next_page_url %}
-                         hx-get="{{ next_page_url }}"
-                         hx-trigger="revealed"
-                         hx-target="#community-post-list"
-                         hx-swap="beforeend"
-                     {% endif %}
-                     aria-hidden="true"
-                     style="height: 1px;"></div>
-            </section>
+            {% include "trading/includes/community/hub_toolbar.html" %}
+            {% include "trading/includes/community/hub_feed.html" %}
         </main>
     </div>
 </div>

@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import screener
+from ..market_provider import fetch_stock_snapshots, resolve_market_provider
 from ..observability import record_metric, track_latency
-from ..alpaca_data import fetch_stock_snapshots
 from .config import UniverseConfig
 from .storage import read_state, write_state
 
@@ -46,6 +46,7 @@ def build_universe(
     user_id: str | None,
     feed: str | None,
 ) -> list[UniverseEntry]:
+    provider = resolve_market_provider(user_id=user_id)
     symbols = config.symbols or _load_asset_symbols() or screener.CORE_TICKERS_US
     if config.max_symbols and len(symbols) > config.max_symbols:
         symbols = list(symbols)[: config.max_symbols]
@@ -54,7 +55,7 @@ def build_universe(
 
     weights = config.score_weights
     with track_latency("realtime.universe.fetch", symbols=len(symbols)):
-        snapshots = fetch_stock_snapshots(symbols, feed=feed, user_id=user_id)
+        snapshots = fetch_stock_snapshots(symbols, feed=feed, user_id=user_id, provider=provider)
 
     entries: list[UniverseEntry] = []
     for symbol, snapshot in (snapshots or {}).items():

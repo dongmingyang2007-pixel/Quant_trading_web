@@ -1,0 +1,44 @@
+<section class="community-search-hero community-search-hero-v2" aria-label="{% bilingual 'Search community posts' '搜索社区内容' %}">
+    <div class="search-hero-inner">
+        <form class="search-hero-form" method="get" action="">
+            <input type="hidden" name="topic" value="{{ active_topic.topic_id }}">
+            {% if sort %}
+                <input type="hidden" name="sort" value="{{ sort }}">
+            {% endif %}
+            <div class="input-group input-group-lg search-hero-group rounded-pill shadow-sm">
+                <span class="input-group-text search-hero-icon">🔍</span>
+                <input type="search"
+                       name="q"
+                       class="form-control search-hero-input"
+                       value="{{ search_query }}"
+                       placeholder="{% bilingual 'Search strategy ideas, API guides, or discussions...' '搜索策略灵感、API 教程或用户讨论...' %}"
+                       aria-label="{% bilingual 'Search posts' '搜索帖子' %}">
+                <button class="btn btn-primary search-hero-submit" type="submit">
+                    {% bilingual "Search" "搜索" %}
+                </button>
+            </div>
+        </form>
+        <div class="search-hero-pills" role="tablist" aria-label="{% bilingual 'Topic filters' '话题筛选' %}">
+            <a class="topic-pill{% if active_topic.topic_id == 'topic-general' %} is-active{% endif %}"
+               href="?topic=topic-general{% if search_query %}&q={{ search_query|urlencode }}{% endif %}{% if sort %}&sort={{ sort }}{% endif %}"
+               hx-get="?topic=topic-general{% if search_query %}&q={{ search_query|urlencode }}{% endif %}{% if sort %}&sort={{ sort }}{% endif %}"
+               hx-target="#community-post-list"
+               hx-swap="innerHTML"
+               hx-push-url="true">
+                {% bilingual "All" "全部" %}
+            </a>
+            {% for topic in topics %}
+                {% if topic.topic_id != 'topic-general' %}
+                <a class="topic-pill{% if topic.topic_id == active_topic.topic_id %} is-active{% endif %}"
+                   href="?topic={{ topic.topic_id }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}{% if sort %}&sort={{ sort }}{% endif %}"
+                   hx-get="?topic={{ topic.topic_id }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}{% if sort %}&sort={{ sort }}{% endif %}"
+                   hx-target="#community-post-list"
+                   hx-swap="innerHTML"
+                   hx-push-url="true">
+                    #{{ topic.name }}
+                </a>
+                {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+</section>

@@ -78,6 +78,8 @@ class RiskConfig:
     max_position_weight: float = 0.2
     max_leverage: float = 1.0
     min_confidence: float | None = None
+    max_daily_loss_pct: float = 0.03
+    kill_switch_cooldown_seconds: int = 900
 
 
 @dataclass(slots=True)
@@ -344,6 +346,18 @@ def _merge_trading(config: TradingConfig, payload: Mapping[str, Any]) -> Trading
             config.risk.min_confidence = None
         else:
             config.risk.min_confidence = _coerce_float(min_conf, config.risk.min_confidence or 0.0, minimum=0.0)
+        config.risk.max_daily_loss_pct = _coerce_float(
+            risk.get("max_daily_loss_pct"),
+            config.risk.max_daily_loss_pct,
+            minimum=0.0,
+            maximum=1.0,
+        )
+        config.risk.kill_switch_cooldown_seconds = _coerce_int(
+            risk.get("kill_switch_cooldown_seconds"),
+            config.risk.kill_switch_cooldown_seconds,
+            minimum=0,
+            maximum=24 * 3600,
+        )
     execution = payload.get("execution")
     if isinstance(execution, dict):
         config.execution.enabled = _coerce_bool(execution.get("enabled"), config.execution.enabled)

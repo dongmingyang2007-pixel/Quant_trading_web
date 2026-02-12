@@ -1,0 +1,50 @@
+            <header class="account-page-header">
+                <div class="compact-left">
+                <button type="button"
+                        class="compact-avatar avatar-modal-trigger"
+                        data-bs-toggle="modal"
+                        data-bs-target="#avatar-upload-modal"
+                        aria-label="{% bilingual 'Update avatar' '更新头像' %}">
+                    {% if profile_media.avatar %}
+                        <img src="{{ profile_media.avatar }}" alt="{{ user_info.display_name|default:user_info.username }}" loading="lazy">
+                    {% else %}
+                        <span>{{ user_info.display_name|default:user_info.username|first|upper }}</span>
+                    {% endif %}
+                </button>
+                    <div class="compact-meta">
+                        <div class="compact-name">{{ user_info.display_name|default:user_info.username }}</div>
+                        <div class="compact-subtext">@{{ user_info.username }} · {% bilingual "Member since" "加入于" %} {{ user_info.date_joined|date:"Y-m-d" }} · ID : {{ user_info.id }}</div>
+                    </div>
+                </div>
+                <div class="compact-actions">
+                    <span class="badge {% if user_info.email != '未绑定' %}bg-success-subtle text-success-emphasis{% else %}bg-warning-subtle text-warning-emphasis{% endif %}">
+                        {% if user_info.email != "未绑定" %}{% bilingual "Email verified" "邮箱已绑定" %}{% else %}{% bilingual "Email pending" "邮箱待绑定" %}{% endif %}
+                    </span>
+                    <a class="btn btn-outline-secondary btn-sm" href="#account-tab-settings" data-tab-link="settings">
+                        {% bilingual "Settings" "设置" %}
+                    </a>
+                    <div class="account-header-tools">
+                        <details class="account-header-menu">
+                            <summary class="btn btn-outline-secondary btn-sm">
+                                {% bilingual "Quick access" "快捷入口" %}
+                            </summary>
+                            <div class="account-header-menu-panel">
+                                <div class="account-header-menu-section">
+                                    <div class="account-header-menu-title">{% bilingual "Shortcuts" "常用功能" %}</div>
+                                    <div class="account-header-menu-list">
+                                        {% for action in quick_actions %}
+                                            <a class="account-header-menu-item" href="{{ action.url }}">
+                                                <span class="menu-icon">{{ action.icon }}</span>
+                                                <span class="menu-text">
+                                                    <span class="menu-label">{{ action.label }}</span>
+                                                    <span class="menu-desc">{{ action.desc }}</span>
+                                                </span>
+                                            </a>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+            </header>

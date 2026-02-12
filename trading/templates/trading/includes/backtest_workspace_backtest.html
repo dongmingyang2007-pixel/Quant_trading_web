@@ -1,0 +1,11 @@
+{% load i18n i18n_extras %}
+<div class="workbench-section-head">
+    <h2 class="workbench-section-title">{% bilingual "Classic Backtest Workspace" "经典回测工作区" %}</h2>
+    <p class="workbench-section-subtitle">
+        {% bilingual "Keep the full backtest pipeline while aligning interaction and status semantics with short-term trading." "保留经典回测能力，并统一状态语义与交互风格。" %}
+    </p>
+    <p class="workbench-section-subtitle">
+        {% bilingual "Latest ticker in workbench snapshot:" "当前工作台最新标的：" %}
+        <strong data-backtest-summary="latest-ticker">-</strong>
+    </p>
+</div>

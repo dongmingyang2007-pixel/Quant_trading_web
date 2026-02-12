@@ -114,6 +114,24 @@
                     {% endif %}
                 </div>
                 <div class="col-12 col-md-6">
+                    <label class="form-label" for="{{ form.trading_focus.id_for_label }}">
+                        {% if lang_prefix == 'zh' %}交易焦点{% else %}Trading focus{% endif %}
+                    </label>
+                    {{ form.trading_focus }}
+                    <div class="form-text">
+                        {% if lang_prefix == 'zh' %}
+                            短线模式会优先采用盘中口径与更严格执行/风控假设。
+                        {% else %}
+                            Intraday modes bias toward open-close path plus tighter execution/risk assumptions.
+                        {% endif %}
+                    </div>
+                    {% if form.trading_focus.errors %}
+                        <div class="invalid-feedback d-block">
+                            {% for error in form.trading_focus.errors %}{{ error }}{% if not forloop.last %}<br>{% endif %}{% endfor %}
+                        </div>
+                    {% endif %}
+                </div>
+                <div class="col-12 col-md-6">
                     <label class="form-label" for="{{ form.ml_mode.id_for_label }}">
                         {% if lang_prefix == 'zh' %}模型类型{% else %}Model type{% endif %}
                     </label>

@@ -12,9 +12,12 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
 from ..file_utils import update_json_file
+from ..market_provider import (
+    fetch_stock_bars_frame as provider_fetch_stock_bars_frame,
+    fetch_stock_snapshots,
+    resolve_market_provider,
+)
 from ..observability import record_metric, track_latency
-from ..alpaca_data import fetch_stock_snapshots
-from .alpaca import fetch_bars_frame
 from .bars import BarsProcessor
 from .config import RealtimeConfig, DEFAULT_CONFIG_NAME, load_realtime_config
 from .focus import update_focus
@@ -71,13 +74,19 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover
     AlpacaStreamClient = None  # type: ignore[assignment]
 
+try:  # pragma: no cover - optional dependency
+    from .massive import MassiveStreamClient
+except Exception:  # pragma: no cover
+    MassiveStreamClient = None  # type: ignore[assignment]
+
 
 class RealtimeEngine:
     def __init__(self, config: RealtimeConfig, *, user_id: str | None = None) -> None:
         self.config = config
         self.user_id = user_id
+        self.market_data_source = resolve_market_provider(user_id=user_id)
         self.state = EngineState()
-        self.stream_client: AlpacaStreamClient | None = None
+        self.stream_client: AlpacaStreamClient | MassiveStreamClient | None = None
         self.bars_processor: BarsProcessor | None = None
         self.signal_engine: SignalEngine | None = None
         self._last_stream_bar_ts: float = 0.0
@@ -132,6 +141,7 @@ class RealtimeEngine:
         except OSError:
             return
         if self._config_mtime is not None and mtime <= self._config_mtime:
+            self.market_data_source = resolve_market_provider(user_id=self.user_id)
             return
         new_config = load_realtime_config(path)
         self._config_mtime = mtime
@@ -139,6 +149,9 @@ class RealtimeEngine:
 
     def _apply_config(self, new_config: RealtimeConfig) -> None:
         old = self.config
+        old_source = self.market_data_source
+        self.market_data_source = resolve_market_provider(user_id=self.user_id)
+        source_changed = old_source != self.market_data_source
         self.config = new_config
         stream_changed = (
             old.engine.stream_enabled != new_config.engine.stream_enabled
@@ -149,7 +162,7 @@ class RealtimeEngine:
             or old.engine.bar_aggregate_seconds != new_config.engine.bar_aggregate_seconds
             or old.engine.stale_seconds != new_config.engine.stale_seconds
         )
-        if stream_changed:
+        if stream_changed or source_changed:
             self._stop_stream()
             if new_config.engine.stream_enabled:
                 self._ensure_stream()
@@ -250,6 +263,10 @@ class RealtimeEngine:
             self._apply_stream_symbols()
 
     def _maybe_fetch_bars(self, now: float, *, force: bool = False) -> None:
+        if (not self.config.engine.stream_enabled or not self.stream_client) and (
+            now - self._last_rest_fallback_ts < self.config.engine.focus_refresh_seconds
+        ):
+            return
         if self.config.engine.stream_enabled and self.stream_client:
             if self.stream_client.is_connected() and (now - self._last_stream_bar_ts) < self.config.engine.focus_refresh_seconds:
                 return
@@ -267,17 +284,18 @@ class RealtimeEngine:
         if not symbols:
             return
         with track_latency("realtime.bars.fetch", symbols=len(symbols)):
-            frame = fetch_bars_frame(
+            frame = provider_fetch_stock_bars_frame(
                 symbols,
                 timeframe=self.config.engine.bar_timeframe,
                 limit=self.config.engine.bar_limit,
                 feed=self.config.engine.feed,
                 user_id=self.user_id,
+                provider=self.market_data_source,
             )
         rows = _extract_latest_bars(frame)
         if rows:
             for row in rows:
-                row.setdefault("source", "rest")
+                row.setdefault("source", self.market_data_source)
             stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
             append_ndjson(f"bars_{stamp}.ndjson", rows)
             write_state(
@@ -287,12 +305,27 @@ class RealtimeEngine:
             record_metric("realtime.bars.updated", rows=len(rows))
             if self.config.engine.stream_enabled:
                 record_metric("realtime.bars.fallback", rows=len(rows))
-                self._last_rest_fallback_ts = now
+            self._last_rest_fallback_ts = now
 
     def _ensure_stream(self) -> None:
         if not self.config.engine.stream_enabled or self.stream_client:
             return
-        if AlpacaStreamClient is None:
+        provider = str(self.market_data_source or "").lower()
+        if provider not in {"alpaca", "massive"}:
+            write_state(
+                "stream_state.json",
+                {
+                    "updated_at": time.time(),
+                    "status": "disabled",
+                    "detail": f"stream_not_supported_for_{provider or 'unknown'}",
+                },
+            )
+            record_metric("realtime.stream.disabled", reason="provider_not_supported", provider=provider)
+            return
+        if provider == "alpaca" and AlpacaStreamClient is None:
+            record_metric("realtime.stream.disabled", reason="missing_dependency", provider=provider)
+            return
+        if provider == "massive" and MassiveStreamClient is None:
             record_metric("realtime.stream.disabled", reason="missing_dependency")
             return
         if not acquire_stream("engine"):
@@ -305,22 +338,34 @@ class RealtimeEngine:
             stale_seconds=self.config.engine.stale_seconds,
             on_bar_5s=self._handle_stream_bar,
         )
-        client = AlpacaStreamClient(
-            user_id=self.user_id,
-            feed=self.config.engine.feed,
-            stream_url=self.config.engine.stream_url,
-            stream_trades=self.config.engine.stream_trades,
-            stream_quotes=self.config.engine.stream_quotes,
-            reconnect_seconds=self.config.engine.reconnect_seconds,
-            on_trade=self.bars_processor.on_trade if self.bars_processor else None,
-            on_quote=self.bars_processor.on_quote if self.bars_processor else None,
-            on_status=self._handle_stream_status,
-        )
+        if provider == "massive":
+            client = MassiveStreamClient(
+                user_id=self.user_id,
+                stream_url=self.config.engine.stream_url,
+                stream_trades=self.config.engine.stream_trades,
+                stream_quotes=self.config.engine.stream_quotes,
+                reconnect_seconds=self.config.engine.reconnect_seconds,
+                on_trade=self.bars_processor.on_trade if self.bars_processor else None,
+                on_quote=self.bars_processor.on_quote if self.bars_processor else None,
+                on_status=self._handle_stream_status,
+            )
+        else:
+            client = AlpacaStreamClient(
+                user_id=self.user_id,
+                feed=self.config.engine.feed,
+                stream_url=self.config.engine.stream_url,
+                stream_trades=self.config.engine.stream_trades,
+                stream_quotes=self.config.engine.stream_quotes,
+                reconnect_seconds=self.config.engine.reconnect_seconds,
+                on_trade=self.bars_processor.on_trade if self.bars_processor else None,
+                on_quote=self.bars_processor.on_quote if self.bars_processor else None,
+                on_status=self._handle_stream_status,
+            )
         if client.start():
             self.stream_client = client
         else:
             release_stream("engine")
-            record_metric("realtime.stream.disabled", reason="credentials_missing")
+            record_metric("realtime.stream.disabled", reason="credentials_missing", provider=provider)
 
     def _ensure_trading_pipeline(self) -> None:
         if self.trading_pipeline or not self.config.trading.enabled:
@@ -346,6 +391,13 @@ class RealtimeEngine:
                     "strategy_count": pipeline.metadata.get("strategy_count"),
                     "strategies": [strategy.name for strategy in pipeline.strategies],
                     "execution_enabled": self.config.trading.execution.enabled,
+                    "risk": {
+                        "max_position_weight": self.config.trading.risk.max_position_weight,
+                        "max_leverage": self.config.trading.risk.max_leverage,
+                        "min_confidence": self.config.trading.risk.min_confidence,
+                        "max_daily_loss_pct": self.config.trading.risk.max_daily_loss_pct,
+                        "kill_switch_cooldown_seconds": self.config.trading.risk.kill_switch_cooldown_seconds,
+                    },
                 },
             )
         else:
@@ -409,7 +461,12 @@ class RealtimeEngine:
             return
         if now - self._prev_close_ts < 300:
             return
-        snapshots = fetch_stock_snapshots(symbols, feed=self.config.engine.feed, user_id=self.user_id)
+        snapshots = fetch_stock_snapshots(
+            symbols,
+            feed=self.config.engine.feed,
+            user_id=self.user_id,
+            provider=self.market_data_source,
+        )
         if not isinstance(snapshots, dict):
             return
         for symbol, snapshot in snapshots.items():

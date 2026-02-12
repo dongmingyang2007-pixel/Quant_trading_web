@@ -14,7 +14,7 @@ from django.conf import settings
 from .config import StrategyInput
 from ..headlines import estimate_readers
 from ..network import get_requests_session, resolve_retry_config, retry_call_result
-from ..alpaca_data import fetch_news
+from ..market_provider import fetch_news
 
 
 def fetch_market_context(params: StrategyInput) -> dict[str, Any]:

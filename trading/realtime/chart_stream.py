@@ -8,9 +8,11 @@ from channels.layers import get_channel_layer
 from django.conf import settings
 
 from .alpaca.stream import AlpacaStreamClient
+from .massive.stream import MassiveStreamClient
 from .config import load_realtime_config
 from .stream_registry import acquire_stream, release_stream
 from .chart_store import add_trade as chart_store_add_trade
+from ..market_provider import resolve_market_provider
 from ..observability import record_metric
 
 GROUP_PREFIX = "market-chart"
@@ -19,7 +21,7 @@ AGGREGATE_SECONDS = float(getattr(settings, "MARKET_CHART_STREAM_AGGREGATE_SECON
 MAX_BATCH_SIZE = int(getattr(settings, "MARKET_CHART_STREAM_MAX_BATCH_SIZE", 200))
 
 _LOCK = threading.Lock()
-_CLIENT: AlpacaStreamClient | None = None
+_CLIENT: AlpacaStreamClient | MassiveStreamClient | None = None
 _REF_COUNT = 0
 _USER_ID: str | None = None
 _SYMBOL_REFS: dict[str, int] = {}
@@ -27,6 +29,7 @@ _SYMBOL_ORDER: list[str] = []
 _CURRENT_SYMBOLS: list[str] = []
 _LOCK_HELD = False
 _BATCH: dict[str, dict[str, object]] = {}
+_PROVIDER: str | None = None
 
 
 def _normalize_symbol(value: str | None) -> str | None:
@@ -62,8 +65,27 @@ def _apply_symbols(symbols: list[str]) -> None:
 
 
 def _ensure_stream(user_id: str | None) -> None:
-    global _CLIENT, _USER_ID, _LOCK_HELD
+    global _CLIENT, _USER_ID, _LOCK_HELD, _PROVIDER
     symbols = _resolve_active_symbols()
+    provider = resolve_market_provider(user_id=user_id)
+    if provider not in {"alpaca", "massive"}:
+        if _CLIENT is not None:
+            _CLIENT.stop()
+            _CLIENT = None
+            if _LOCK_HELD:
+                release_stream("market_chart_stream")
+            _CURRENT_SYMBOLS.clear()
+            _LOCK_HELD = False
+            _PROVIDER = None
+        return
+    if _CLIENT is not None and _PROVIDER != provider:
+        _CLIENT.stop()
+        _CLIENT = None
+        if _LOCK_HELD:
+            release_stream("market_chart_stream")
+        _CURRENT_SYMBOLS.clear()
+        _LOCK_HELD = False
+        _PROVIDER = None
     if _CLIENT is None:
         if not acquire_stream("market_chart_stream"):
             # Allow chart stream to run even if another process holds the stream lock.
@@ -74,21 +96,35 @@ def _ensure_stream(user_id: str | None) -> None:
             _LOCK_HELD = True
         config = load_realtime_config()
         _USER_ID = user_id
-        _CLIENT = AlpacaStreamClient(
-            user_id=user_id,
-            feed=config.engine.feed or "sip",
-            stream_url=None,
-            stream_trades=True,
-            stream_quotes=False,
-            reconnect_seconds=5,
-            on_trade=_handle_trade,
-            on_quote=None,
-        )
+        if provider == "massive":
+            _CLIENT = MassiveStreamClient(
+                user_id=user_id,
+                stream_url=None,
+                stream_trades=True,
+                stream_quotes=False,
+                reconnect_seconds=5,
+                on_trade=_handle_trade,
+                on_quote=None,
+            )
+        else:
+            _CLIENT = AlpacaStreamClient(
+                user_id=user_id,
+                feed=config.engine.feed or "sip",
+                stream_url=None,
+                stream_trades=True,
+                stream_quotes=False,
+                reconnect_seconds=5,
+                on_trade=_handle_trade,
+                on_quote=None,
+            )
         if not _CLIENT.start():
-            record_metric("market.chart.stream_failed")
-            release_stream("market_chart_stream")
+            record_metric("market.chart.stream_failed", provider=provider)
+            if _LOCK_HELD:
+                release_stream("market_chart_stream")
+                _LOCK_HELD = False
             _CLIENT = None
             return
+        _PROVIDER = provider
     _apply_symbols(symbols)
 
 
@@ -100,7 +136,7 @@ def subscribe(user_id: str | None) -> None:
 
 
 def unsubscribe() -> None:
-    global _REF_COUNT, _CLIENT, _LOCK_HELD
+    global _REF_COUNT, _CLIENT, _LOCK_HELD, _PROVIDER
     with _LOCK:
         _REF_COUNT = max(0, _REF_COUNT - 1)
         if _REF_COUNT == 0 and _CLIENT:
@@ -112,6 +148,7 @@ def unsubscribe() -> None:
             _SYMBOL_ORDER.clear()
             _CURRENT_SYMBOLS.clear()
             _LOCK_HELD = False
+            _PROVIDER = None
 
 
 def add_symbol(symbol: str | None, *, user_id: str | None = None) -> None:

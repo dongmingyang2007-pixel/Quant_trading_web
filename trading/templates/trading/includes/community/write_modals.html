@@ -1,0 +1,52 @@
+<div class="modal fade" id="mathModal" tabindex="-1" aria-labelledby="mathModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="mathModalLabel">{% bilingual "Insert formula" "插入公式" %}</h5>
+                <button type="button"
+                        class="btn-close"
+                        data-bs-dismiss="modal"
+                        data-role="math-close"
+                        aria-label="{% bilingual 'Close' '关闭' %}"></button>
+            </div>
+            <div class="modal-body">
+                <math-field id="math-input" virtual-keyboard-mode="onfocus"></math-field>
+                <div class="form-text mt-2">
+                    {% bilingual "Use the virtual keyboard to build formulas, then insert into the editor." "使用虚拟键盘编辑公式，然后插入到正文中。" %}
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal" data-role="math-cancel">
+                    {% bilingual "Cancel" "取消" %}
+                </button>
+                <button type="button" class="btn btn-primary" data-role="math-insert">
+                    {% bilingual "Insert" "插入" %}
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="backtestSelectModal" tabindex="-1" aria-labelledby="backtestSelectLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="backtestSelectLabel">
+                    {% bilingual "Select a Backtest to Embed" "选择要嵌入的回测" %}
+                </h5>
+                <button type="button"
+                        class="btn-close"
+                        data-bs-dismiss="modal"
+                        aria-label="{% bilingual 'Close' '关闭' %}"></button>
+            </div>
+            <div class="modal-body">
+                <div id="backtest-list-container" class="py-3">
+                    <div class="d-flex align-items-center justify-content-center gap-2 text-muted">
+                        <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
+                        <span>{% bilingual "Loading backtests..." "正在加载回测..." %}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

@@ -229,16 +229,18 @@ AI_CHAT_FETCH_TIMEOUT_MS = int(
     )
 )
 MARKET_DATA_TIMEOUT_SECONDS = int(os.environ.get("MARKET_DATA_TIMEOUT_SECONDS", 25))
-MARKET_DATA_MAX_WORKERS = int(os.environ.get("MARKET_DATA_MAX_WORKERS", 4))
-MARKET_DATA_RATE_WINDOW_SECONDS = int(os.environ.get("MARKET_DATA_RATE_WINDOW_SECONDS", 90))
-MARKET_DATA_RATE_MAX_CALLS = int(os.environ.get("MARKET_DATA_RATE_MAX_CALLS", 45))
+MARKET_DATA_MAX_WORKERS = int(os.environ.get("MARKET_DATA_MAX_WORKERS", 8))
+# Market API throttle target: high-throughput profile defaults to 12,000 requests / minute.
+MARKET_DATA_RATE_WINDOW_SECONDS = int(os.environ.get("MARKET_DATA_RATE_WINDOW_SECONDS", 60))
+MARKET_DATA_RATE_MAX_CALLS = int(os.environ.get("MARKET_DATA_RATE_MAX_CALLS", 12000))
+MARKET_DATA_RATE_PROFILE = os.environ.get("MARKET_DATA_RATE_PROFILE", "high_throughput")
 MARKET_DATA_RATE_CACHE_ALIAS = os.environ.get("MARKET_DATA_RATE_CACHE_ALIAS", "ratelimit")
 MARKET_RANKINGS_DISABLE_FILTERS = os.environ.get("MARKET_RANKINGS_DISABLE_FILTERS", "1") in {"1", "true", "True"}
 MARKET_RANKINGS_ALLOW_STALE_SNAPSHOTS = os.environ.get(
     "MARKET_RANKINGS_ALLOW_STALE_SNAPSHOTS",
     "1",
 ) in {"1", "true", "True"}
-MARKET_RANKINGS_SNAPSHOT_CHUNK_SIZE = int(os.environ.get("MARKET_RANKINGS_SNAPSHOT_CHUNK_SIZE", 100))
+MARKET_RANKINGS_SNAPSHOT_CHUNK_SIZE = int(os.environ.get("MARKET_RANKINGS_SNAPSHOT_CHUNK_SIZE", 200))
 MARKET_RANKINGS_TIMEFRAME_KEYS = os.environ.get("MARKET_RANKINGS_TIMEFRAME_KEYS", "5d,1mo,6mo")
 MARKET_RANKINGS_TIMEFRAME_SNAPSHOT_TTL = int(os.environ.get("MARKET_RANKINGS_TIMEFRAME_SNAPSHOT_TTL", 1200))
 MARKET_RANKINGS_DAILY_WINDOW_5D = int(os.environ.get("MARKET_RANKINGS_DAILY_WINDOW_5D", 6))
@@ -354,10 +356,15 @@ CELERY_BEAT_SCHEDULE_FILENAME = os.environ.get(
 )
 PAPER_TRADING_INTERVAL_SECONDS = int(os.environ.get("PAPER_TRADING_INTERVAL_SECONDS", "300") or 300)
 ENABLE_PAPER_TRADING_BEAT = os.environ.get("ENABLE_PAPER_TRADING_BEAT", "1") in {"1", "true", "True"}
-MARKET_RANKINGS_REFRESH_SECONDS = max(60, int(os.environ.get("MARKET_RANKINGS_REFRESH_SECONDS", "900") or 900))
+MARKET_RANKINGS_REFRESH_SECONDS = max(60, int(os.environ.get("MARKET_RANKINGS_REFRESH_SECONDS", "300") or 300))
 MARKET_RANKINGS_REFRESH_MARGIN_SECONDS = max(
     0,
-    int(os.environ.get("MARKET_RANKINGS_REFRESH_MARGIN_SECONDS", "30") or 30),
+    int(os.environ.get("MARKET_RANKINGS_REFRESH_MARGIN_SECONDS", "5") or 5),
+)
+MARKET_RANKINGS_CONTINUOUS_LOOP = os.environ.get("MARKET_RANKINGS_CONTINUOUS_LOOP", "1") in {"1", "true", "True"}
+MARKET_RANKINGS_LOOP_DELAY_SECONDS = max(
+    1,
+    int(os.environ.get("MARKET_RANKINGS_LOOP_DELAY_SECONDS", "3") or 3),
 )
 ENABLE_MARKET_RANKINGS_BEAT = os.environ.get("ENABLE_MARKET_RANKINGS_BEAT", "1") in {"1", "true", "True"}
 CELERY_BEAT_SCHEDULE = globals().get("CELERY_BEAT_SCHEDULE", {})
@@ -399,6 +406,10 @@ ALPACA_DATA_WS_URL = os.environ.get(
 )
 ALPACA_DATA_REST_URL = os.environ.get("ALPACA_DATA_REST_URL", "https://data.alpaca.markets")
 ALPACA_TRADING_REST_URL = os.environ.get("ALPACA_TRADING_REST_URL", "https://paper-api.alpaca.markets")
+MASSIVE_REST_URL = os.environ.get("MASSIVE_REST_URL", "https://api.polygon.io")
+MASSIVE_WS_URL = os.environ.get("MASSIVE_WS_URL", "wss://socket.polygon.io/stocks")
+MARKET_DATA_PROVIDER = os.environ.get("MARKET_DATA_PROVIDER", "alpaca")
+MARKET_NEWS_PROVIDER = os.environ.get("MARKET_NEWS_PROVIDER", "follow_data")
 MARKET_CHART_STREAM_MAX_SYMBOLS = int(os.environ.get("MARKET_CHART_STREAM_MAX_SYMBOLS", 20))
 MARKET_CHART_STREAM_AGGREGATE_SECONDS = float(os.environ.get("MARKET_CHART_STREAM_AGGREGATE_SECONDS", 0.1))
 MARKET_CHART_STREAM_MAX_BATCH_SIZE = int(os.environ.get("MARKET_CHART_STREAM_MAX_BATCH_SIZE", 200))
@@ -429,7 +440,7 @@ CONTENT_SECURITY_POLICY = os.environ.get(
     "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
     "font-src 'self' https://fonts.gstatic.com data:; "
     "img-src 'self' data: https:; "
-    "connect-src 'self' https://query1.finance.yahoo.com https://ollama.com https://ollama.com/api https://ollama.com/api/web_search;",
+    "connect-src 'self' https://query1.finance.yahoo.com https://ollama.com https://ollama.com/api https://ollama.com/api/web_search https://api.polygon.io wss://socket.polygon.io;",
 )
 
 # 允许在开发/生产均通过环境变量设置 CSRF 可信域

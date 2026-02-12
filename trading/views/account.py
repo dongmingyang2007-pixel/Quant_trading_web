@@ -259,13 +259,6 @@ def account(request):
             "color": "action-orange",
         },
         {
-            "icon": "🎓",
-            "label": _msg("Learning hub", "学习中心"),
-            "desc": _msg("Hypothesis playbooks", "知识卡片体系"),
-            "url": reverse("trading:learning_center"),
-            "color": "action-purple",
-        },
-        {
             "icon": "💬",
             "label": _msg("Community", "社区广场"),
             "desc": _msg("Share insights", "交流策略灵感"),

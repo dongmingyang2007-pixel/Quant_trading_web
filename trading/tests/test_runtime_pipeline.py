@@ -38,6 +38,14 @@ class _DummyRiskManager:
         return signal
 
 
+class _BlockingRiskManager(_DummyRiskManager):
+    def check_kill_switch(self, _equity):
+        return True, "max_daily_loss"
+
+    def snapshot(self):
+        return {"reason": "max_daily_loss"}
+
+
 class _DummyExecutionClient:
     def __init__(self):
         self.calls = 0
@@ -74,3 +82,29 @@ class RuntimePipelineTests(SimpleTestCase):
         order = results[0].get("order")
         self.assertIsInstance(order, OrderResult)
         self.assertEqual(order.status, "throttled")
+
+    def test_execute_signals_respects_risk_kill_switch(self):
+        execution = _DummyExecutionClient()
+        pipeline = LiveTradingPipeline(
+            strategies=[],
+            combiner=_DummyCombiner(),
+            risk_manager=_BlockingRiskManager(),
+            execution=execution,
+            account=_DummyAccountManager(),
+            execution_config={"max_orders_per_minute": 5},
+        )
+        signals = [
+            CombinedSignal(
+                symbol="MSFT",
+                weight=0.3,
+                action=SignalAction.BUY,
+                confidence=0.8,
+            )
+        ]
+
+        results = pipeline.execute_signals(signals)
+        self.assertEqual(execution.calls, 0)
+        self.assertEqual(len(results), 1)
+        order = results[0].get("order")
+        self.assertIsInstance(order, OrderResult)
+        self.assertEqual(order.status, "risk_blocked:max_daily_loss")

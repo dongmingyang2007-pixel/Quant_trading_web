@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import sys
 import tempfile
 from datetime import date
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 import pandas as pd
@@ -28,10 +26,14 @@ class PriceCacheTests(SimpleTestCase):
             index=pd.date_range("2024-01-02", periods=2, freq="B"),
         )
 
-        mock_yf = SimpleNamespace(download=mock.Mock(return_value=df))
-        with mock.patch.dict(sys.modules, {"yfinance": mock_yf}):
-            with mock.patch.object(core_module, "DATA_CACHE_DIR", tmp_dir):
-                data, _ = core_module.fetch_price_data("AAPL", date(2024, 1, 1), date(2024, 1, 10))
+        with mock.patch.object(core_module, "DATA_CACHE_DIR", tmp_dir), mock.patch(
+            "trading.strategies.core.resolve_market_provider",
+            return_value="alpaca",
+        ), mock.patch(
+            "trading.strategies.core.fetch_stock_bars_frame",
+            return_value=df,
+        ):
+            data, _ = core_module.fetch_price_data("AAPL", date(2024, 1, 1), date(2024, 1, 10))
 
         cache_file = tmp_dir / "AAPL.csv"
         self.assertTrue(cache_file.exists())

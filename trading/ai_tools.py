@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .alpaca_data import fetch_stock_bars, fetch_stock_snapshots
+from .market_provider import fetch_stock_bars, fetch_stock_snapshots
 from .ai_rag import query as rag_query
 from .web_search import search_web
 

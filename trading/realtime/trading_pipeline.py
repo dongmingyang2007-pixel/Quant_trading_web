@@ -38,6 +38,8 @@ def build_trading_pipeline(config: RealtimeConfig, *, user_id: str | None) -> Li
         max_position_weight=trading.risk.max_position_weight,
         max_leverage=trading.risk.max_leverage,
         min_confidence=trading.risk.min_confidence,
+        max_daily_loss_pct=trading.risk.max_daily_loss_pct,
+        kill_switch_cooldown_seconds=trading.risk.kill_switch_cooldown_seconds,
     )
     risk_manager = RiskManager(risk_limits)
     mode = _resolve_mode(trading.mode, user_id=user_id)

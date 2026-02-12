@@ -1,0 +1,559 @@
+.ac-v2 {
+  --acv2-surface: #ffffff;
+  --acv2-surface-soft: #f7f9fd;
+  --acv2-border: #d9e3f2;
+  --acv2-border-strong: #c7d4ea;
+  --acv2-text: #0f172a;
+  --acv2-text-muted: #51607a;
+  --acv2-text-soft: #7f8faa;
+  --acv2-primary: #2f6df6;
+  --acv2-primary-weak: #eaf1ff;
+  --acv2-success: #059669;
+  --acv2-warning: #d97706;
+  --acv2-danger: #dc2626;
+  --acv2-shadow-sm: 0 6px 18px rgba(15, 23, 42, 0.06);
+  --acv2-shadow-md: 0 16px 34px rgba(15, 23, 42, 0.08);
+  --acv2-radius-xl: 20px;
+  --acv2-radius-lg: 16px;
+  --acv2-radius-md: 12px;
+  --acv2-radius-sm: 10px;
+  color: var(--acv2-text);
+  max-width: none;
+  width: 100%;
+  padding: 0;
+  margin: 0 auto 1.25rem;
+  gap: 1rem;
+}
+
+.ac-v2 .account-shell,
+.ac-v2 .account-main,
+.ac-v2 .account-tab-panels,
+.ac-v2 .account-overview {
+  gap: 1rem;
+}
+
+.ac-v2 .account-page-header,
+.ac-v2 .overview-hero,
+.ac-v2 .account-card,
+.ac-v2 .account-settings-nav,
+.ac-v2 .timeline-empty,
+.ac-v2 .overview-gallery-empty {
+  background: var(--acv2-surface);
+  border: 1px solid var(--acv2-border);
+  border-radius: var(--acv2-radius-xl);
+  box-shadow: var(--acv2-shadow-sm);
+}
+
+.ac-v2 .account-page-header {
+  padding: 0.95rem 1rem;
+  margin: 0;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.ac-v2 .compact-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.ac-v2 .compact-avatar {
+  width: 50px;
+  height: 50px;
+  border-radius: 14px;
+  border: 1px solid var(--acv2-border-strong);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  color: var(--acv2-text);
+  background: var(--acv2-surface-soft);
+  padding: 0;
+}
+
+.ac-v2 .compact-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ac-v2 .compact-name {
+  font-size: 1.02rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.ac-v2 .compact-subtext {
+  font-size: 0.8rem;
+  color: var(--acv2-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 58vw;
+}
+
+.ac-v2 .compact-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.ac-v2 .account-header-tools {
+  gap: 0.55rem;
+}
+
+.ac-v2 .account-header-menu summary,
+.ac-v2 .compact-actions > .btn {
+  border-radius: 999px;
+  border: 1px solid var(--acv2-border-strong);
+  background: #fff;
+  color: #1f2f46;
+  font-weight: 700;
+  font-size: 0.78rem;
+  padding: 0.34rem 0.72rem;
+}
+
+.ac-v2 .account-header-menu-panel {
+  border-radius: var(--acv2-radius-lg);
+  border: 1px solid var(--acv2-border);
+  box-shadow: var(--acv2-shadow-md);
+  min-width: 300px;
+  max-width: min(360px, 92vw);
+  z-index: 35;
+}
+
+.ac-v2 .account-header-menu-item {
+  border-radius: var(--acv2-radius-sm);
+}
+
+.ac-v2 .account-header-menu-item:hover {
+  background: var(--acv2-primary-weak);
+  border-color: rgba(47, 109, 246, 0.35);
+}
+
+.ac-v2 .menu-label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--acv2-text);
+}
+
+.ac-v2 .menu-desc {
+  display: block;
+  font-size: 0.74rem;
+  color: var(--acv2-text-muted);
+}
+
+.ac-v2 .account-tab-nav {
+  margin: 0;
+  padding: 0.2rem;
+  border: 1px solid var(--acv2-border);
+  border-radius: 999px;
+  background: var(--acv2-surface-soft);
+  display: inline-flex;
+  gap: 0.25rem;
+  white-space: nowrap;
+  overflow-x: auto;
+}
+
+.ac-v2 .account-tab-btn {
+  border-radius: 999px !important;
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  color: var(--acv2-text-muted) !important;
+  padding: 0.42rem 0.9rem !important;
+  font-weight: 700;
+  font-size: 0.82rem;
+  min-height: 38px;
+}
+
+.ac-v2 .account-tab-btn .tab-desc {
+  display: none;
+}
+
+.ac-v2 .account-tab-btn.is-active {
+  background: #fff !important;
+  color: #163b89 !important;
+  border-color: rgba(47, 109, 246, 0.38) !important;
+  box-shadow: 0 8px 14px rgba(47, 109, 246, 0.14);
+}
+
+.ac-v2 .overview-hero {
+  padding: clamp(1rem, 2.2vw, 1.45rem);
+  border-radius: calc(var(--acv2-radius-xl) + 2px);
+  background: linear-gradient(140deg, #f9fbff 0%, #f2f6ff 52%, #ebf2ff 100%);
+}
+
+.ac-v2 .overview-hero.has-media {
+  background-image:
+    linear-gradient(135deg, rgba(10, 18, 34, 0.76), rgba(36, 71, 158, 0.58)),
+    var(--overview-hero-image);
+  background-size: cover;
+  background-position: center;
+}
+
+.ac-v2 .overview-hero-content {
+  gap: 0.95rem;
+}
+
+.ac-v2 .overview-hero-avatar,
+.ac-v2 .profile-preview-avatar {
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.ac-v2 .overview-hero-chip {
+  border-radius: 999px;
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.ac-v2 .overview-grid {
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.95fr);
+  gap: 1rem;
+}
+
+.ac-v2 .overview-chip,
+.ac-v2 .overview-bio-block,
+.ac-v2 .overview-gallery-media,
+.ac-v2 .overview-gallery-empty {
+  border-color: var(--acv2-border);
+  border-radius: var(--acv2-radius-lg);
+  background: var(--acv2-surface-soft);
+}
+
+.ac-v2 .overview-chip .chip-label,
+.ac-v2 .overview-hero-chip .chip-label,
+.ac-v2 .overview-metric .metric-label,
+.ac-v2 .timeline-kind,
+.ac-v2 .account-settings-nav-head .nav-kicker,
+.ac-v2 .settings-desc,
+.ac-v2 .account-header-menu-title,
+.ac-v2 .form-text {
+  color: var(--acv2-text-soft) !important;
+}
+
+.ac-v2 .overview-chip .chip-value,
+.ac-v2 .timeline-title,
+.ac-v2 .account-card-head h2,
+.ac-v2 .preview-name,
+.ac-v2 .settings-title,
+.ac-v2 .compact-name {
+  color: var(--acv2-text) !important;
+}
+
+.ac-v2 .account-card {
+  padding: 1rem;
+  border-radius: var(--acv2-radius-xl);
+  box-shadow: var(--acv2-shadow-sm) !important;
+}
+
+.ac-v2 .account-card-head {
+  margin-bottom: 0.7rem;
+}
+
+.ac-v2 .account-card-head h2 {
+  font-size: 1.12rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.ac-v2 .account-timeline-list {
+  margin-top: 0.8rem;
+  border-top: 1px solid var(--acv2-border);
+}
+
+.ac-v2 .timeline-item {
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 0.65rem;
+  padding: 0.88rem 0;
+  border-bottom-color: var(--acv2-border);
+}
+
+.ac-v2 .timeline-summary,
+.ac-v2 .timeline-time,
+.ac-v2 .timeline-media-link,
+.ac-v2 .activity-subtext,
+.ac-v2 .overview-gallery-meta,
+.ac-v2 .preview-highlights,
+.ac-v2 .compact-subtext,
+.ac-v2 .text-muted {
+  color: var(--acv2-text-muted) !important;
+}
+
+.ac-v2 .timeline-marker {
+  background: var(--acv2-surface-soft);
+  border: 1px solid var(--acv2-border);
+}
+
+.ac-v2 .timeline-filter-btn {
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.76rem;
+}
+
+.ac-v2 .timeline-filter-btn.is-active {
+  background: #fff;
+  color: #1f3b88;
+  box-shadow: 0 0 0 1px rgba(47, 109, 246, 0.3);
+}
+
+.ac-v2 .timeline-empty {
+  padding: 1rem;
+}
+
+.ac-v2 .account-history-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.7rem;
+}
+
+.ac-v2 .account-settings-shell {
+  grid-template-columns: minmax(220px, 250px) minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.ac-v2 .account-settings-nav {
+  padding: 0.72rem;
+  border-radius: var(--acv2-radius-xl);
+  border-color: var(--acv2-border);
+  box-shadow: var(--acv2-shadow-sm);
+  top: 92px;
+}
+
+.ac-v2 .settings-icon {
+  border-radius: 12px;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--acv2-border);
+  background: var(--acv2-surface-soft);
+  color: var(--acv2-text-soft);
+}
+
+.ac-v2 .account-settings-link {
+  border-radius: 12px;
+  border: 1px solid transparent;
+  padding: 0.45rem 0.6rem;
+}
+
+.ac-v2 .account-settings-link:hover {
+  border-color: var(--acv2-border);
+  background: var(--acv2-surface-soft);
+}
+
+.ac-v2 .account-settings-link.is-active {
+  border-color: rgba(47, 109, 246, 0.4);
+  background: var(--acv2-primary-weak);
+}
+
+.ac-v2 .account-settings-link.is-active .settings-icon {
+  background: var(--acv2-primary);
+  color: #fff;
+  border-color: rgba(47, 109, 246, 0.4);
+}
+
+.ac-v2 .profile-summary {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+}
+
+.ac-v2 .profile-summary-actions {
+  justify-content: flex-end;
+}
+
+.ac-v2 .profile-summary .btn,
+.ac-v2 .settings-split .btn,
+.ac-v2 .account-history-toolbar .btn,
+.ac-v2 .overview-hero-actions .btn {
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.78rem;
+}
+
+.ac-v2 .settings-split,
+.ac-v2 .settings-split--form {
+  gap: 1rem;
+}
+
+.ac-v2 .settings-split .card,
+.ac-v2 .account-settings-form .card {
+  border: 1px solid var(--acv2-border);
+  border-radius: var(--acv2-radius-lg);
+  box-shadow: none;
+}
+
+.ac-v2 .settings-split .card-header,
+.ac-v2 .account-settings-form .card-header {
+  background: #f9fbff;
+  border-bottom: 1px solid var(--acv2-border);
+  font-weight: 700;
+  color: var(--acv2-text);
+}
+
+.ac-v2 .settings-split .card-body,
+.ac-v2 .account-settings-form .card-body {
+  background: #fff;
+}
+
+.ac-v2 .account-settings-form .card-footer {
+  border-top: 1px solid var(--acv2-border);
+  background: #fbfdff;
+}
+
+.ac-v2 .account-api-status > div {
+  border-bottom-color: var(--acv2-border);
+}
+
+.ac-v2 .api-secret-field .btn {
+  border-radius: 0;
+  border-color: var(--acv2-border-strong);
+  background: #fff;
+  color: #34435c;
+  font-size: 0.74rem;
+}
+
+.ac-v2 .api-secret-field .btn:last-child {
+  border-top-right-radius: 10px;
+  border-bottom-right-radius: 10px;
+}
+
+.ac-v2 .account-page .form-control,
+.ac-v2 .account-page .form-select,
+.ac-v2 .account-page textarea,
+.ac-v2 .account-page .btn,
+.ac-v2 .account-page .badge {
+  border-radius: 10px;
+}
+
+.ac-v2 .account-page .form-control,
+.ac-v2 .account-page .form-select,
+.ac-v2 .account-page textarea {
+  border: 1px solid var(--acv2-border-strong);
+  color: var(--acv2-text);
+  background: #fff;
+}
+
+.ac-v2 .account-page .form-control:focus,
+.ac-v2 .account-page .form-select:focus,
+.ac-v2 .account-page textarea:focus {
+  border-color: rgba(47, 109, 246, 0.55);
+  box-shadow: 0 0 0 3px rgba(47, 109, 246, 0.14);
+}
+
+.ac-v2 .account-page .btn-primary {
+  background: linear-gradient(120deg, #2f6df6, #4a80f9);
+  border-color: #2f6df6;
+  box-shadow: 0 9px 20px rgba(47, 109, 246, 0.22);
+}
+
+.ac-v2 .account-page .btn-outline-secondary,
+.ac-v2 .account-page .btn-outline-light {
+  border-color: var(--acv2-border-strong);
+  color: #27364f;
+  background: #fff;
+}
+
+.ac-v2 .account-page .btn-outline-secondary:hover,
+.ac-v2 .account-page .btn-outline-light:hover {
+  background: #eef4ff;
+  color: #1d3f8a;
+}
+
+.ac-v2 .avatar-upload-modal,
+.ac-v2 .timeline-media-modal,
+.ac-v2 .profile-preview-modal,
+.ac-v2 .cropper-dialog {
+  border: 1px solid var(--acv2-border);
+  border-radius: var(--acv2-radius-lg);
+  box-shadow: var(--acv2-shadow-md);
+}
+
+.ac-v2 .avatar-dropzone,
+.ac-v2 .cropper-stage,
+.ac-v2 .feature-preview-frame,
+.ac-v2 .profile-preview-thumb,
+.ac-v2 .overview-gallery-media {
+  border-radius: var(--acv2-radius-md);
+  border-color: var(--acv2-border);
+}
+
+.ac-v2 .alert {
+  border-radius: 12px;
+  border: 1px solid transparent;
+}
+
+.ac-v2 .alert-success {
+  border-color: rgba(5, 150, 105, 0.28);
+}
+
+.ac-v2 .alert-warning {
+  border-color: rgba(217, 119, 6, 0.28);
+}
+
+.ac-v2 .alert-danger {
+  border-color: rgba(220, 38, 38, 0.28);
+}
+
+@media (max-width: 1199.98px) {
+  .ac-v2 .overview-grid,
+  .ac-v2 .profile-summary,
+  .ac-v2 .settings-split--form {
+    grid-template-columns: 1fr;
+  }
+
+  .ac-v2 .profile-summary-right,
+  .ac-v2 .profile-summary-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 991.98px) {
+  .ac-v2 .account-settings-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .ac-v2 .account-settings-nav {
+    position: static;
+  }
+
+  .ac-v2 .compact-subtext {
+    max-width: 100%;
+    white-space: normal;
+  }
+}
+
+@media (max-width: 767.98px) {
+  .ac-v2 {
+    margin-bottom: 0.8rem;
+    gap: 0.75rem;
+  }
+
+  .ac-v2 .account-page-header,
+  .ac-v2 .account-card,
+  .ac-v2 .overview-hero,
+  .ac-v2 .account-settings-nav {
+    border-radius: 14px;
+    padding: 0.82rem;
+  }
+
+  .ac-v2 .account-tab-btn {
+    font-size: 0.76rem;
+    min-height: 34px;
+    padding: 0.3rem 0.68rem !important;
+  }
+
+  .ac-v2 .overview-hero-avatar,
+  .ac-v2 .profile-preview-avatar,
+  .ac-v2 .compact-avatar {
+    width: 46px;
+    height: 46px;
+    border-radius: 12px;
+  }
+
+  .ac-v2 .overview-gallery-media img {
+    height: 190px;
+  }
+}

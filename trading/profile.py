@@ -26,6 +26,51 @@ DEFAULT_PROFILE = {
 }
 
 API_CREDENTIAL_FIELDS = {
+    "market_data_provider": {
+        "label": "Market Data Provider",
+        "env": "MARKET_DATA_PROVIDER",
+        "help": "选择行情数据源：alpaca 或 massive。",
+        "mask": False,
+    },
+    "market_news_provider": {
+        "label": "Market News Provider",
+        "env": "MARKET_NEWS_PROVIDER",
+        "help": "选择新闻源：follow_data、alpaca 或 massive。",
+        "mask": False,
+    },
+    "massive_api_key": {
+        "label": "Massive API Key",
+        "env": "MASSIVE_API_KEY",
+        "help": "用于 Massive Stocks Advanced 的 API Key。",
+    },
+    "massive_s3_access_key_id": {
+        "label": "Massive S3 Access Key ID",
+        "env": "MASSIVE_S3_ACCESS_KEY_ID",
+        "help": "用于 Massive Flat Files (S3) 访问的 Access Key ID（可选）。",
+    },
+    "massive_s3_secret_access_key": {
+        "label": "Massive S3 Secret Access Key",
+        "env": "MASSIVE_S3_SECRET_ACCESS_KEY",
+        "help": "用于 Massive Flat Files (S3) 访问的 Secret Access Key（可选）。",
+    },
+    "massive_rest_url": {
+        "label": "Massive REST URL",
+        "env": "MASSIVE_REST_URL",
+        "help": "Massive REST 根地址（可选，默认官方地址）。",
+        "mask": False,
+    },
+    "massive_ws_url": {
+        "label": "Massive WebSocket URL",
+        "env": "MASSIVE_WS_URL",
+        "help": "Massive WebSocket 地址（可选，默认官方地址）。",
+        "mask": False,
+    },
+    "massive_plan": {
+        "label": "Massive Plan",
+        "env": "MASSIVE_PLAN",
+        "help": "当前套餐标识，默认 stocks_advanced。",
+        "mask": False,
+    },
     "alpaca_trading_mode": {
         "label": "Alpaca Trading Mode",
         "env": "ALPACA_TRADING_MODE",
@@ -284,7 +329,18 @@ def load_api_credentials(user_id: str) -> dict[str, str]:
 def save_api_credentials(user_id: str, updates: dict[str, Any], *, replace: bool = False) -> dict[str, str]:
     profile_obj = _get_or_create_profile(user_id)
     credentials = {} if replace else _load_api_credentials_from_profile(profile_obj)
-    clearable_fields = {"ai_model", "ai_embedding_model"}
+    clearable_fields = {
+        "ai_model",
+        "ai_embedding_model",
+        "market_data_provider",
+        "market_news_provider",
+        "massive_api_key",
+        "massive_s3_access_key_id",
+        "massive_s3_secret_access_key",
+        "massive_rest_url",
+        "massive_ws_url",
+        "massive_plan",
+    }
     for key, value in updates.items():
         if key not in API_CREDENTIAL_FIELDS:
             continue

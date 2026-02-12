@@ -1,0 +1,46 @@
+{% load i18n i18n_extras %}
+<section class="workbench-review">
+    <div class="workbench-section-head">
+        <h2 class="workbench-section-title">{% bilingual "Execution Review Workspace" "执行复盘工作区" %}</h2>
+        <p class="workbench-section-subtitle">
+            {% bilingual "Lightweight diagnostics for execution, risk and AI summaries from recent runs." "聚焦近期任务的执行、风控与 AI 摘要复盘。" %}
+        </p>
+    </div>
+    <div class="workbench-review-grid">
+        <article class="workbench-review-card">
+            <h3>{% bilingual "Run Snapshot" "运行快照" %}</h3>
+            {% if result and result.ticker %}
+                <p><strong>{% bilingual "Ticker" "标的" %}:</strong> {{ result.ticker }}</p>
+                <p><strong>{% bilingual "Engine" "引擎" %}:</strong> {{ result.engine_label|default:"-" }}</p>
+                <p><strong>{% bilingual "Window" "区间" %}:</strong> {{ result.start_date|default:"-" }} → {{ result.end_date|default:"-" }}</p>
+            {% else %}
+                <p class="text-muted">{% bilingual "No recent run selected." "暂无最近运行记录。" %}</p>
+            {% endif %}
+            <ul class="workbench-review-list" data-review-role="execution-list"></ul>
+        </article>
+        <article class="workbench-review-card">
+            <h3>{% bilingual "Risk Lens" "风险视角" %}</h3>
+            {% if result and result.stats %}
+                <p><strong>Sharpe:</strong> {{ result.stats.sharpe|default:"-" }}</p>
+                <p><strong>Max DD:</strong> {{ result.stats.max_drawdown|default:"-" }}</p>
+                <p><strong>Win Rate:</strong> {{ result.stats.win_rate|default:"-" }}</p>
+            {% else %}
+                <p class="text-muted">{% bilingual "Run a backtest to generate diagnostics." "运行回测后可生成诊断数据。" %}</p>
+            {% endif %}
+            <ul class="workbench-review-list" data-review-role="risk-list"></ul>
+        </article>
+        <article class="workbench-review-card">
+            <h3>{% bilingual "AI Brief" "AI 摘要" %}</h3>
+            {% if result and result.quick_summary %}
+                <ul class="workbench-review-list">
+                    {% for line in result.quick_summary|slice:":3" %}
+                        <li>{{ line }}</li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <p class="text-muted">{% bilingual "No AI summary yet." "暂无 AI 摘要。" %}</p>
+            {% endif %}
+            <ul class="workbench-review-list" data-review-role="ai-list"></ul>
+        </article>
+    </div>
+</section>

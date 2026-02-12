@@ -179,6 +179,8 @@ if PYDANTIC_AVAILABLE:
         max_position_weight: float = Field(0.2, ge=0.0, le=1.0)
         max_leverage: float = Field(1.0, ge=0.1, le=10.0)
         min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+        max_daily_loss_pct: float = Field(0.03, ge=0.0, le=1.0)
+        kill_switch_cooldown_seconds: int = Field(900, ge=0, le=86_400)
 
 
     class ExecutionPayload(BaseModel):

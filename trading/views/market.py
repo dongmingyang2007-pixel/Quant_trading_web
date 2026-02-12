@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import ast
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
@@ -27,6 +28,7 @@ from django.utils.translation import gettext as _, gettext_lazy as _lazy
 from .. import screener
 from ..cache_utils import build_cache_key, cache_get_object, cache_set_object, cache_memoize
 from .. import market_data
+from ..massive_flatfiles import fetch_historical_bars as fetch_massive_flatfile_historical_bars
 from ..error_contract import json_error, log_sanitized_exception
 from ..observability import ensure_request_id, record_metric, track_latency
 from ..network import get_requests_session, resolve_retry_config, retry_call_result
@@ -38,9 +40,15 @@ from ..llm import run_llm_chat, LLMIntegrationError
 from ..alpaca_data import (
     DEFAULT_FEED,
     resolve_alpaca_data_credentials,
+)
+from ..market_provider import (
+    fetch_company_overview,
     fetch_news,
     fetch_stock_snapshots,
     fetch_stock_trades,
+    has_market_data_credentials,
+    resolve_market_provider,
+    resolve_news_provider,
 )
 from ..realtime.alpaca import fetch_assets as fetch_alpaca_assets
 from ..realtime.market_stream import request_symbol as request_market_symbol, request_symbols as request_market_symbols
@@ -244,9 +252,13 @@ FUND_LIKE_NAME_KEYWORDS = (
 _QUERY_SANITIZER = re.compile(r"[^A-Z0-9\.\-]")
 MARKET_REQUEST_TIMEOUT = max(5, getattr(settings, "MARKET_DATA_TIMEOUT_SECONDS", 25))
 MARKET_MAX_WORKERS = max(1, getattr(settings, "MARKET_DATA_MAX_WORKERS", 20))
-MARKET_RATE_WINDOW = max(10, getattr(settings, "MARKET_DATA_RATE_WINDOW_SECONDS", 90))
+MARKET_RATE_WINDOW = max(1, getattr(settings, "MARKET_DATA_RATE_WINDOW_SECONDS", 90))
 MARKET_RATE_MAX_CALLS = max(1, getattr(settings, "MARKET_DATA_RATE_MAX_CALLS", 45))
 MARKET_RATE_CACHE_ALIAS = getattr(settings, "MARKET_DATA_RATE_CACHE_ALIAS", "default")
+MARKET_RATE_PROFILE = str(getattr(settings, "MARKET_DATA_RATE_PROFILE", "balanced")).strip().lower()
+if MARKET_RATE_PROFILE in {"high", "high_throughput", "turbo"}:
+    MARKET_RATE_WINDOW = 60
+    MARKET_RATE_MAX_CALLS = max(MARKET_RATE_MAX_CALLS, 12000)
 
 CHART_MAX_TICK_RANGE_SECONDS = _setting_int("MARKET_CHART_MAX_TICK_RANGE_SECONDS", 2 * 3600)
 CHART_MAX_SECOND_RANGE_SECONDS = _setting_int("MARKET_CHART_MAX_SECOND_RANGE_SECONDS", 24 * 3600)
@@ -274,7 +286,8 @@ MARKET_AI_SUMMARY_MAX_CHARS = max(240, _setting_int("MARKET_AI_SUMMARY_MAX_CHARS
 MARKET_52W_CACHE_TTL = max(300, _setting_int("MARKET_52W_CACHE_TTL", 6 * 3600))
 MARKET_FUNDAMENTALS_CACHE_TTL = max(300, _setting_int("MARKET_FUNDAMENTALS_CACHE_TTL", 6 * 3600))
 MARKET_ASSETS_CACHE_TTL = max(300, getattr(settings, "MARKET_ASSETS_CACHE_TTL", 6 * 3600))
-MARKET_RANKINGS_CACHE_TTL = max(30, getattr(settings, "MARKET_RANKINGS_CACHE_TTL", 55))
+MARKET_RANKINGS_CACHE_TTL = max(30, getattr(settings, "MARKET_RANKINGS_CACHE_TTL", 70))
+MARKET_RANKINGS_PAGE_CACHE_TTL = max(3, _setting_int("MARKET_RANKINGS_PAGE_CACHE_TTL", 15))
 MARKET_RANKINGS_MIN_PRICE = max(0.0, _setting_float("MARKET_RANKINGS_MIN_PRICE", 1.0))
 MARKET_RANKINGS_MIN_VOLUME = max(0, _setting_int("MARKET_RANKINGS_MIN_VOLUME", 50_000))
 MARKET_RANKINGS_MIN_DOLLAR_VOLUME = max(0.0, _setting_float("MARKET_RANKINGS_MIN_DOLLAR_VOLUME", 2_000_000.0))
@@ -290,11 +303,11 @@ MARKET_RANKINGS_EXCLUDE_EXCHANGES = set(
     item.upper()
     for item in _setting_list(getattr(settings, "MARKET_RANKINGS_EXCLUDE_EXCHANGES", None), ["OTC"])
 )
-MARKET_UNIVERSE_RANKINGS_CACHE_TTL = max(120, _setting_int("MARKET_UNIVERSE_RANKINGS_CACHE_TTL", 900))
-MARKET_UNIVERSE_CHUNK_SIZE = max(50, min(400, _setting_int("MARKET_UNIVERSE_CHUNK_SIZE", 200)))
+MARKET_UNIVERSE_RANKINGS_CACHE_TTL = max(120, _setting_int("MARKET_UNIVERSE_RANKINGS_CACHE_TTL", 1200))
+MARKET_UNIVERSE_CHUNK_SIZE = max(50, min(400, _setting_int("MARKET_UNIVERSE_CHUNK_SIZE", 260)))
 MARKET_UNIVERSE_MAX_SYMBOLS = max(0, _setting_int("MARKET_UNIVERSE_MAX_SYMBOLS", 0))
-MARKET_UNIVERSE_CHUNK_WORKERS = max(1, min(8, _setting_int("MARKET_UNIVERSE_CHUNK_WORKERS", 4)))
-MARKET_UNIVERSE_WINDOW_MAX_SYMBOLS = max(0, _setting_int("MARKET_UNIVERSE_WINDOW_MAX_SYMBOLS", 1500))
+MARKET_UNIVERSE_CHUNK_WORKERS = max(1, min(8, _setting_int("MARKET_UNIVERSE_CHUNK_WORKERS", 8)))
+MARKET_UNIVERSE_WINDOW_MAX_SYMBOLS = max(0, _setting_int("MARKET_UNIVERSE_WINDOW_MAX_SYMBOLS", 900))
 MARKET_ASSETS_PAGE_DEFAULT = max(20, getattr(settings, "MARKET_ASSETS_PAGE_DEFAULT", 50))
 MARKET_ASSETS_PAGE_MAX = max(50, getattr(settings, "MARKET_ASSETS_PAGE_MAX", 200))
 MARKET_CHART_ANALYZER_NAMESPACE = str(
@@ -325,11 +338,24 @@ MARKET_CHART_ANALYZER_MAX_SMOOTHING_WINDOW = max(
 )
 MARKET_RANKINGS_REFRESH_SECONDS = max(60, _setting_int("MARKET_RANKINGS_REFRESH_SECONDS", 300))
 MARKET_RANKINGS_REFRESH_MARGIN_SECONDS = max(0, _setting_int("MARKET_RANKINGS_REFRESH_MARGIN_SECONDS", 5))
-MARKET_RANKINGS_SNAPSHOT_CHUNK_SIZE = max(1, min(200, _setting_int("MARKET_RANKINGS_SNAPSHOT_CHUNK_SIZE", 200)))
+MARKET_RANKINGS_LOOP_DELAY_SECONDS = max(1, _setting_int("MARKET_RANKINGS_LOOP_DELAY_SECONDS", 3))
+MARKET_RANKINGS_STALLED_SECONDS = max(
+    120,
+    _setting_int("MARKET_RANKINGS_STALLED_SECONDS", MARKET_RANKINGS_LOOP_DELAY_SECONDS * 3),
+)
+MARKET_RANKINGS_SNAPSHOT_CHUNK_SIZE = max(1, min(300, _setting_int("MARKET_RANKINGS_SNAPSHOT_CHUNK_SIZE", 200)))
+MARKET_RANKINGS_TIMEFRAME_CHUNK_SIZE_MASSIVE = max(
+    5,
+    min(100, _setting_int("MARKET_RANKINGS_TIMEFRAME_CHUNK_SIZE_MASSIVE", 25)),
+)
 MARKET_RANKINGS_SNAPSHOT_TTL = max(60, _setting_int("MARKET_RANKINGS_SNAPSHOT_TTL", MARKET_RANKINGS_REFRESH_SECONDS))
 MARKET_RANKINGS_BACKGROUND_ONLY = _setting_bool("MARKET_RANKINGS_BACKGROUND_ONLY", True)
 MARKET_RANKINGS_DISABLE_FILTERS = _setting_bool("MARKET_RANKINGS_DISABLE_FILTERS", True)
 MARKET_RANKINGS_ALLOW_STALE_SNAPSHOTS = _setting_bool("MARKET_RANKINGS_ALLOW_STALE_SNAPSHOTS", True)
+MARKET_RANKINGS_ALLOW_CROSS_PROVIDER_SNAPSHOT_FALLBACK = _setting_bool(
+    "MARKET_RANKINGS_ALLOW_CROSS_PROVIDER_SNAPSHOT_FALLBACK",
+    True,
+)
 MARKET_RANKINGS_TIMEFRAME_KEYS = [
     key
     for key in _setting_list(
@@ -347,6 +373,7 @@ MARKET_RANKINGS_DAILY_WINDOW_1MO = max(2, _setting_int("MARKET_RANKINGS_DAILY_WI
 MARKET_RANKINGS_DAILY_WINDOW_6MO = max(2, _setting_int("MARKET_RANKINGS_DAILY_WINDOW_6MO", 130))
 SNAPSHOT_RANKINGS_STATE = "market_rankings_snapshot.json"
 SNAPSHOT_RANKINGS_PROGRESS_STATE = "market_rankings_snapshot_progress.json"
+SNAPSHOT_RANKINGS_BUILDING_STATE = "market_rankings_snapshot_building.json"
 SNAPSHOT_RANKINGS_LOCK = "market_rankings_snapshot.pid"
 _MARKET_EXECUTOR = ThreadPoolExecutor(max_workers=MARKET_MAX_WORKERS)
 MARKET_CLOCK_CACHE_TTL = max(15, getattr(settings, "MARKET_CLOCK_CACHE_TTL", 60))
@@ -592,6 +619,78 @@ def _coerce_number(value: object) -> float | None:
         return None
 
 
+def _coerce_timestamp(value: object) -> float | None:
+    numeric = _coerce_number(value)
+    if numeric is not None:
+        return numeric
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            return datetime.fromisoformat(text).timestamp()
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_positive_price(value: object) -> float | None:
+    number = _coerce_number(value)
+    if number is None:
+        return None
+    if number <= 0:
+        return None
+    return number
+
+
+def _resolve_snapshot_last_price(
+    snapshot: Mapping[str, object] | None,
+    *,
+    prev_close: float | None = None,
+    allow_quote_fallback: bool = False,
+) -> float | None:
+    if not isinstance(snapshot, Mapping):
+        return None
+    latest_trade = snapshot.get("latestTrade") or snapshot.get("latest_trade") or {}
+    daily_bar = snapshot.get("dailyBar") or snapshot.get("daily_bar") or {}
+    minute_bar = snapshot.get("minuteBar") or snapshot.get("minute_bar") or {}
+    latest_quote = snapshot.get("latestQuote") or snapshot.get("latest_quote") or {}
+
+    # Match chart semantics first: prefer bar closes over quote-side prices.
+    minute_close = _coerce_positive_price((minute_bar or {}).get("c"))
+    daily_close = _coerce_positive_price((daily_bar or {}).get("c"))
+    trade_price = _coerce_positive_price((latest_trade or {}).get("p") or (latest_trade or {}).get("price"))
+    for candidate in (minute_close, daily_close, trade_price):
+        if candidate is not None:
+            return candidate
+    if not allow_quote_fallback:
+        return None
+
+    bid = _coerce_positive_price((latest_quote or {}).get("bp"))
+    ask = _coerce_positive_price((latest_quote or {}).get("ap"))
+    if bid is not None and ask is not None and ask >= bid:
+        midpoint = (bid + ask) / 2.0
+        if midpoint > 0:
+            spread_ratio = (ask - bid) / midpoint
+            if spread_ratio <= 0.5:
+                return midpoint
+            if prev_close not in (None, 0):
+                # Wide spreads are common on illiquid warrants; pick the side closer to prev close.
+                return bid if abs(bid - float(prev_close)) <= abs(ask - float(prev_close)) else ask
+        return bid
+    if bid is not None:
+        return bid
+    if ask is not None:
+        if prev_close not in (None, 0):
+            ratio = ask / float(prev_close)
+            if ratio < 0.1 or ratio > 10.0:
+                return None
+        return ask
+    return None
+
+
 def _downsample_indices(length: int, max_points: int) -> list[int]:
     if length <= 0:
         return []
@@ -760,8 +859,12 @@ def _apply_common_market_item_shape(
     for field in RANKING_REASON_FIELDS:
         if _coerce_number(item.get(field)) is None:
             reasons.setdefault(field, MISSING_REASON_SOURCE_NOT_PROVIDED)
+        else:
+            reasons.pop(field, None)
     if timeframe_pending:
         reasons["timeframe"] = MISSING_REASON_TIMEFRAME_SNAPSHOT_PENDING
+    else:
+        reasons.pop("timeframe", None)
     if reasons:
         item["missing_reasons"] = reasons
     elif "missing_reasons" in item:
@@ -787,6 +890,8 @@ def _extract_window_bars(
 
 def _compute_window_metrics_from_bars(
     bars: list[dict[str, float | int]],
+    *,
+    timeframe: Timeframe | None = None,
 ) -> tuple[dict[str, float | None], dict[str, str]]:
     metrics: dict[str, float | None] = {
         "price": None,
@@ -804,14 +909,17 @@ def _compute_window_metrics_from_bars(
     for bar in bars:
         if not isinstance(bar, dict):
             continue
-        close = _coerce_number(bar.get("close"))
+        close = _coerce_positive_price(bar.get("close"))
         if close is None:
             continue
+        open_value = _coerce_positive_price(bar.get("open"))
+        high_value = _coerce_positive_price(bar.get("high"))
+        low_value = _coerce_positive_price(bar.get("low"))
         parsed.append(
             {
-                "open": _coerce_number(bar.get("open")),
-                "high": _coerce_number(bar.get("high")),
-                "low": _coerce_number(bar.get("low")),
+                "open": open_value,
+                "high": high_value,
+                "low": low_value,
                 "close": close,
                 "volume": _coerce_number(bar.get("volume")),
             }
@@ -852,9 +960,12 @@ def _compute_window_metrics_from_bars(
         else None
     )
 
+    period_base = open_price
+    if timeframe is not None and timeframe.key != "1d":
+        period_base = first_close if first_close not in (None, 0) else open_price
     period_change = None
-    if price is not None and open_price not in (None, 0):
-        period_change = (float(price) / float(open_price) - 1.0) * 100.0
+    if price is not None and period_base not in (None, 0):
+        period_change = (float(price) / float(period_base) - 1.0) * 100.0
     day_change = None
     if price is not None and prev_close not in (None, 0):
         day_change = (float(price) / float(prev_close) - 1.0) * 100.0
@@ -925,7 +1036,7 @@ def _resolve_symbol_window_metrics(
         chunk_map: dict[str, dict[str, object]] = {}
         for symbol in chunk_symbols:
             bars = _extract_window_bars(frame, symbol, timeframe=timeframe)
-            metrics, missing = _compute_window_metrics_from_bars(bars)
+            metrics, missing = _compute_window_metrics_from_bars(bars, timeframe=timeframe)
             payload: dict[str, object] = {**metrics}
             if missing:
                 payload["missing_reasons"] = missing
@@ -966,6 +1077,149 @@ def _resolve_symbol_window_metrics(
             metrics_map.update(chunk_map)
             source = _merge_source(source, chunk_source)
     return metrics_map, source
+
+
+def _snapshot_metrics_from_payload(snapshot: Mapping[str, object]) -> dict[str, float | None]:
+    daily_bar = snapshot.get("dailyBar") or snapshot.get("daily_bar") or {}
+    minute_bar = snapshot.get("minuteBar") or snapshot.get("minute_bar") or {}
+    prev_bar = snapshot.get("prevDailyBar") or snapshot.get("prev_daily_bar") or {}
+    prev_close = _coerce_positive_price((prev_bar or {}).get("c"))
+    last_price = _resolve_snapshot_last_price(snapshot, prev_close=prev_close, allow_quote_fallback=False)
+    open_price = _coerce_positive_price((daily_bar or {}).get("o"))
+    high_price = _coerce_number((daily_bar or {}).get("h"))
+    low_price = _coerce_number((daily_bar or {}).get("l"))
+    volume = _coerce_number((daily_bar or {}).get("v") or (minute_bar or {}).get("v"))
+
+    change_pct = None
+    if last_price is not None and prev_close not in (None, 0):
+        change_pct = (last_price / prev_close - 1.0) * 100.0
+    dollar_volume = None
+    if last_price is not None and volume is not None:
+        dollar_volume = last_price * volume
+    range_pct = None
+    if prev_close not in (None, 0) and high_price is not None and low_price is not None:
+        range_pct = ((high_price - low_price) / prev_close) * 100.0
+
+    return {
+        "price": last_price,
+        "change_pct_period": change_pct,
+        "change_pct_day": change_pct,
+        "open": open_price,
+        "prev_close": prev_close,
+        "volume": volume,
+        "dollar_volume": dollar_volume,
+        "range_pct": range_pct,
+    }
+
+
+def _enrich_rows_with_snapshot_metrics(
+    rows: list[dict[str, object]],
+    *,
+    user_id: str | None,
+    provider: str | None,
+) -> list[dict[str, object]]:
+    if not rows:
+        return rows
+    symbols = [
+        str(item.get("symbol") or "").strip().upper()
+        for item in rows
+        if isinstance(item, dict) and item.get("symbol")
+    ]
+    symbols = [sym for sym in dict.fromkeys(symbols) if sym]
+    if not symbols:
+        return rows
+    snapshots = fetch_stock_snapshots(
+        symbols,
+        feed=DEFAULT_FEED,
+        user_id=user_id,
+        timeout=MARKET_REQUEST_TIMEOUT,
+        provider=provider,
+    )
+    if not isinstance(snapshots, dict) or not snapshots:
+        return rows
+
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        snapshot = snapshots.get(symbol)
+        if not isinstance(snapshot, Mapping):
+            continue
+        metrics = _snapshot_metrics_from_payload(snapshot)
+        reasons = _normalize_missing_reason_map(item.get("missing_reasons"))
+        for field in ("price", "change_pct_period", "change_pct_day", "volume", "dollar_volume", "range_pct", "open", "prev_close"):
+            value = _coerce_number(item.get(field))
+            if value is None:
+                snapshot_value = _coerce_number(metrics.get(field))
+                if snapshot_value is not None:
+                    item[field] = snapshot_value
+                    if field == "price":
+                        item["last"] = snapshot_value
+                        if _coerce_number(item.get("change_pct")) is None:
+                            change_val = _coerce_number(metrics.get("change_pct_period"))
+                            if change_val is not None:
+                                item["change_pct"] = change_val
+            if _coerce_number(item.get(field)) is not None:
+                reasons.pop(field, None)
+        if reasons:
+            item["missing_reasons"] = reasons
+        else:
+            item.pop("missing_reasons", None)
+    return rows
+
+
+def _enrich_rows_with_window_metrics(
+    rows: list[dict[str, object]],
+    *,
+    timeframe: Timeframe,
+    user_id: str | None,
+) -> list[dict[str, object]]:
+    if not rows or timeframe.key == "1d":
+        return rows
+    symbols = [
+        str(item.get("symbol") or "").strip().upper()
+        for item in rows
+        if isinstance(item, dict) and item.get("symbol")
+    ]
+    symbols = [sym for sym in dict.fromkeys(symbols) if sym]
+    if not symbols:
+        return rows
+    metrics_map, _source = _resolve_symbol_window_metrics(symbols, timeframe=timeframe, user_id=user_id)
+    if not isinstance(metrics_map, dict) or not metrics_map:
+        return rows
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        metrics = metrics_map.get(symbol)
+        if not isinstance(metrics, Mapping):
+            continue
+        reasons = _normalize_missing_reason_map(item.get("missing_reasons"))
+        metric_reasons = _normalize_missing_reason_map(metrics.get("missing_reasons"))
+        for field in ("price", "change_pct_period", "change_pct_day", "volume", "dollar_volume", "range_pct", "open", "prev_close"):
+            if _coerce_number(item.get(field)) is None:
+                metric_value = _coerce_number(metrics.get(field))
+                if metric_value is not None:
+                    item[field] = metric_value
+                    if field == "price":
+                        item["last"] = metric_value
+                    if field == "change_pct_period" and _coerce_number(item.get("change_pct")) is None:
+                        item["change_pct"] = metric_value
+            if _coerce_number(item.get(field)) is None:
+                reason_code = metric_reasons.get(field)
+                if reason_code:
+                    reasons[field] = reason_code
+            else:
+                reasons.pop(field, None)
+        if reasons:
+            item["missing_reasons"] = reasons
+        else:
+            item.pop("missing_reasons", None)
+    return rows
 
 
 def _is_fund_like_profile(profile: Mapping[str, object]) -> bool:
@@ -1215,6 +1469,10 @@ def _snapshot_timeframe_state_name(timeframe_key: str) -> str:
     return f"market_rankings_snapshot_{timeframe_key}.json"
 
 
+def _snapshot_timeframe_building_state_name(timeframe_key: str) -> str:
+    return f"market_rankings_snapshot_{timeframe_key}_building.json"
+
+
 def _snapshot_timeframe_payload_summary(payload: dict[str, object]) -> dict[str, object]:
     summary = _snapshot_refresh_payload_summary(payload)
     if "timeframe" in payload:
@@ -1222,44 +1480,90 @@ def _snapshot_timeframe_payload_summary(payload: dict[str, object]) -> dict[str,
     return summary
 
 
-def _load_timeframe_snapshot_rows(timeframe_key: str) -> list[dict[str, object]] | None:
+def _snapshot_payload_source(payload: Mapping[str, object], *, fallback: str = "unknown") -> str:
+    source = str(payload.get("source") or "").strip().lower()
+    if source:
+        return source
+    fallback_source = str(fallback or "").strip().lower()
+    return fallback_source or "unknown"
+
+
+def _load_timeframe_snapshot_payload(
+    timeframe_key: str,
+    *,
+    provider: str | None = None,
+) -> dict[str, object] | None:
     payload = read_state(_snapshot_timeframe_state_name(timeframe_key), default={})
     if not isinstance(payload, dict) or not payload:
         return None
     if payload.get("status") != "complete":
         return None
+    if provider:
+        payload_source = _snapshot_payload_source(payload, fallback="")
+        if payload_source and payload_source != provider:
+            if not MARKET_RANKINGS_ALLOW_CROSS_PROVIDER_SNAPSHOT_FALLBACK:
+                return None
+            payload = dict(payload)
+            payload["provider_expected"] = provider
+            payload["provider_actual"] = payload_source
+            payload["provider_mismatch"] = True
+    ts = payload.get("generated_ts")
+    if isinstance(ts, (int, float)):
+        if time.time() - float(ts) > MARKET_RANKINGS_TIMEFRAME_SNAPSHOT_TTL:
+            return payload if MARKET_RANKINGS_ALLOW_STALE_SNAPSHOTS else None
+    else:
+        return None
     rows = payload.get("rows")
     if not isinstance(rows, list):
         return None
     if not rows:
         return None
-    ts = payload.get("generated_ts")
-    if isinstance(ts, (int, float)):
-        if time.time() - float(ts) > MARKET_RANKINGS_TIMEFRAME_SNAPSHOT_TTL:
-            return rows if MARKET_RANKINGS_ALLOW_STALE_SNAPSHOTS else None
-    else:
+    return payload
+
+
+def _load_timeframe_snapshot_rows(timeframe_key: str, *, provider: str | None = None) -> list[dict[str, object]] | None:
+    payload = _load_timeframe_snapshot_payload(timeframe_key, provider=provider)
+    if not isinstance(payload, dict):
         return None
-    return rows
+    rows = payload.get("rows")
+    return rows if isinstance(rows, list) and rows else None
 
 
-def _load_snapshot_rankings_latest_rows() -> list[dict[str, object]] | None:
+def _load_snapshot_rankings_latest_payload(*, provider: str | None = None) -> dict[str, object] | None:
     payload = read_state(SNAPSHOT_RANKINGS_STATE, default={})
     if not isinstance(payload, dict) or not payload:
         return None
     if payload.get("status") != "complete":
         return None
+    if provider:
+        payload_source = _snapshot_payload_source(payload, fallback="")
+        if payload_source and payload_source != provider:
+            if not MARKET_RANKINGS_ALLOW_CROSS_PROVIDER_SNAPSHOT_FALLBACK:
+                return None
+            payload = dict(payload)
+            payload["provider_expected"] = provider
+            payload["provider_actual"] = payload_source
+            payload["provider_mismatch"] = True
+    ts = payload.get("generated_ts")
+    if isinstance(ts, (int, float)):
+        if time.time() - float(ts) > MARKET_RANKINGS_SNAPSHOT_TTL:
+            return payload if MARKET_RANKINGS_ALLOW_STALE_SNAPSHOTS else None
+    else:
+        return None
     rows = payload.get("rows")
     if not isinstance(rows, list):
         return None
     if not rows:
         return None
-    ts = payload.get("generated_ts")
-    if isinstance(ts, (int, float)):
-        if time.time() - float(ts) > MARKET_RANKINGS_SNAPSHOT_TTL:
-            return rows if MARKET_RANKINGS_ALLOW_STALE_SNAPSHOTS else None
-    else:
+    return payload
+
+
+def _load_snapshot_rankings_latest_rows(*, provider: str | None = None) -> list[dict[str, object]] | None:
+    payload = _load_snapshot_rankings_latest_payload(provider=provider)
+    if not isinstance(payload, dict):
         return None
-    return rows
+    rows = payload.get("rows")
+    return rows if isinstance(rows, list) and rows else None
 
 
 def _snapshot_refresh_meta() -> dict[str, object] | None:
@@ -1298,13 +1602,246 @@ def _snapshot_refresh_meta() -> dict[str, object] | None:
     return meta or None
 
 
+def _snapshot_progress_percent(progress: object) -> int:
+    if not isinstance(progress, Mapping):
+        return 0
+    percent = _coerce_number(progress.get("percent"))
+    if percent is not None:
+        try:
+            return max(0, min(100, int(round(percent))))
+        except Exception:
+            return 0
+    completed = _coerce_number(progress.get("chunks_completed"))
+    total = _coerce_number(progress.get("total_chunks"))
+    if total and total > 0 and completed is not None:
+        try:
+            return max(0, min(100, int(round((completed / total) * 100))))
+        except Exception:
+            return 0
+    return 0
+
+
+def _resolve_active_snapshot_payload(
+    timeframe_key: str,
+    *,
+    provider: str | None,
+) -> dict[str, object] | None:
+    if timeframe_key == "1d":
+        return _load_snapshot_rankings_latest_payload(provider=provider)
+    return _load_timeframe_snapshot_payload(timeframe_key, provider=provider)
+
+
+def _resolve_building_snapshot_payload(
+    timeframe_key: str,
+    *,
+    provider: str | None,
+) -> dict[str, object] | None:
+    state_name = SNAPSHOT_RANKINGS_BUILDING_STATE
+    if timeframe_key != "1d":
+        state_name = _snapshot_timeframe_building_state_name(timeframe_key)
+    payload = read_state(state_name, default={})
+    if not isinstance(payload, dict) or not payload:
+        return None
+    if provider:
+        payload_source = str(payload.get("source") or "").strip().lower()
+        if payload_source and payload_source != provider:
+            return None
+    payload_status = str(payload.get("status") or "").strip().lower()
+    if payload_status == "running":
+        now_ts = time.time()
+        updated_ts = _coerce_timestamp(payload.get("updated_ts"))
+        if updated_ts is None:
+            updated_ts = _coerce_timestamp(payload.get("updated_at"))
+        if updated_ts is None:
+            updated_ts = _coerce_timestamp(payload.get("started_ts"))
+        if updated_ts is None:
+            updated_ts = _coerce_timestamp(payload.get("started_at"))
+
+        chunks_completed = _coerce_number(payload.get("chunks_completed"))
+        total_chunks = _coerce_number(payload.get("total_chunks"))
+        looks_finished = (
+            chunks_completed is not None
+            and total_chunks is not None
+            and total_chunks > 0
+            and chunks_completed >= total_chunks
+        )
+        stale_running = updated_ts is not None and now_ts - float(updated_ts) > MARKET_RANKINGS_STALLED_SECONDS
+        finished_but_not_closed = (
+            looks_finished
+            and updated_ts is not None
+            and now_ts - float(updated_ts) > max(10, MARKET_RANKINGS_LOOP_DELAY_SECONDS * 2)
+        )
+        if stale_running or finished_but_not_closed:
+            stalled_payload = dict(payload)
+            stalled_payload["status"] = "stalled"
+            stalled_payload["stalled"] = True
+            stalled_payload["stalled_at"] = now_ts
+            stalled_payload["stalled_ts"] = now_ts
+            return stalled_payload
+    return payload
+
+
+def _snapshot_stale_seconds(payload: object) -> int | None:
+    if not isinstance(payload, Mapping):
+        return None
+    generated_ts = _coerce_number(payload.get("generated_ts"))
+    if generated_ts is None:
+        generated_ts = _coerce_number(payload.get("generated_at"))
+    if generated_ts is None:
+        return None
+    return max(0, int(time.time() - generated_ts))
+
+
+def _snapshot_ttl_for_timeframe(timeframe_key: str) -> int:
+    return MARKET_RANKINGS_SNAPSHOT_TTL if timeframe_key == "1d" else MARKET_RANKINGS_TIMEFRAME_SNAPSHOT_TTL
+
+
+def _snapshot_state_payload(
+    *,
+    timeframe_key: str,
+    provider: str,
+    used_active_snapshot: bool,
+    list_type: str | None = None,
+) -> dict[str, object]:
+    active_payload = _resolve_active_snapshot_payload(timeframe_key, provider=provider)
+    stale_seconds = _snapshot_stale_seconds(active_payload)
+    building_payload = _resolve_building_snapshot_payload(timeframe_key, provider=provider)
+    progress: Mapping[str, object] | None = None
+    building = False
+    build_state = "idle"
+    build_stalled = False
+    if isinstance(building_payload, Mapping):
+        payload_status = str(building_payload.get("status") or "").strip().lower()
+        if payload_status in {"running", "error", "idle", "stalled"}:
+            build_state = payload_status
+        building = payload_status == "running"
+        build_stalled = payload_status == "stalled" or bool(building_payload.get("stalled"))
+        payload_progress = building_payload.get("progress")
+        if isinstance(payload_progress, Mapping):
+            progress = payload_progress
+        elif payload_status == "running":
+            progress = {
+                "status": "running",
+                "chunks_completed": building_payload.get("chunks_completed"),
+                "total_chunks": building_payload.get("total_chunks"),
+            }
+    if progress is None and timeframe_key == "1d":
+        refresh_meta = _snapshot_refresh_meta() or {}
+        refresh_progress = refresh_meta.get("progress")
+        if isinstance(refresh_progress, Mapping):
+            progress = refresh_progress
+            building = building or str(refresh_progress.get("status") or "").lower() == "running"
+            if build_state == "idle" and building:
+                build_state = "running"
+    building_progress = _snapshot_progress_percent(progress) if build_state == "running" else 0
+    if used_active_snapshot and isinstance(active_payload, Mapping):
+        served_from = "building_fallback" if building else "active"
+    else:
+        served_from = "none"
+    active_generated_at = None
+    if isinstance(active_payload, Mapping):
+        active_generated_at = active_payload.get("generated_at") or active_payload.get("generated_ts")
+    active_schema_valid = None
+    if isinstance(active_payload, Mapping) and list_type:
+        active_rows = active_payload.get("rows")
+        active_schema_valid = _snapshot_rows_schema_valid_for_list(active_rows, list_type=list_type)
+    return {
+        "served_from": served_from,
+        "active_generated_at": active_generated_at,
+        "building_progress": building_progress,
+        "building": bool(building),
+        "build_state": build_state,
+        "build_stalled": bool(build_stalled),
+        "stale_seconds": stale_seconds,
+        "stale_threshold_seconds": _snapshot_ttl_for_timeframe(timeframe_key),
+        "provider": provider,
+        "active_schema_valid": active_schema_valid,
+    }
+
+
+def _resolve_market_data_state(
+    *,
+    items: list[dict[str, object]],
+    snapshot_state: Mapping[str, object],
+) -> str:
+    has_items = bool(items)
+    served_from = str(snapshot_state.get("served_from") or "none")
+    building = bool(snapshot_state.get("building"))
+    active_schema_valid = snapshot_state.get("active_schema_valid")
+    stale_seconds = _coerce_number(snapshot_state.get("stale_seconds"))
+    stale_threshold = _coerce_number(snapshot_state.get("stale_threshold_seconds"))
+    if has_items:
+        if served_from == "building_fallback":
+            return "stale"
+        if stale_seconds is not None and stale_threshold is not None and stale_seconds > stale_threshold:
+            return "stale"
+        return "ready"
+    if building:
+        return "building"
+    if active_schema_valid is False:
+        return "limited"
+    if served_from == "active":
+        return "stale"
+    return "limited"
+
+
+def _cached_rankings_payload_usable(payload: Mapping[str, object]) -> bool:
+    """Guard against stale/invalid page-cache payloads after snapshot files are cleared."""
+    items = payload.get("items")
+    has_items = isinstance(items, list) and bool(items)
+    # Ranking page cache should never serve empty items, otherwise the UI can be
+    # stuck in an empty state even after snapshots become available again.
+    return bool(has_items)
+
+
+def _maybe_trigger_snapshot_refresh_nonblocking(
+    *,
+    request: HttpRequest,
+    timeframe_key: str,
+    list_type: str,
+    snapshot_state: Mapping[str, object],
+    data_state: str,
+) -> None:
+    if timeframe_key == "1d":
+        return
+    if list_type not in {"gainers", "losers", "most_active", "top_turnover"}:
+        return
+    is_building = bool(snapshot_state.get("building"))
+    is_stalled = bool(snapshot_state.get("build_stalled"))
+    is_error = str(snapshot_state.get("build_state") or "").lower() == "error"
+    stale_seconds = _coerce_number(snapshot_state.get("stale_seconds"))
+    stale_threshold = _coerce_number(snapshot_state.get("stale_threshold_seconds"))
+    served_from = str(snapshot_state.get("served_from") or "none")
+    should_trigger = False
+    if data_state in {"building", "limited"}:
+        should_trigger = True
+    elif is_stalled:
+        should_trigger = True
+    elif is_error:
+        should_trigger = True
+    elif not is_building and stale_seconds is not None and stale_threshold and stale_seconds >= stale_threshold:
+        should_trigger = True
+    elif not is_building and served_from != "active":
+        should_trigger = True
+    if not should_trigger:
+        return
+    user_id = str(request.user.id) if getattr(request, "user", None) and request.user.is_authenticated else None
+    try:
+        from ..tasks import trigger_market_snapshot_refresh
+
+        trigger_market_snapshot_refresh(user_id=user_id, prefer_thread=True)
+    except Exception:
+        LOGGER.debug("failed to trigger snapshot refresh in background", exc_info=True)
+
+
 def _build_snapshot_rankings(user_id: str | None) -> list[dict[str, object]]:
-    cached_rows = _load_snapshot_rankings_latest_rows()
+    market_source = resolve_market_provider(user_id=user_id)
+    cached_rows = _load_snapshot_rankings_latest_rows(provider=market_source)
     if cached_rows is not None:
         return cached_rows
     if MARKET_RANKINGS_BACKGROUND_ONLY:
         return []
-    cache_key = build_cache_key("market-rankings-snapshots", user_id or "anon")
+    cache_key = build_cache_key("market-rankings-snapshots", market_source, user_id or "anon")
 
     def _load() -> list[dict[str, object]] | None:
         assets = _filter_rankable_assets(_normalize_assets(_load_assets_master(user_id)))
@@ -1324,20 +1861,11 @@ def _build_snapshot_rankings(user_id: str | None) -> list[dict[str, object]]:
             snapshot = snapshots.get(symbol) if isinstance(snapshots, dict) else None
             if not isinstance(snapshot, dict):
                 continue
-            latest_trade = snapshot.get("latestTrade") or snapshot.get("latest_trade") or {}
-            latest_quote = snapshot.get("latestQuote") or snapshot.get("latest_quote") or {}
             daily_bar = snapshot.get("dailyBar") or snapshot.get("daily_bar") or {}
             minute_bar = snapshot.get("minuteBar") or snapshot.get("minute_bar") or {}
             prev_bar = snapshot.get("prevDailyBar") or snapshot.get("prev_daily_bar") or {}
-
-            last_price = _coerce_number(
-                (latest_trade or {}).get("p")
-                or (minute_bar or {}).get("c")
-                or (daily_bar or {}).get("c")
-                or (latest_quote or {}).get("ap")
-                or (latest_quote or {}).get("bp")
-            )
-            prev_close = _coerce_number((prev_bar or {}).get("c"))
+            prev_close = _coerce_positive_price((prev_bar or {}).get("c"))
+            last_price = _resolve_snapshot_last_price(snapshot, prev_close=prev_close, allow_quote_fallback=False)
             if last_price is None or prev_close in (None, 0):
                 continue
             try:
@@ -1348,7 +1876,7 @@ def _build_snapshot_rankings(user_id: str | None) -> list[dict[str, object]]:
             dollar_volume = None
             if volume is not None:
                 dollar_volume = last_price * volume
-            open_price = _coerce_number((daily_bar or {}).get("o"))
+            open_price = _coerce_positive_price((daily_bar or {}).get("o"))
             high_price = _coerce_number((daily_bar or {}).get("h"))
             low_price = _coerce_number((daily_bar or {}).get("l"))
             prev_volume = _coerce_number((prev_bar or {}).get("v"))
@@ -1385,6 +1913,8 @@ def _build_snapshot_rankings(user_id: str | None) -> list[dict[str, object]]:
                     "change_pct_period": change_pct,
                     "volume": volume,
                     "dollar_volume": dollar_volume,
+                    "open": open_price,
+                    "prev_close": prev_close,
                     "gap_pct": gap_pct,
                     "range_pct": range_pct,
                     "volume_ratio": volume_ratio,
@@ -1406,46 +1936,136 @@ def refresh_snapshot_rankings(*, user_id: str | None = None) -> dict[str, object
         "status": "running",
         "started_at": started_at,
         "started_ts": started_ts,
+        "updated_at": started_at,
+        "updated_ts": started_ts,
     }
     write_state(SNAPSHOT_RANKINGS_PROGRESS_STATE, progress_payload)
+    write_state(
+        SNAPSHOT_RANKINGS_BUILDING_STATE,
+        {
+            "status": "running",
+            "started_at": started_at,
+            "started_ts": started_ts,
+            "updated_at": started_at,
+            "updated_ts": started_ts,
+        },
+    )
 
     try:
-        key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
-        if not (key_id and secret):
+        market_source = resolve_market_provider(user_id=user_id)
+        if market_source == "alpaca":
+            key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
+            has_credentials = bool(key_id and secret)
+        else:
+            has_credentials = has_market_data_credentials(user_id=user_id, provider=market_source)
+        if not has_credentials:
+            now_ts = time.time()
             error_payload = {
                 "status": "error",
                 "started_at": started_at,
                 "started_ts": started_ts,
+                "updated_at": now_ts,
+                "updated_ts": now_ts,
                 "error": "missing_credentials",
+                "source": market_source,
             }
             write_state(SNAPSHOT_RANKINGS_PROGRESS_STATE, error_payload)
+            write_state(SNAPSHOT_RANKINGS_BUILDING_STATE, error_payload)
             return error_payload
 
         assets = _filter_rankable_assets(_normalize_assets(_load_assets_master(user_id)))
         asset_map = {asset.get("symbol"): asset for asset in assets if asset.get("symbol")}
         symbols = list(asset_map.keys())
         total_symbols = len(symbols)
-        chunk_size = min(200, max(1, MARKET_RANKINGS_SNAPSHOT_CHUNK_SIZE))
-        chunks = list(_iter_chunks(symbols, chunk_size))
+        chunk_size = min(300, max(1, MARKET_RANKINGS_SNAPSHOT_CHUNK_SIZE))
         timeframes = [TIMEFRAMES[key] for key in MARKET_RANKINGS_TIMEFRAME_KEYS if key in TIMEFRAMES]
-        timeframe_batches = 1 if timeframes else 0
-        total_chunks = len(chunks) * (1 + timeframe_batches)
-        rows: list[dict[str, object]] = []
+        snapshot_chunks = list(_iter_chunks(symbols, chunk_size))
+
         api_calls = 0
+        preloaded_snapshots: dict[str, object] | None = None
+        timeframe_symbols = symbols
+        if market_source == "massive" and symbols:
+            try:
+                snapshot_payload = fetch_stock_snapshots(
+                    symbols,
+                    feed=DEFAULT_FEED,
+                    user_id=user_id,
+                    timeout=MARKET_REQUEST_TIMEOUT,
+                    provider=market_source,
+                )
+            except Exception:
+                snapshot_payload = {}
+            if isinstance(snapshot_payload, dict) and snapshot_payload:
+                preloaded_snapshots = snapshot_payload
+                api_calls += 1
+                if timeframes:
+                    candidate_rows: list[dict[str, object]] = []
+                    for symbol in symbols:
+                        snapshot_entry = preloaded_snapshots.get(symbol)
+                        if not isinstance(snapshot_entry, Mapping):
+                            continue
+                        metrics = _snapshot_metrics_from_payload(snapshot_entry)
+                        candidate_rows.append(
+                            {
+                                "symbol": symbol,
+                                "dollar_volume": _coerce_number(metrics.get("dollar_volume")),
+                                "volume": _coerce_number(metrics.get("volume")),
+                            }
+                        )
+                    ranked_timeframe_symbols = _sort_rows_by_metric(
+                        candidate_rows,
+                        "dollar_volume",
+                        reverse=True,
+                        predicate=lambda value: value > 0,
+                    )
+                    if not ranked_timeframe_symbols:
+                        ranked_timeframe_symbols = _sort_rows_by_metric(
+                            candidate_rows,
+                            "volume",
+                            reverse=True,
+                            predicate=lambda value: value > 0,
+                        )
+                    max_timeframe_symbols = max(100, MARKET_UNIVERSE_WINDOW_MAX_SYMBOLS)
+                    timeframe_symbols = [
+                        str(item.get("symbol") or "").strip().upper()
+                        for item in ranked_timeframe_symbols[:max_timeframe_symbols]
+                        if isinstance(item, Mapping) and item.get("symbol")
+                    ]
+                    if not timeframe_symbols:
+                        timeframe_symbols = symbols[:max_timeframe_symbols]
+
+        timeframe_chunk_size = chunk_size
+        if market_source == "massive":
+            timeframe_chunk_size = max(5, min(chunk_size, MARKET_RANKINGS_TIMEFRAME_CHUNK_SIZE_MASSIVE))
+        timeframe_chunks = list(_iter_chunks(timeframe_symbols, timeframe_chunk_size)) if timeframes else []
+        timeframe_total_chunks = len(timeframe_chunks)
+        total_chunks = len(snapshot_chunks) + timeframe_total_chunks
+        rows: list[dict[str, object]] = []
         completed_chunks = 0
+        timeframe_completed_chunks = 0
+
+        has_active_1d_snapshot = _load_snapshot_rankings_latest_payload(provider=market_source) is not None
+        has_active_timeframe_snapshots = all(
+            _load_timeframe_snapshot_payload(timeframe.key, provider=market_source) is not None
+            for timeframe in timeframes
+        ) if timeframes else True
+        cold_start_refresh = not has_active_1d_snapshot or not has_active_timeframe_snapshots
 
         target_seconds = float(MARKET_RANKINGS_REFRESH_SECONDS - MARKET_RANKINGS_REFRESH_MARGIN_SECONDS)
-        if total_chunks <= 0:
+        if cold_start_refresh or total_chunks <= 0:
             target_seconds = 0.0
         else:
             target_seconds = max(0.0, target_seconds)
 
         def _update_progress() -> None:
             elapsed = time.time() - started_ts
+            now_ts = time.time()
             progress_payload = {
                 "status": "running",
                 "started_at": started_at,
                 "started_ts": started_ts,
+                "updated_at": now_ts,
+                "updated_ts": now_ts,
                 "total_symbols": total_symbols,
                 "chunk_size": chunk_size,
                 "total_chunks": total_chunks,
@@ -1455,6 +2075,28 @@ def refresh_snapshot_rankings(*, user_id: str | None = None) -> dict[str, object
                 "target_seconds": target_seconds,
             }
             write_state(SNAPSHOT_RANKINGS_PROGRESS_STATE, progress_payload)
+            write_state(
+                SNAPSHOT_RANKINGS_BUILDING_STATE,
+                {
+                    "status": "running",
+                    "started_at": started_at,
+                    "started_ts": started_ts,
+                    "updated_at": now_ts,
+                    "updated_ts": now_ts,
+                    "source": market_source,
+                    "total_chunks": total_chunks,
+                    "chunks_completed": completed_chunks,
+                    "api_calls": api_calls,
+                    "progress": {
+                        "status": "running",
+                        "chunks_completed": completed_chunks,
+                        "total_chunks": total_chunks,
+                        "percent": _snapshot_progress_percent(
+                            {"chunks_completed": completed_chunks, "total_chunks": total_chunks}
+                        ),
+                    },
+                },
+            )
 
             if total_chunks > 0 and target_seconds > 0 and completed_chunks < total_chunks:
                 target_elapsed = target_seconds * completed_chunks / total_chunks
@@ -1462,14 +2104,181 @@ def refresh_snapshot_rankings(*, user_id: str | None = None) -> dict[str, object
                 if sleep_for > 0:
                     time.sleep(sleep_for)
 
-        for chunk in chunks:
-            snapshots = fetch_stock_snapshots(
-                chunk,
-                feed=DEFAULT_FEED,
-                user_id=user_id,
-                timeout=MARKET_REQUEST_TIMEOUT,
-            )
-            api_calls += 1
+        def _write_timeframe_building_progress() -> None:
+            if not timeframes:
+                return
+            total = max(1, timeframe_total_chunks)
+            completed_global = max(0, timeframe_completed_chunks)
+            percent = max(0, min(100, int(round((completed_global / total) * 100))))
+            now_ts = time.time()
+            for timeframe in timeframes:
+                write_state(
+                    _snapshot_timeframe_building_state_name(timeframe.key),
+                    {
+                        "status": "running",
+                        "started_at": started_at,
+                        "started_ts": started_ts,
+                        "updated_at": now_ts,
+                        "updated_ts": now_ts,
+                        "source": market_source,
+                        "timeframe": timeframe.key,
+                        "chunks_completed": completed_global,
+                        "total_chunks": total,
+                        "progress": {
+                            "status": "running",
+                            "chunks_completed": completed_global,
+                            "total_chunks": total,
+                            "percent": percent,
+                        },
+                    },
+                )
+
+        if timeframes:
+            _write_timeframe_building_progress()
+
+        if timeframes:
+            timeframe_rows_map: dict[str, list[dict[str, object]]] = {tf.key: [] for tf in timeframes}
+            timeframe_started = time.time()
+            timeframe_error: str | None = None
+            timeframe_api_calls = 0
+            max_timeframe = max(timeframes, key=lambda item: _daily_window_length(item) or 0)
+            daily_timeframe = _resolve_daily_timeframe(max_timeframe)
+            try:
+                for chunk in timeframe_chunks:
+                    frame = market_data.fetch(
+                        chunk,
+                        period=daily_timeframe.period,
+                        interval=daily_timeframe.interval,
+                        cache=True,
+                        timeout=MARKET_REQUEST_TIMEOUT,
+                        ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
+                        cache_alias=getattr(settings, "MARKET_HISTORY_CACHE_ALIAS", None),
+                        user_id=user_id,
+                    )
+                    api_calls += 1
+                    timeframe_api_calls += 1
+                    if isinstance(frame, pd.DataFrame) and not frame.empty:
+                        for symbol in chunk:
+                            asset = asset_map.get(symbol)
+                            if not asset:
+                                continue
+                            bars_full = _extract_ohlc(frame, symbol, limit=420)
+                            if not bars_full:
+                                continue
+                            for timeframe in timeframes:
+                                bars = bars_full
+                                window_len = _daily_window_length(timeframe)
+                                if window_len and len(bars_full) > window_len:
+                                    bars = bars_full[-window_len:]
+                                metrics, missing = _compute_window_metrics_from_bars(bars, timeframe=timeframe)
+                                row: dict[str, object] = {
+                                    "symbol": symbol,
+                                    "name": asset.get("name") or "",
+                                    "exchange": asset.get("exchange") or "",
+                                    "price": _coerce_number(metrics.get("price")),
+                                    "change_pct_day": _coerce_number(metrics.get("change_pct_day")),
+                                    "change_pct_period": _coerce_number(metrics.get("change_pct_period")),
+                                    "volume": _coerce_number(metrics.get("volume")),
+                                    "dollar_volume": _coerce_number(metrics.get("dollar_volume")),
+                                    "open": _coerce_number(metrics.get("open")),
+                                    "prev_close": _coerce_number(metrics.get("prev_close")),
+                                    "range_pct": _coerce_number(metrics.get("range_pct")),
+                                    # Convert lazy translation proxies to plain strings
+                                    # before persisting state JSON.
+                                    "period_label": str(timeframe.label),
+                                    "period_label_en": str(timeframe.label_en),
+                                }
+                                if not MARKET_RANKINGS_DISABLE_FILTERS and not _passes_rank_filters(row):
+                                    continue
+                                if missing:
+                                    row["missing_reasons"] = missing
+                                timeframe_rows_map[timeframe.key].append(row)
+                    completed_chunks += 1
+                    timeframe_completed_chunks += 1
+                    _write_timeframe_building_progress()
+                    _update_progress()
+            except Exception:
+                LOGGER.exception(
+                    "Snapshot timeframe refresh failed user_id=%s timeframe=%s",
+                    user_id,
+                    max_timeframe.key,
+                )
+                timeframe_error = "timeframe_refresh_failed"
+
+            duration = time.time() - timeframe_started
+            for timeframe in timeframes:
+                timeframe_rows = timeframe_rows_map.get(timeframe.key, [])
+                if timeframe_rows:
+                    timeframe_rows.sort(key=lambda item: item.get("change_pct_period") or 0, reverse=True)
+                schema_error = None
+                if timeframe_rows:
+                    has_volume_metric = _snapshot_rows_schema_valid_for_list(
+                        timeframe_rows,
+                        list_type="most_active",
+                    )
+                    has_turnover_metric = _snapshot_rows_schema_valid_for_list(
+                        timeframe_rows,
+                        list_type="top_turnover",
+                    )
+                    if not has_volume_metric or not has_turnover_metric:
+                        schema_error = "invalid_snapshot_schema"
+                timeframe_status_error = timeframe_error or schema_error
+                generated_ts = time.time()
+                timeframe_payload: dict[str, object] = {
+                    "status": "error" if timeframe_status_error else "complete",
+                    "generated_at": generated_ts,
+                    "generated_ts": generated_ts,
+                    "source": market_source,
+                    "timeframe": timeframe.key,
+                    "total_symbols": total_symbols,
+                    "chunk_size": chunk_size,
+                    "api_calls": timeframe_api_calls,
+                    "duration_seconds": round(duration, 2),
+                    "rows": timeframe_rows,
+                }
+                if timeframe_status_error:
+                    timeframe_payload["error"] = timeframe_status_error
+                    write_state(_snapshot_timeframe_building_state_name(timeframe.key), timeframe_payload)
+                else:
+                    write_state(_snapshot_timeframe_state_name(timeframe.key), timeframe_payload)
+                    write_state(
+                        _snapshot_timeframe_building_state_name(timeframe.key),
+                        {
+                            "status": "idle",
+                            "completed_at": generated_ts,
+                            "completed_ts": generated_ts,
+                            "updated_at": generated_ts,
+                            "updated_ts": generated_ts,
+                            "source": market_source,
+                            "timeframe": timeframe.key,
+                        },
+                    )
+
+        for chunk in snapshot_chunks:
+            if preloaded_snapshots is not None:
+                snapshots = {
+                    symbol: preloaded_snapshots.get(symbol)
+                    for symbol in chunk
+                    if isinstance(preloaded_snapshots.get(symbol), dict)
+                }
+            else:
+                try:
+                    snapshots = fetch_stock_snapshots(
+                        chunk,
+                        feed=DEFAULT_FEED,
+                        user_id=user_id,
+                        timeout=MARKET_REQUEST_TIMEOUT,
+                        provider=market_source,
+                    )
+                except Exception:
+                    LOGGER.exception(
+                        "snapshot chunk fetch failed user_id=%s provider=%s chunk_size=%s",
+                        user_id,
+                        market_source,
+                        len(chunk),
+                    )
+                    snapshots = {}
+                api_calls += 1
             if isinstance(snapshots, dict):
                 for symbol in chunk:
                     asset = asset_map.get(symbol)
@@ -1478,20 +2287,11 @@ def refresh_snapshot_rankings(*, user_id: str | None = None) -> dict[str, object
                     snapshot = snapshots.get(symbol)
                     if not isinstance(snapshot, dict):
                         continue
-                    latest_trade = snapshot.get("latestTrade") or snapshot.get("latest_trade") or {}
-                    latest_quote = snapshot.get("latestQuote") or snapshot.get("latest_quote") or {}
                     daily_bar = snapshot.get("dailyBar") or snapshot.get("daily_bar") or {}
                     minute_bar = snapshot.get("minuteBar") or snapshot.get("minute_bar") or {}
                     prev_bar = snapshot.get("prevDailyBar") or snapshot.get("prev_daily_bar") or {}
-
-                    last_price = _coerce_number(
-                        (latest_trade or {}).get("p")
-                        or (minute_bar or {}).get("c")
-                        or (daily_bar or {}).get("c")
-                        or (latest_quote or {}).get("ap")
-                        or (latest_quote or {}).get("bp")
-                    )
-                    prev_close = _coerce_number((prev_bar or {}).get("c"))
+                    prev_close = _coerce_positive_price((prev_bar or {}).get("c"))
+                    last_price = _resolve_snapshot_last_price(snapshot, prev_close=prev_close, allow_quote_fallback=False)
                     if last_price is None or prev_close in (None, 0):
                         continue
                     try:
@@ -1502,7 +2302,7 @@ def refresh_snapshot_rankings(*, user_id: str | None = None) -> dict[str, object
                     dollar_volume = None
                     if volume is not None:
                         dollar_volume = last_price * volume
-                    open_price = _coerce_number((daily_bar or {}).get("o"))
+                    open_price = _coerce_positive_price((daily_bar or {}).get("o"))
                     high_price = _coerce_number((daily_bar or {}).get("h"))
                     low_price = _coerce_number((daily_bar or {}).get("l"))
                     prev_volume = _coerce_number((prev_bar or {}).get("v"))
@@ -1531,69 +2331,24 @@ def refresh_snapshot_rankings(*, user_id: str | None = None) -> dict[str, object
 
                     rows.append(
                         {
-                        "symbol": symbol,
-                        "name": asset.get("name") or "",
-                        "exchange": asset.get("exchange") or "",
-                        "price": last_price,
-                        "change_pct_day": change_pct,
-                        "change_pct_period": change_pct,
-                        "volume": volume,
-                        "dollar_volume": dollar_volume,
-                        "gap_pct": gap_pct,
-                        "range_pct": range_pct,
-                        "volume_ratio": volume_ratio,
+                            "symbol": symbol,
+                            "name": asset.get("name") or "",
+                            "exchange": asset.get("exchange") or "",
+                            "price": last_price,
+                            "change_pct_day": change_pct,
+                            "change_pct_period": change_pct,
+                            "volume": volume,
+                            "dollar_volume": dollar_volume,
+                            "open": open_price,
+                            "prev_close": prev_close,
+                            "gap_pct": gap_pct,
+                            "range_pct": range_pct,
+                            "volume_ratio": volume_ratio,
                         }
                     )
 
             completed_chunks += 1
             _update_progress()
-
-        if timeframes:
-            timeframe_rows_map: dict[str, list[dict[str, object]]] = {tf.key: [] for tf in timeframes}
-            timeframe_started = time.time()
-            timeframe_error: str | None = None
-            timeframe_api_calls = 0
-            max_timeframe = max(timeframes, key=lambda item: _daily_window_length(item) or 0)
-            daily_timeframe = _resolve_daily_timeframe(max_timeframe)
-            try:
-                for chunk in chunks:
-                    series_map, _source = _download_history(chunk, daily_timeframe, user_id=user_id)
-                    api_calls += 1
-                    timeframe_api_calls += 1
-                    if series_map:
-                        for timeframe in timeframes:
-                            timeframe_rows_map[timeframe.key].extend(_rank_symbols_daily(series_map, timeframe))
-                    completed_chunks += 1
-                    _update_progress()
-            except Exception:
-                LOGGER.exception(
-                    "Snapshot timeframe refresh failed user_id=%s timeframe=%s",
-                    user_id,
-                    max_timeframe.key,
-                )
-                timeframe_error = "timeframe_refresh_failed"
-
-            duration = time.time() - timeframe_started
-            for timeframe in timeframes:
-                timeframe_rows = timeframe_rows_map.get(timeframe.key, [])
-                if timeframe_rows:
-                    timeframe_rows.sort(key=lambda item: item.get("change_pct_period") or 0, reverse=True)
-                generated_ts = time.time()
-                timeframe_payload: dict[str, object] = {
-                    "status": "error" if timeframe_error else "complete",
-                    "generated_at": generated_ts,
-                    "generated_ts": generated_ts,
-                    "source": "alpaca",
-                    "timeframe": timeframe.key,
-                    "total_symbols": total_symbols,
-                    "chunk_size": chunk_size,
-                    "api_calls": timeframe_api_calls,
-                    "duration_seconds": round(duration, 2),
-                    "rows": timeframe_rows,
-                }
-                if timeframe_error:
-                    timeframe_payload["error"] = timeframe_error
-                write_state(_snapshot_timeframe_state_name(timeframe.key), timeframe_payload)
 
         duration_seconds = time.time() - started_ts
         api_calls_per_minute = None
@@ -1605,7 +2360,7 @@ def refresh_snapshot_rankings(*, user_id: str | None = None) -> dict[str, object
             "status": "complete",
             "generated_at": generated_ts,
             "generated_ts": generated_ts,
-            "source": "alpaca",
+            "source": market_source,
             "total_symbols": total_symbols,
             "chunk_size": chunk_size,
             "api_calls": api_calls,
@@ -1615,16 +2370,47 @@ def refresh_snapshot_rankings(*, user_id: str | None = None) -> dict[str, object
         }
         write_state(SNAPSHOT_RANKINGS_STATE, payload)
         write_state(SNAPSHOT_RANKINGS_PROGRESS_STATE, _snapshot_refresh_payload_summary(payload))
+        write_state(
+            SNAPSHOT_RANKINGS_BUILDING_STATE,
+            {
+                "status": "idle",
+                "completed_at": generated_ts,
+                "completed_ts": generated_ts,
+                "updated_at": generated_ts,
+                "updated_ts": generated_ts,
+                "source": market_source,
+            },
+        )
         return payload
     except Exception:
         LOGGER.exception("Snapshot rankings refresh failed user_id=%s", user_id)
+        failed_ts = time.time()
+        current_source = str(locals().get("market_source") or "unknown")
         error_payload = {
             "status": "error",
             "started_at": started_at,
             "started_ts": started_ts,
+            "updated_at": failed_ts,
+            "updated_ts": failed_ts,
             "error": "snapshot_refresh_failed",
+            "source": current_source,
         }
         write_state(SNAPSHOT_RANKINGS_PROGRESS_STATE, error_payload)
+        write_state(SNAPSHOT_RANKINGS_BUILDING_STATE, error_payload)
+        for timeframe in MARKET_RANKINGS_TIMEFRAME_KEYS:
+            write_state(
+                _snapshot_timeframe_building_state_name(timeframe),
+                {
+                    "status": "error",
+                    "timeframe": timeframe,
+                    "source": current_source,
+                    "started_at": started_at,
+                    "started_ts": started_ts,
+                    "updated_at": failed_ts,
+                    "updated_ts": failed_ts,
+                    "error": "snapshot_refresh_failed",
+                },
+            )
         return error_payload
     finally:
         lock.release()
@@ -1662,9 +2448,10 @@ def _load_universe_ranked() -> list[dict[str, object]]:
 
 
 def _resolve_universe_rankings(user_id: str | None) -> tuple[list[dict[str, object]], str]:
+    market_source = resolve_market_provider(user_id=user_id)
     rankings = _build_snapshot_rankings(user_id)
     if rankings:
-        return rankings, "alpaca"
+        return rankings, market_source
     rankings = _load_universe_ranked()
     if rankings:
         symbols = {item.get("symbol") for item in rankings if isinstance(item, dict)}
@@ -1756,6 +2543,42 @@ def _sort_rows_by_metric(
     return [row for _value, row in ranked]
 
 
+def _rows_have_metric(
+    rows: list[dict[str, object]],
+    metric_key: str,
+    *,
+    min_valid_rows: int = 1,
+) -> bool:
+    if not rows:
+        return False
+    valid = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if _coerce_number(row.get(metric_key)) is not None:
+            valid += 1
+            if valid >= max(1, min_valid_rows):
+                return True
+    return False
+
+
+def _snapshot_rows_schema_valid_for_list(
+    rows: list[dict[str, object]] | None,
+    *,
+    list_type: str,
+    min_valid_rows: int = 3,
+) -> bool:
+    if not isinstance(rows, list) or not rows:
+        return False
+    if list_type in {"gainers", "losers"}:
+        return _rows_have_metric(rows, "change_pct_period", min_valid_rows=min_valid_rows)
+    if list_type == "most_active":
+        return _rows_have_metric(rows, "volume", min_valid_rows=min_valid_rows)
+    if list_type == "top_turnover":
+        return _rows_have_metric(rows, "dollar_volume", min_valid_rows=min_valid_rows)
+    return True
+
+
 def _paginate_items(
     items: list[dict[str, object]],
     *,
@@ -1796,7 +2619,7 @@ def _rank_symbols_light(
         ranked.append(
             {
                 "symbol": sym,
-                "price": round(end_price, 2),
+                "price": float(end_price),
                 "change_pct_period": round(period_change, 2),
                 "change_pct_day": round(day_change, 2),
                 "period_label": label,
@@ -1859,7 +2682,7 @@ def _rank_symbols_daily(
         ranked.append(
             {
                 "symbol": sym,
-                "price": round(end_price, 2),
+                "price": float(end_price),
                 "change_pct_period": round(period_change, 2),
                 "change_pct_day": round(day_change, 2),
                 "period_label": label,
@@ -1925,7 +2748,8 @@ def _resolve_universe_timeframe_rankings(
                 entry.setdefault("period_label", timeframe.label)
                 entry.setdefault("period_label_en", timeframe.label_en)
         return rows, source
-    cache_key = build_cache_key("market-universe-timeframe", "alpaca", timeframe.key, user_id or "anon")
+    market_source = resolve_market_provider(user_id=user_id)
+    cache_key = build_cache_key("market-universe-timeframe", market_source, timeframe.key, user_id or "anon")
 
     def _load():
         assets = _filter_rankable_assets(_normalize_assets(_load_assets_master(user_id)))
@@ -1965,7 +2789,8 @@ def _resolve_universe_window_rankings(
             if isinstance(entry, dict)
         ]
         return normalized_rows, source
-    cache_key = build_cache_key("market-universe-window-v2", "alpaca", timeframe.key, user_id or "anon")
+    market_source = resolve_market_provider(user_id=user_id)
+    cache_key = build_cache_key("market-universe-window-v2", market_source, timeframe.key, user_id or "anon")
 
     def _load() -> dict[str, object]:
         assets = _filter_rankable_assets(_normalize_assets(_load_assets_master(user_id)))
@@ -2184,22 +3009,178 @@ def _format_percent(value: object) -> str | None:
     return f"{num * 100:.2f}%" if abs(num) <= 2 else f"{num:.2f}%"
 
 
-def _fetch_company_profile(symbol: str, *, user_id: str | None = None) -> dict[str, object]:
+def _normalize_fundamentals_payload(raw: Mapping[str, object]) -> dict[str, object]:
+    payload = {
+        "market_cap": raw.get("market_cap"),
+        "sector": raw.get("sector"),
+        "industry": raw.get("industry"),
+        "ceo": raw.get("ceo"),
+        "hq": raw.get("hq"),
+        "city": raw.get("city"),
+        "state": raw.get("state"),
+        "country": raw.get("country"),
+        "quote_type": raw.get("quote_type"),
+    }
+    has_hq = payload.get("hq")
+    if not has_hq:
+        parts = [payload.get("city"), payload.get("state"), payload.get("country")]
+        joined = ", ".join(str(part) for part in parts if part not in (None, "", []))
+        if joined:
+            payload["hq"] = joined
+    return {
+        key: value
+        for key, value in payload.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _merge_missing_fields(primary: dict[str, object], fallback: Mapping[str, object] | None) -> dict[str, object]:
+    if not isinstance(primary, dict):
+        primary = {}
+    if not isinstance(fallback, Mapping):
+        return primary
+    for key, value in fallback.items():
+        if value in (None, "", [], {}):
+            continue
+        if primary.get(key) in (None, "", [], {}):
+            primary[key] = value
+    return primary
+
+
+def _download_yfinance_profile_fallback(symbol: str) -> tuple[dict[str, object] | None, dict[str, object]]:
+    debug: dict[str, object] = {"symbol": symbol, "source": "yfinance"}
+    try:
+        import yfinance as yf  # type: ignore
+    except Exception as exc:
+        debug["error"] = f"import:{exc}"
+        return None, debug
+    try:
+        ticker = yf.Ticker(symbol)
+    except Exception as exc:
+        debug["error"] = f"ticker:{exc}"
+        return None, debug
+    try:
+        info = ticker.get_info() or {}
+    except Exception:
+        try:
+            info = ticker.info or {}
+        except Exception as exc:
+            debug["error"] = f"info:{exc}"
+            return None, debug
+    if not isinstance(info, dict):
+        debug["error"] = "info:invalid"
+        return None, debug
+
+    city = info.get("city")
+    state = info.get("state")
+    country = info.get("country")
+    hq_parts = [part for part in (city, state, country) if part not in (None, "")]
+    hq = ", ".join(str(part) for part in hq_parts) if hq_parts else None
+
+    ceo = None
+    officers = info.get("companyOfficers")
+    if isinstance(officers, list):
+        for officer in officers:
+            if not isinstance(officer, dict):
+                continue
+            title = str(officer.get("title") or "").lower()
+            if "ceo" in title or "chief executive" in title:
+                ceo = officer.get("name") or officer.get("fullName") or officer.get("full_name")
+                if ceo:
+                    break
+
+    market_cap = info.get("marketCap")
+    if market_cap in (None, "", 0):
+        try:
+            fast_info = ticker.fast_info or {}
+        except Exception:
+            fast_info = {}
+        if isinstance(fast_info, dict):
+            market_cap = fast_info.get("market_cap") or fast_info.get("marketCap") or market_cap
+
+    name = (
+        info.get("longName")
+        or info.get("shortName")
+        or info.get("displayName")
+        or info.get("name")
+        or symbol
+    )
+    short_name = info.get("shortName") or info.get("longName") or info.get("displayName") or name
+    payload = {
+        "name": name,
+        "shortName": short_name,
+        "exchange": info.get("fullExchangeName") or info.get("exchangeName") or info.get("exchange"),
+        "market_cap": market_cap,
+        "sector": info.get("sector"),
+        "industry": info.get("industry"),
+        "ceo": ceo,
+        "hq": hq,
+        "city": city,
+        "state": state,
+        "country": country,
+        "quote_type": info.get("quoteType") or info.get("quote_type"),
+    }
+    cleaned = {
+        key: value
+        for key, value in payload.items()
+        if value not in (None, "", [], {})
+    }
+    debug["keys"] = list(cleaned.keys())
+    debug["has_values"] = bool(cleaned)
+    return (cleaned or None), debug
+
+
+def _fetch_company_profile(
+    symbol: str,
+    *,
+    user_id: str | None = None,
+    provider: str | None = None,
+) -> dict[str, object]:
     if not symbol:
         return {}
-    cache_key = build_cache_key("market-profile", "alpaca", symbol.upper())
+    selected_provider = str(provider or resolve_market_provider(user_id=user_id) or "alpaca").strip().lower() or "alpaca"
+    cache_key = build_cache_key("market-profile", selected_provider, symbol.upper())
 
     def _download() -> dict[str, object]:
-        meta_map = _build_asset_meta_map(user_id=user_id, symbols={symbol.upper()})
-        meta = meta_map.get(symbol.upper())
-        if not meta:
-            return {}
-        name = meta.get("name") or symbol
-        return {
-            "name": name,
-            "shortName": name,
-            "exchange": meta.get("exchange") or "",
-        }
+        profile: dict[str, object] = {}
+        if selected_provider == "massive":
+            overview = fetch_company_overview(
+                symbol,
+                user_id=user_id,
+                timeout=MARKET_REQUEST_TIMEOUT,
+                provider=selected_provider,
+            )
+            if isinstance(overview, dict):
+                name = overview.get("name") or symbol
+                profile.update(
+                    {
+                        "name": name,
+                        "shortName": overview.get("shortName") or name,
+                        "exchange": overview.get("exchange") or "",
+                    }
+                )
+                for key, value in _normalize_fundamentals_payload(overview).items():
+                    profile.setdefault(key, value)
+                quote_type = overview.get("quote_type")
+                if quote_type not in (None, "", [], {}):
+                    profile["quote_type"] = quote_type
+        needs_fallback = any(
+            profile.get(key) in (None, "", [], {})
+            for key in ("name", "shortName", "exchange", "market_cap", "sector", "industry", "ceo", "hq")
+        )
+        if needs_fallback:
+            yf_payload, _yf_debug = _download_yfinance_profile_fallback(symbol)
+            if isinstance(yf_payload, dict):
+                _merge_missing_fields(profile, yf_payload)
+        if not profile.get("name"):
+            meta_map = _build_asset_meta_map(user_id=user_id, symbols={symbol.upper()})
+            meta = meta_map.get(symbol.upper())
+            if isinstance(meta, dict):
+                name = meta.get("name") or symbol
+                profile.setdefault("name", name)
+                profile.setdefault("shortName", name)
+                profile.setdefault("exchange", meta.get("exchange") or "")
+        return profile
 
     result = cache_memoize(cache_key, _download, MARKET_PROFILE_CACHE_TTL)
     return result if isinstance(result, dict) else {}
@@ -2208,7 +3189,8 @@ def _fetch_company_profile(symbol: str, *, user_id: str | None = None) -> dict[s
 def _fetch_52w_stats(symbol: str, *, user_id: str | None = None) -> dict[str, float | None]:
     if not symbol:
         return {"high_52w": None, "low_52w": None, "as_of": None}
-    cache_key = build_cache_key("market-52w", "alpaca", symbol.upper())
+    market_source = resolve_market_provider(user_id=user_id)
+    cache_key = build_cache_key("market-52w", market_source, symbol.upper())
 
     def _download() -> dict[str, float | None]:
         frame = market_data.fetch(
@@ -2250,92 +3232,89 @@ def _fetch_52w_stats(symbol: str, *, user_id: str | None = None) -> dict[str, fl
     return {"high_52w": None, "low_52w": None, "as_of": None}
 
 
-def _download_yfinance_fundamentals(symbol: str) -> tuple[dict[str, object] | None, dict[str, object]]:
-    debug: dict[str, object] = {"symbol": symbol}
+def _download_yfinance_fundamentals(
+    symbol: str,
+    *,
+    user_id: str | None = None,
+    provider: str | None = None,
+) -> tuple[dict[str, object] | None, dict[str, object]]:
+    # Kept function name for compatibility with existing tests/callers.
+    selected_provider = str(provider or resolve_market_provider(user_id=user_id) or "alpaca").strip().lower() or "alpaca"
+    debug: dict[str, object] = {"symbol": symbol, "provider": selected_provider}
+    primary_payload: dict[str, object] = {}
     try:
-        import yfinance as yf  # type: ignore
+        overview = fetch_company_overview(
+            symbol,
+            user_id=user_id,
+            timeout=MARKET_REQUEST_TIMEOUT,
+            provider=selected_provider,
+        )
     except Exception as exc:
-        debug["error"] = f"import:{exc}"
-        return None, debug
-    try:
-        ticker = yf.Ticker(symbol)
-        info: dict[str, object] = {}
-        try:
-            info = ticker.get_info() or {}
-        except Exception:
-            info = ticker.info or {}
-    except Exception as exc:
-        debug["error"] = f"info:{exc}"
-        return None, debug
-    if not isinstance(info, dict):
-        debug["error"] = "info:invalid"
-        return None, debug
-    debug["info_size"] = len(info)
-    debug["info_keys"] = list(info.keys())[:12]
-    market_cap = info.get("marketCap")
-    sector = info.get("sector")
-    industry = info.get("industry")
-    city = info.get("city")
-    state = info.get("state")
-    country = info.get("country")
-    quote_type = info.get("quoteType") or info.get("quote_type")
-    hq_parts = [part for part in (city, state, country) if part]
-    hq = ", ".join(str(part) for part in hq_parts) if hq_parts else None
-    ceo = None
-    officers = info.get("companyOfficers")
-    if isinstance(officers, list):
-        for officer in officers:
-            if not isinstance(officer, dict):
-                continue
-            title = str(officer.get("title") or "").lower()
-            if "ceo" in title or "chief executive" in title:
-                ceo = officer.get("name") or officer.get("fullName") or officer.get("full_name")
-                if ceo:
-                    break
-    if market_cap in (None, "", 0):
-        try:
-            fast_info = ticker.fast_info or {}
-        except Exception:
-            fast_info = {}
-        if isinstance(fast_info, dict):
-            market_cap = fast_info.get("market_cap") or fast_info.get("marketCap") or market_cap
-    payload = {
-        "market_cap": market_cap,
-        "sector": sector,
-        "industry": industry,
-        "ceo": ceo,
-        "hq": hq,
-        "city": city,
-        "state": state,
-        "country": country,
-        "quote_type": quote_type,
-    }
-    has_value = any(value not in (None, "", [], {}) for value in payload.values())
-    debug["keys"] = [key for key, value in payload.items() if value not in (None, "", [], {})]
-    debug["has_values"] = has_value
-    return payload if has_value else None, debug
+        debug["primary_error"] = f"overview:{exc}"
+        overview = {}
+    if isinstance(overview, dict) and overview:
+        primary_payload = _normalize_fundamentals_payload(overview)
+        if primary_payload:
+            debug["primary_source"] = "provider"
+            debug["provider_keys"] = list(primary_payload.keys())
+
+    needs_fallback = not primary_payload or any(
+        key not in primary_payload
+        for key in ("market_cap", "sector", "industry", "ceo", "hq", "quote_type")
+    )
+    if needs_fallback:
+        fallback_payload, fallback_debug = _download_yfinance_profile_fallback(symbol)
+        if isinstance(fallback_payload, dict) and fallback_payload:
+            fallback_fundamentals = _normalize_fundamentals_payload(fallback_payload)
+            _merge_missing_fields(primary_payload, fallback_fundamentals)
+            debug["fallback_source"] = "yfinance"
+            debug["fallback_keys"] = list(fallback_fundamentals.keys())
+        elif isinstance(fallback_debug, dict) and fallback_debug.get("error"):
+            debug["fallback_error"] = fallback_debug.get("error")
+
+    debug["keys"] = list(primary_payload.keys())
+    debug["has_values"] = bool(primary_payload)
+    return (primary_payload or None), debug
 
 
-def _fetch_yfinance_fundamentals(symbol: str) -> dict[str, object]:
+def _fetch_yfinance_fundamentals(
+    symbol: str,
+    *,
+    user_id: str | None = None,
+    provider: str | None = None,
+) -> dict[str, object]:
     if not symbol:
         return {}
-    cache_key = build_cache_key("market-fundamentals", "yfinance", "v4", symbol.upper())
+    selected_provider = str(provider or resolve_market_provider(user_id=user_id) or "alpaca").strip().lower() or "alpaca"
+    cache_key = build_cache_key("market-fundamentals", selected_provider, "v5", symbol.upper())
 
     def _download() -> dict[str, object] | None:
-        payload, _debug = _download_yfinance_fundamentals(symbol)
+        payload, _debug = _download_yfinance_fundamentals(symbol, user_id=user_id, provider=selected_provider)
         return payload
 
     result = cache_memoize(cache_key, _download, MARKET_FUNDAMENTALS_CACHE_TTL)
     return result if isinstance(result, dict) else {}
 
 
-def _fetch_yfinance_fundamentals_debug(symbol: str) -> tuple[dict[str, object], dict[str, object]]:
-    cache_key = build_cache_key("market-fundamentals", "yfinance", "v4", symbol.upper())
+def _fetch_yfinance_fundamentals_debug(
+    symbol: str,
+    *,
+    user_id: str | None = None,
+    provider: str | None = None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    selected_provider = str(provider or resolve_market_provider(user_id=user_id) or "alpaca").strip().lower() or "alpaca"
+    cache_key = build_cache_key("market-fundamentals", selected_provider, "v5", symbol.upper())
     cached = cache_get_object(cache_key)
     if isinstance(cached, dict):
         keys = [key for key, value in cached.items() if value not in (None, "", [], {})]
-        return cached, {"symbol": symbol, "cached": True, "keys": keys, "has_values": bool(keys)}
-    payload, debug = _download_yfinance_fundamentals(symbol)
+        return cached, {
+            "symbol": symbol,
+            "provider": selected_provider,
+            "cached": True,
+            "keys": keys,
+            "has_values": bool(keys),
+        }
+    payload, debug = _download_yfinance_fundamentals(symbol, user_id=user_id, provider=selected_provider)
     debug["cached"] = False
     if payload is not None:
         cache_set_object(cache_key, payload, MARKET_FUNDAMENTALS_CACHE_TTL)
@@ -2624,7 +3603,8 @@ def _infer_news_symbols(symbol: str, *, user_id: str | None = None) -> list[str]
 def _fetch_symbol_news_pool(symbol: str, *, user_id: str | None = None) -> list[dict[str, object]]:
     if not symbol:
         return []
-    cache_key = build_cache_key("market-news", "alpaca", "v4-alpaca-unbounded", symbol.upper())
+    provider = resolve_news_provider(user_id=user_id)
+    cache_key = build_cache_key("market-news", provider, "v4-unbounded", symbol.upper())
 
     cached = cache_get_object(cache_key)
     if isinstance(cached, list):
@@ -2633,7 +3613,7 @@ def _fetch_symbol_news_pool(symbol: str, *, user_id: str | None = None) -> list[
             return cached_items
 
     symbols = _infer_news_symbols(symbol, user_id=user_id)
-    items = fetch_news(symbols=symbols, limit=None, user_id=user_id)
+    items = fetch_news(symbols=symbols, limit=None, user_id=user_id, provider=provider)
     normalized: list[dict[str, object]] = []
     if isinstance(items, list) and items:
         normalized = _sort_and_dedupe_news_items(_normalize_news_items(items))
@@ -2770,43 +3750,150 @@ def _parse_ai_json(text: str) -> dict[str, Any] | None:
     raw = str(text or "").strip()
     if not raw:
         return None
-    try:
-        data = json.loads(raw)
-        return data if isinstance(data, dict) else None
-    except Exception:
-        pass
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start >= 0 and end > start:
+
+    def _strip_code_fence(value: str) -> str:
+        content = value.strip()
+        if content.startswith("```") and content.endswith("```"):
+            lines = content.splitlines()
+            if len(lines) >= 3:
+                return "\n".join(lines[1:-1]).strip()
+        if content.lower().startswith("json\n"):
+            return content[5:].strip()
+        return content
+
+    def _json_candidates(value: str) -> list[str]:
+        candidates: list[str] = []
+        primary = _strip_code_fence(value)
+        if primary:
+            candidates.append(primary)
+        start = primary.find("{")
+        end = primary.rfind("}")
+        if start >= 0 and end > start:
+            snippet = primary[start : end + 1].strip()
+            if snippet:
+                candidates.append(snippet)
+        normalized = primary.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+        if normalized and normalized not in candidates:
+            candidates.append(normalized)
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in candidates:
+            if item not in seen:
+                seen.add(item)
+                deduped.append(item)
+        return deduped
+
+    for candidate in _json_candidates(raw):
         try:
-            data = json.loads(raw[start : end + 1])
-            return data if isinstance(data, dict) else None
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
         except Exception:
-            return None
+            pass
+        try:
+            parsed = ast.literal_eval(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
     return None
 
 
 def _normalize_ai_struct(payload: dict[str, Any] | None) -> dict[str, str] | None:
     if not isinstance(payload, dict) or not payload:
         return None
+
+    def _coerce_text(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, (list, tuple)):
+            parts = [str(item).strip() for item in value if str(item or "").strip()]
+            return " ".join(parts).strip()
+        if isinstance(value, dict):
+            parts = []
+            for inner in value.values():
+                text = str(inner or "").strip()
+                if text:
+                    parts.append(text)
+            return " ".join(parts).strip()
+        return str(value).strip()
+
     mapping = {
         "event": "event",
+        "key_event": "event",
+        "core_event": "event",
+        "headline": "event",
+        "main_event": "event",
         "核心事件": "event",
+        "事件": "event",
         "impact": "impact",
+        "market_impact": "impact",
+        "impact_analysis": "impact",
+        "effect": "impact",
         "市场影响": "impact",
+        "影响": "impact",
         "implication": "implication",
+        "trading_implication": "implication",
+        "trade_implication": "implication",
+        "trading_hint": "implication",
+        "trading_signal": "implication",
+        "suggestion": "implication",
         "交易暗示": "implication",
+        "交易建议": "implication",
+        "交易启示": "implication",
     }
     normalized: dict[str, str] = {}
     for key, target in mapping.items():
         if key not in payload:
             continue
-        value = str(payload.get(key) or "").strip()
+        value = _coerce_text(payload.get(key))
         if value:
             normalized[target] = value
     if not normalized:
+        summary_text = _coerce_text(payload.get("summary"))
+        if summary_text:
+            normalized["event"] = summary_text
+    if not normalized:
         return None
     return normalized
+
+
+def _struct_from_plain_text(answer: str) -> dict[str, str] | None:
+    text = str(answer or "").strip()
+    if not text:
+        return None
+    lines = [line.strip(" -*\t") for line in text.splitlines() if line and line.strip()]
+    label_patterns = [
+        ("event", (r"event", r"key\s*event", r"core\s*event", r"核心事件", r"事件")),
+        ("impact", (r"impact", r"market\s*impact", r"影响", r"市场影响")),
+        ("implication", (r"implication", r"trading\s*hint", r"trading\s*implication", r"交易暗示", r"交易建议")),
+    ]
+    extracted: dict[str, str] = {}
+    for line in lines:
+        for target, aliases in label_patterns:
+            if target in extracted:
+                continue
+            for alias in aliases:
+                if re.match(rf"^(?:{alias})\s*[:：\-]\s*(.+)$", line, flags=re.IGNORECASE):
+                    value = re.sub(rf"^(?:{alias})\s*[:：\-]\s*", "", line, count=1, flags=re.IGNORECASE).strip()
+                    if value:
+                        extracted[target] = value
+                    break
+    if extracted:
+        return extracted
+    sentences = [segment.strip() for segment in re.split(r"[。\n!?]+", text) if segment and segment.strip()]
+    if not sentences:
+        return None
+    event = sentences[0]
+    impact = sentences[1] if len(sentences) > 1 else ""
+    implication = " ".join(sentences[2:]).strip() if len(sentences) > 2 else ""
+    return {
+        "event": event,
+        "impact": impact,
+        "implication": implication,
+    }
 
 
 def _contains_cjk(text: str) -> bool:
@@ -3150,6 +4237,8 @@ def _build_ai_summary_struct_llm(
         parsed = _parse_ai_json(answer)
         normalized = _normalize_ai_struct(parsed)
         if not normalized:
+            normalized = _struct_from_plain_text(answer)
+        if not normalized:
             return None
         if not _struct_matches_lang(normalized, lang_prefix):
             translated = _translate_ai_struct(normalized, lang_prefix=lang_prefix, model=model, api_key=api_key)
@@ -3221,6 +4310,18 @@ def _build_ai_summary_with_meta(
     if structured:
         summary = _summary_from_struct(structured, lang_prefix=lang_prefix)
         return summary or fallback, {"status": "llm", "message": "", "source": "bailian"}, structured
+    text_summary = _build_ai_summary_llm(
+        profile_payload,
+        news_payload,
+        lang_prefix=lang_prefix,
+        symbol=symbol,
+        user=user,
+        api_key=api_key,
+        raise_on_error=False,
+    )
+    if text_summary:
+        parsed_struct = _struct_from_plain_text(text_summary)
+        return text_summary, {"status": "llm", "message": "", "source": "bailian"}, parsed_struct
     message = "AI 返回格式异常，已显示回退摘要。" if lang_prefix == "zh" else "AI returned an invalid format; showing fallback summary."
     return fallback, {"status": "fallback", "message": message, "source": "fallback"}, None
 
@@ -3402,6 +4503,31 @@ def _resample_ohlc_frame(frame: pd.DataFrame, symbol: str, rule: str) -> pd.Data
     return resampled
 
 
+def _merge_ohlc_frames(*frames: pd.DataFrame) -> pd.DataFrame:
+    normalized: list[pd.DataFrame] = []
+    for frame in frames:
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            continue
+        expected = {"Open", "High", "Low", "Close"}
+        if not expected.issubset(set(frame.columns)):
+            continue
+        local = frame.copy()
+        if not isinstance(local.index, pd.DatetimeIndex):
+            local.index = pd.to_datetime(local.index, utc=True, errors="coerce")
+        else:
+            if local.index.tz is None:
+                local.index = local.index.tz_localize(timezone.utc)
+            else:
+                local.index = local.index.tz_convert(timezone.utc)
+        local = local.sort_index()
+        normalized.append(local)
+    if not normalized:
+        return pd.DataFrame()
+    merged = pd.concat(normalized, axis=0)
+    merged = merged[~merged.index.duplicated(keep="last")]
+    return merged.sort_index()
+
+
 def _extract_close_series(frame: pd.DataFrame, *, limit: int = 20) -> list[float]:
     if not isinstance(frame, pd.DataFrame) or frame.empty:
         return []
@@ -3457,8 +4583,13 @@ def market_insights(request: HttpRequest) -> HttpResponse:
 @require_http_methods(["GET", "POST"])
 def market_insights_data(request: HttpRequest) -> JsonResponse:
     request_id = ensure_request_id(request)
-    key_id, secret = resolve_alpaca_data_credentials(user=request.user)
-    if not (key_id and secret):
+    market_source = resolve_market_provider(user=request.user)
+    if market_source == "alpaca":
+        key_id, secret = resolve_alpaca_data_credentials(user=request.user)
+        has_credentials = bool(key_id and secret)
+    else:
+        has_credentials = has_market_data_credentials(user=request.user, provider=market_source)
+    if not has_credentials:
         record_metric(
             "market.insights.error",
             request_id=request_id,
@@ -3557,20 +4688,9 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                 status=404,
                 json_dumps_params={"ensure_ascii": False},
             )
-        latest_trade = snapshot.get("latestTrade") or snapshot.get("latest_trade") or {}
-        latest_quote = snapshot.get("latestQuote") or snapshot.get("latest_quote") or {}
-        daily_bar = snapshot.get("dailyBar") or snapshot.get("daily_bar") or {}
-        minute_bar = snapshot.get("minuteBar") or snapshot.get("minute_bar") or {}
         prev_bar = snapshot.get("prevDailyBar") or snapshot.get("prev_daily_bar") or {}
-
-        last_price = _coerce_number(
-            (latest_trade or {}).get("p")
-            or (minute_bar or {}).get("c")
-            or (daily_bar or {}).get("c")
-            or (latest_quote or {}).get("ap")
-            or (latest_quote or {}).get("bp")
-        )
-        prev_close = _coerce_number((prev_bar or {}).get("c"))
+        prev_close = _coerce_positive_price((prev_bar or {}).get("c"))
+        last_price = _resolve_snapshot_last_price(snapshot, prev_close=prev_close, allow_quote_fallback=True)
         if last_price is None:
             return JsonResponse(
                 {"error": _("未能获取 %(symbol)s 的行情快照。") % {"symbol": detail_symbol}, "request_id": request_id},
@@ -3588,7 +4708,7 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                 "symbol": detail_symbol,
                 "price": last_price,
                 "change_pct": change_pct,
-                "data_source": "alpaca",
+                "data_source": market_source,
                 "server_ts": time.time(),
                 "request_id": request_id,
             },
@@ -3696,12 +4816,21 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
 
         debug_requested = str(params.get("debug") or "").strip().lower() in {"1", "true", "yes"}
         debug_flag = debug_requested and bool(getattr(settings, "DEBUG", False)) and bool(getattr(request.user, "is_staff", False))
-        profile_payload = _fetch_company_profile(detail_symbol, user_id=str(request.user.id))
+        user_id = str(request.user.id)
+        profile_payload = _fetch_company_profile(detail_symbol, user_id=user_id, provider=market_source)
         fundamentals_debug = None
         if debug_flag:
-            fundamentals, fundamentals_debug = _fetch_yfinance_fundamentals_debug(detail_symbol)
+            fundamentals, fundamentals_debug = _fetch_yfinance_fundamentals_debug(
+                detail_symbol,
+                user_id=user_id,
+                provider=market_source,
+            )
         else:
-            fundamentals = _fetch_yfinance_fundamentals(detail_symbol)
+            fundamentals = _fetch_yfinance_fundamentals(
+                detail_symbol,
+                user_id=user_id,
+                provider=market_source,
+            )
         if isinstance(profile_payload, dict) and isinstance(fundamentals, dict):
             for key, value in fundamentals.items():
                 if value in (None, "", []):
@@ -3881,6 +5010,30 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
             session["market_recent_queries"] = recent_queries
             session.modified = True
 
+    rankings_page_cache_key: str | None = None
+    if request.method == "GET" and not resolved.query and list_type in LIST_TYPES:
+        rankings_page_cache_key = build_cache_key(
+            "market-rankings-page",
+            market_source,
+            str(request.user.id),
+            resolved.timeframe.key,
+            list_type,
+            page_offset,
+            page_size,
+            str(getattr(request, "LANGUAGE_CODE", "") or ""),
+        )
+        cached_rankings_page = cache_get_object(rankings_page_cache_key)
+        if isinstance(cached_rankings_page, dict):
+            if not _cached_rankings_payload_usable(cached_rankings_page):
+                cached_rankings_page = None
+            else:
+                cached_payload = dict(cached_rankings_page)
+                cached_payload["generated_at"] = time.time()
+                cached_payload["request_id"] = request_id
+                return JsonResponse(cached_payload, json_dumps_params={"ensure_ascii": False})
+        if rankings_page_cache_key and cached_rankings_page is None:
+            cache_set_object(rankings_page_cache_key, None, 1)
+
     symbols: list[str] = []
     restrict_to_query = False
     if resolved.query:
@@ -3889,16 +5042,20 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
 
     list_items: list[dict[str, object]] = []
     active_list_type = list_type
-    data_source = "unknown"
+    data_source = market_source
+    user_id = str(request.user.id) if request.user.is_authenticated else None
     gainers: list[dict[str, object]] = []
     losers: list[dict[str, object]] = []
     most_actives: list[dict[str, object]] = []
+    top_turnovers: list[dict[str, object]] = []
     ranking_timeframe: Timeframe | None = None
     universe_rankings: list[dict[str, object]] | None = None
     universe_source = "unknown"
     timeframe_rankings: list[dict[str, object]] | None = None
     timeframe_source = "unknown"
     timeframe_fallback_pending = False
+    used_active_snapshot = False
+    background_only_non_1d = resolved.timeframe.key != "1d" and MARKET_RANKINGS_BACKGROUND_ONLY
 
     if restrict_to_query:
         page_offset = 0
@@ -3971,47 +5128,47 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         used_timeframe_rankings = False
         snapshot_rankings: list[dict[str, object]] | None = None
         timeframe_snapshot: list[dict[str, object]] | None = None
+        if background_only_non_1d:
+            timeframe_snapshot = _load_timeframe_snapshot_rows(
+                resolved.timeframe.key,
+                provider=market_source,
+            )
         if list_type in {"gainers", "losers"}:
             if resolved.timeframe.key == "1d":
-                movers_limit = min(50, max(page_stop, page_size))
-                movers = market_data.fetch_market_movers(
-                    limit=movers_limit,
-                    user_id=user_id,
-                    timeout=MARKET_REQUEST_TIMEOUT,
-                )
-                raw_gainers = movers.get("gainers", []) if movers else []
-                raw_losers = movers.get("losers", []) if movers else []
-                gainers = [
-                    entry for entry in raw_gainers if isinstance(entry, dict) and _passes_rank_filters(entry)
-                ][:page_stop]
-                losers = [entry for entry in raw_losers if isinstance(entry, dict) and _passes_rank_filters(entry)][
-                    :page_stop
-                ]
-                if gainers or losers:
-                    list_items = losers if list_type == "losers" else gainers
-                    data_source = "alpaca"
-                    ranking_timeframe = resolved.timeframe
-                    used_timeframe_rankings = True
+                if market_source == "alpaca":
+                    movers_limit = min(50, max(page_stop, page_size))
+                    movers = market_data.fetch_market_movers(
+                        limit=movers_limit,
+                        user_id=user_id,
+                        timeout=MARKET_REQUEST_TIMEOUT,
+                    )
+                    raw_gainers = movers.get("gainers", []) if movers else []
+                    raw_losers = movers.get("losers", []) if movers else []
+                    gainers = [
+                        entry for entry in raw_gainers if isinstance(entry, dict) and _passes_rank_filters(entry)
+                    ][:page_stop]
+                    losers = [entry for entry in raw_losers if isinstance(entry, dict) and _passes_rank_filters(entry)][
+                        :page_stop
+                    ]
+                    if gainers or losers:
+                        list_items = losers if list_type == "losers" else gainers
+                        data_source = market_source
+                        ranking_timeframe = resolved.timeframe
+                        used_timeframe_rankings = True
 
-            if not used_timeframe_rankings and resolved.timeframe.key != "1d":
-                timeframe_snapshot = _load_timeframe_snapshot_rows(resolved.timeframe.key)
-                if timeframe_snapshot:
+            if not used_timeframe_rankings and resolved.timeframe.key != "1d" and background_only_non_1d:
+                timeframe_snapshot = _load_timeframe_snapshot_rows(
+                    resolved.timeframe.key,
+                    provider=market_source,
+                )
+                if _snapshot_rows_schema_valid_for_list(timeframe_snapshot, list_type=list_type):
                     gainers, losers = _split_rankings(timeframe_snapshot, page_stop)
                     if gainers or losers:
                         list_items = losers if list_type == "losers" else gainers
-                        data_source = "alpaca"
+                        data_source = market_source
                         ranking_timeframe = resolved.timeframe
                         used_timeframe_rankings = True
-                elif MARKET_RANKINGS_BACKGROUND_ONLY:
-                    if snapshot_rankings is None:
-                        snapshot_rankings = _build_snapshot_rankings(user_id)
-                    if snapshot_rankings:
-                        gainers, losers = _split_rankings(snapshot_rankings, page_stop)
-                        if gainers or losers:
-                            list_items = losers if list_type == "losers" else gainers
-                            data_source = "alpaca"
-                            ranking_timeframe = TIMEFRAMES["1d"]
-                            used_timeframe_rankings = True
+                        used_active_snapshot = True
 
             if not used_timeframe_rankings and resolved.timeframe.key == "1d":
                 if snapshot_rankings is None:
@@ -4020,12 +5177,13 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                     gainers, losers = _split_rankings(snapshot_rankings, page_stop)
                     if gainers or losers:
                         list_items = losers if list_type == "losers" else gainers
-                        data_source = "alpaca"
+                        data_source = market_source
                         ranking_timeframe = resolved.timeframe
                         used_timeframe_rankings = True
+                        used_active_snapshot = True
 
-            if not used_timeframe_rankings:
-                if timeframe_rankings is None and not MARKET_RANKINGS_BACKGROUND_ONLY:
+            if not used_timeframe_rankings and not background_only_non_1d:
+                if timeframe_rankings is None:
                     timeframe_rankings, timeframe_source = _resolve_universe_timeframe_rankings(
                         resolved.timeframe,
                         user_id=user_id,
@@ -4042,26 +5200,47 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
             if list_type == "most_active":
                 timeframe_rows: list[dict[str, object]] = []
                 timeframe_rows_source = "unknown"
+                timeframe_rows_from_snapshot = False
                 if resolved.timeframe.key != "1d":
-                    try:
-                        timeframe_rows, timeframe_rows_source = _resolve_universe_window_rankings(
-                            resolved.timeframe,
-                            user_id=user_id,
-                        )
-                    except Exception:
-                        LOGGER.exception(
-                            "failed to resolve most_active window rankings [timeframe=%s user_id=%s]",
-                            resolved.timeframe.key,
-                            user_id,
-                        )
-                        record_metric(
-                            "market.insights.error",
-                            request_id=request_id,
-                            user_id=request.user.id,
-                            error="most_active_window_rankings_failed",
-                            timeframe=resolved.timeframe.key,
-                        )
-                        timeframe_rows, timeframe_rows_source = [], "unknown"
+                    if background_only_non_1d:
+                        if timeframe_snapshot is None:
+                            timeframe_snapshot = _load_timeframe_snapshot_rows(
+                                resolved.timeframe.key,
+                                provider=market_source,
+                            )
+                        if _snapshot_rows_schema_valid_for_list(timeframe_snapshot, list_type="most_active"):
+                            timeframe_rows = timeframe_snapshot
+                            timeframe_rows_source = market_source
+                            timeframe_rows_from_snapshot = True
+                            used_active_snapshot = True
+                    if timeframe_rows_from_snapshot and not _snapshot_rows_schema_valid_for_list(
+                        timeframe_rows,
+                        list_type="most_active",
+                    ):
+                        timeframe_rows = []
+                        timeframe_rows_source = "unknown"
+                        timeframe_rows_from_snapshot = False
+                        used_active_snapshot = False
+                    if not timeframe_rows and not background_only_non_1d:
+                        try:
+                            timeframe_rows, timeframe_rows_source = _resolve_universe_window_rankings(
+                                resolved.timeframe,
+                                user_id=user_id,
+                            )
+                        except Exception:
+                            LOGGER.exception(
+                                "failed to resolve most_active window rankings [timeframe=%s user_id=%s]",
+                                resolved.timeframe.key,
+                                user_id,
+                            )
+                            record_metric(
+                                "market.insights.error",
+                                request_id=request_id,
+                                user_id=request.user.id,
+                                error="most_active_window_rankings_failed",
+                                timeframe=resolved.timeframe.key,
+                            )
+                            timeframe_rows, timeframe_rows_source = [], "unknown"
                 if timeframe_rows:
                     list_items = _sort_rows_by_metric(
                         timeframe_rows,
@@ -4078,26 +5257,27 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                     data_source = timeframe_rows_source or data_source
                     ranking_timeframe = resolved.timeframe
                 elif resolved.timeframe.key == "1d":
-                    active_limit = min(100, max(page_stop, page_size))
-                    list_items = market_data.fetch_most_actives(
-                        by="volume",
-                        limit=active_limit,
-                        user_id=user_id,
-                        timeout=MARKET_REQUEST_TIMEOUT,
-                    )
-                    list_items = [
-                        entry for entry in list_items if isinstance(entry, dict) and _passes_rank_filters(entry)
-                    ][:page_stop]
-                    most_actives = list_items
-                    volume_label = _("成交量")
-                    for entry in list_items:
-                        if isinstance(entry, dict):
-                            entry.setdefault("period_label", volume_label)
-                            entry.setdefault("period_label_en", "Volume")
-                    data_source = "alpaca" if list_items else "unknown"
-                    if list_items:
-                        ranking_timeframe = resolved.timeframe
-                if not list_items:
+                    if market_source == "alpaca":
+                        active_limit = min(100, max(page_stop, page_size))
+                        list_items = market_data.fetch_most_actives(
+                            by="volume",
+                            limit=active_limit,
+                            user_id=user_id,
+                            timeout=MARKET_REQUEST_TIMEOUT,
+                        )
+                        list_items = [
+                            entry for entry in list_items if isinstance(entry, dict) and _passes_rank_filters(entry)
+                        ][:page_stop]
+                        most_actives = list_items
+                        volume_label = _("成交量")
+                        for entry in list_items:
+                            if isinstance(entry, dict):
+                                entry.setdefault("period_label", volume_label)
+                                entry.setdefault("period_label_en", "Volume")
+                        data_source = market_source if list_items else "unknown"
+                        if list_items:
+                            ranking_timeframe = resolved.timeframe
+                if not list_items and resolved.timeframe.key == "1d":
                     if snapshot_rankings is None:
                         snapshot_rankings = _build_snapshot_rankings(user_id)
                     if snapshot_rankings:
@@ -4113,51 +5293,74 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                             if isinstance(entry, dict):
                                 entry.setdefault("period_label", volume_label)
                                 entry.setdefault("period_label_en", "Volume")
-                        data_source = "alpaca" if list_items else "unknown"
+                        data_source = market_source if list_items else "unknown"
                         if list_items and ranking_timeframe is None:
                             ranking_timeframe = TIMEFRAMES["1d"] if resolved.timeframe.key != "1d" else resolved.timeframe
+                        used_active_snapshot = True
                     elif not MARKET_RANKINGS_BACKGROUND_ONLY:
-                        list_items = market_data.fetch_most_actives(
-                            by="volume",
-                            limit=page_stop,
-                            user_id=user_id,
-                            timeout=MARKET_REQUEST_TIMEOUT,
-                        )
-                        list_items = [
-                            entry for entry in list_items if isinstance(entry, dict) and _passes_rank_filters(entry)
-                        ]
-                        most_actives = list_items
-                        volume_label = _("成交量")
-                        for entry in list_items:
-                            if isinstance(entry, dict):
-                                entry.setdefault("period_label", volume_label)
-                                entry.setdefault("period_label_en", "Volume")
-                        data_source = "alpaca" if list_items else "unknown"
-                        if list_items and ranking_timeframe is None:
-                            ranking_timeframe = TIMEFRAMES["1d"] if resolved.timeframe.key != "1d" else resolved.timeframe
+                        if market_source == "alpaca":
+                            list_items = market_data.fetch_most_actives(
+                                by="volume",
+                                limit=page_stop,
+                                user_id=user_id,
+                                timeout=MARKET_REQUEST_TIMEOUT,
+                            )
+                            list_items = [
+                                entry for entry in list_items if isinstance(entry, dict) and _passes_rank_filters(entry)
+                            ]
+                            most_actives = list_items
+                            volume_label = _("成交量")
+                            for entry in list_items:
+                                if isinstance(entry, dict):
+                                    entry.setdefault("period_label", volume_label)
+                                    entry.setdefault("period_label_en", "Volume")
+                            data_source = market_source if list_items else "unknown"
+                            if list_items and ranking_timeframe is None:
+                                ranking_timeframe = TIMEFRAMES["1d"] if resolved.timeframe.key != "1d" else resolved.timeframe
             elif list_type == "top_turnover":
                 timeframe_rows: list[dict[str, object]] = []
                 timeframe_rows_source = "unknown"
+                timeframe_rows_from_snapshot = False
                 if resolved.timeframe.key != "1d":
-                    try:
-                        timeframe_rows, timeframe_rows_source = _resolve_universe_window_rankings(
-                            resolved.timeframe,
-                            user_id=user_id,
-                        )
-                    except Exception:
-                        LOGGER.exception(
-                            "failed to resolve top_turnover window rankings [timeframe=%s user_id=%s]",
-                            resolved.timeframe.key,
-                            user_id,
-                        )
-                        record_metric(
-                            "market.insights.error",
-                            request_id=request_id,
-                            user_id=request.user.id,
-                            error="top_turnover_window_rankings_failed",
-                            timeframe=resolved.timeframe.key,
-                        )
-                        timeframe_rows, timeframe_rows_source = [], "unknown"
+                    if background_only_non_1d:
+                        if timeframe_snapshot is None:
+                            timeframe_snapshot = _load_timeframe_snapshot_rows(
+                                resolved.timeframe.key,
+                                provider=market_source,
+                            )
+                        if _snapshot_rows_schema_valid_for_list(timeframe_snapshot, list_type="top_turnover"):
+                            timeframe_rows = timeframe_snapshot
+                            timeframe_rows_source = market_source
+                            timeframe_rows_from_snapshot = True
+                            used_active_snapshot = True
+                    if timeframe_rows_from_snapshot and not _snapshot_rows_schema_valid_for_list(
+                        timeframe_rows,
+                        list_type="top_turnover",
+                    ):
+                        timeframe_rows = []
+                        timeframe_rows_source = "unknown"
+                        timeframe_rows_from_snapshot = False
+                        used_active_snapshot = False
+                    if not timeframe_rows and not background_only_non_1d:
+                        try:
+                            timeframe_rows, timeframe_rows_source = _resolve_universe_window_rankings(
+                                resolved.timeframe,
+                                user_id=user_id,
+                            )
+                        except Exception:
+                            LOGGER.exception(
+                                "failed to resolve top_turnover window rankings [timeframe=%s user_id=%s]",
+                                resolved.timeframe.key,
+                                user_id,
+                            )
+                            record_metric(
+                                "market.insights.error",
+                                request_id=request_id,
+                                user_id=request.user.id,
+                                error="top_turnover_window_rankings_failed",
+                                timeframe=resolved.timeframe.key,
+                            )
+                            timeframe_rows, timeframe_rows_source = [], "unknown"
                 if timeframe_rows:
                     list_items = _sort_rows_by_metric(
                         timeframe_rows,
@@ -4168,7 +5371,7 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                     if list_items:
                         data_source = timeframe_rows_source or data_source
                         ranking_timeframe = resolved.timeframe
-                if not list_items:
+                if not list_items and resolved.timeframe.key == "1d":
                     if snapshot_rankings is None:
                         snapshot_rankings = _build_snapshot_rankings(user_id)
                     source_rows = snapshot_rankings
@@ -4178,7 +5381,7 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                         source_rows = universe_rankings
                         data_source = universe_source or data_source
                     else:
-                        data_source = "alpaca" if snapshot_rankings else data_source
+                        data_source = market_source if snapshot_rankings else data_source
                     list_items = _sort_rows_by_metric(
                         source_rows,
                         "dollar_volume",
@@ -4187,10 +5390,12 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                     )[:page_stop]
                     if list_items and ranking_timeframe is None:
                         ranking_timeframe = TIMEFRAMES["1d"] if resolved.timeframe.key != "1d" else resolved.timeframe
+                    if snapshot_rankings and list_items:
+                        used_active_snapshot = True
 
-    if list_type in {"gainers", "losers"} and not list_items:
+    if list_type in {"gainers", "losers"} and not list_items and not background_only_non_1d:
         user_id = str(request.user.id) if request.user.is_authenticated else None
-        if timeframe_rankings is None and not MARKET_RANKINGS_BACKGROUND_ONLY:
+        if timeframe_rankings is None:
             timeframe_rankings, timeframe_source = _resolve_universe_timeframe_rankings(
                 resolved.timeframe,
                 user_id=user_id,
@@ -4229,7 +5434,7 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
                 if ranking_timeframe is None:
                     ranking_timeframe = resolved.timeframe
 
-    if list_type == "most_active" and not list_items:
+    if list_type == "most_active" and not list_items and resolved.timeframe.key == "1d":
         if universe_rankings is None:
             universe_rankings, universe_source = _resolve_universe_rankings(
                 str(request.user.id) if request.user.is_authenticated else None
@@ -4288,6 +5493,17 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
     ):
         timeframe_fallback_pending = True
 
+    if resolved.timeframe.key == "1d":
+        gainers = _enrich_rows_with_snapshot_metrics(gainers, user_id=user_id, provider=market_source)
+        losers = _enrich_rows_with_snapshot_metrics(losers, user_id=user_id, provider=market_source)
+        most_actives = _enrich_rows_with_snapshot_metrics(most_actives, user_id=user_id, provider=market_source)
+        list_items = _enrich_rows_with_snapshot_metrics(list_items, user_id=user_id, provider=market_source)
+    else:
+        gainers = _enrich_rows_with_window_metrics(gainers, timeframe=resolved.timeframe, user_id=user_id)
+        losers = _enrich_rows_with_window_metrics(losers, timeframe=resolved.timeframe, user_id=user_id)
+        most_actives = _enrich_rows_with_window_metrics(most_actives, timeframe=resolved.timeframe, user_id=user_id)
+        list_items = _enrich_rows_with_window_metrics(list_items, timeframe=resolved.timeframe, user_id=user_id)
+
     gainers = [
         _apply_common_market_item_shape(entry)
         for entry in gainers
@@ -4322,6 +5538,23 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         losers = list_items
     elif active_list_type == "most_active":
         most_actives = list_items
+    elif active_list_type == "top_turnover":
+        top_turnovers = list_items
+
+    snapshot_state = _snapshot_state_payload(
+        timeframe_key=resolved.timeframe.key,
+        provider=market_source,
+        used_active_snapshot=used_active_snapshot,
+        list_type=active_list_type,
+    )
+    data_state = _resolve_market_data_state(items=list_items, snapshot_state=snapshot_state)
+    _maybe_trigger_snapshot_refresh_nonblocking(
+        request=request,
+        timeframe_key=resolved.timeframe.key,
+        list_type=active_list_type,
+        snapshot_state=snapshot_state,
+        data_state=data_state,
+    )
 
     response = {
         "timeframe": {
@@ -4341,13 +5574,19 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         ),
         # Use timezone.utc for Python 3.13 compatibility (datetime.UTC removed)
         "generated_at": time.time(),
-        "data_source": data_source or "unknown",
+        "data_source": (
+            data_source
+            if isinstance(data_source, str) and data_source and data_source.lower() != "unknown"
+            else (market_source or "unknown")
+        ),
         "query": resolved.query,
         "list_type": active_list_type,
         "items": list_items,
         "gainers": gainers,
         "losers": losers,
         "most_actives": most_actives,
+        "top_turnover": top_turnovers,
+        "top_turnovers": top_turnovers,
         "offset": page_offset,
         "limit": page_size,
         "next_offset": next_offset,
@@ -4359,6 +5598,8 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         "recent_queries": recent_queries,
         "watchlist": watchlist,
         "snapshot_refresh": _snapshot_refresh_meta(),
+        "snapshot_state": snapshot_state,
+        "data_state": data_state,
         "capabilities": capabilities_payload,
     }
     record_metric(
@@ -4372,7 +5613,232 @@ def market_insights_data(request: HttpRequest) -> JsonResponse:
         gainers=len(gainers),
         losers=len(losers),
     )
+    if rankings_page_cache_key:
+        cache_set_object(rankings_page_cache_key, response, MARKET_RANKINGS_PAGE_CACHE_TTL)
     return JsonResponse(response, json_dumps_params={"ensure_ascii": False})
+
+
+def _build_rankings_status_items(*, provider: str) -> list[dict[str, object]]:
+    support = _resolve_list_timeframe_support()
+    global_building_payload = _resolve_building_snapshot_payload("1d", provider=provider)
+    global_build_state = "idle"
+    global_build_progress = 0
+    if isinstance(global_building_payload, Mapping):
+        state = str(global_building_payload.get("status") or "").strip().lower()
+        if state in {"running", "error", "idle", "stalled"}:
+            global_build_state = state
+        progress_payload = global_building_payload.get("progress")
+        if isinstance(progress_payload, Mapping):
+            global_build_progress = _snapshot_progress_percent(progress_payload)
+        elif global_build_state == "running":
+            global_build_progress = _snapshot_progress_percent(
+                {
+                    "chunks_completed": global_building_payload.get("chunks_completed"),
+                    "total_chunks": global_building_payload.get("total_chunks"),
+                }
+            )
+
+    items: list[dict[str, object]] = []
+    for list_type in LIST_TYPES:
+        allowed = support.get(list_type, ())
+        for timeframe_key in allowed:
+            timeframe = TIMEFRAMES.get(timeframe_key)
+            if timeframe is None:
+                continue
+            snapshot_state = _snapshot_state_payload(
+                timeframe_key=timeframe_key,
+                provider=provider,
+                used_active_snapshot=True,
+                list_type=list_type,
+            )
+            stale_seconds = _coerce_number(snapshot_state.get("stale_seconds"))
+            stale_threshold_seconds = _coerce_number(snapshot_state.get("stale_threshold_seconds"))
+            cycle_progress = 0
+            if (
+                stale_seconds is not None
+                and stale_seconds >= 0
+                and stale_threshold_seconds is not None
+                and stale_threshold_seconds > 0
+            ):
+                try:
+                    cycle_progress = max(0, min(100, int(round((stale_seconds / stale_threshold_seconds) * 100))))
+                except Exception:
+                    cycle_progress = 0
+            building_payload = _resolve_building_snapshot_payload(timeframe_key, provider=provider)
+            build_state = "idle"
+            build_started_at = None
+            build_updated_at = None
+            build_error_code = None
+            if isinstance(building_payload, Mapping):
+                payload_status = str(building_payload.get("status") or "").strip().lower()
+                if payload_status in {"running", "error", "idle", "stalled"}:
+                    build_state = payload_status
+                elif bool(snapshot_state.get("building")):
+                    build_state = "running"
+                build_started_at = building_payload.get("started_at") or building_payload.get("started_ts")
+                build_updated_at = building_payload.get("updated_at") or building_payload.get("updated_ts")
+                build_error_code = building_payload.get("error")
+            elif bool(snapshot_state.get("building")):
+                build_state = "running"
+
+            if timeframe_key == "1d" and global_build_state == "running":
+                build_state = "running"
+                build_progress = global_build_progress
+            else:
+                build_progress = int(snapshot_state.get("building_progress") or 0) if build_state == "running" else 0
+            building = build_state == "running"
+            items.append(
+                {
+                    "list_type": list_type,
+                    "timeframe": {
+                        "key": timeframe.key,
+                        "label": timeframe.label,
+                        "label_en": timeframe.label_en,
+                    },
+                    "active_generated_at": snapshot_state.get("active_generated_at"),
+                    "building": bool(building),
+                    "progress": build_progress,
+                    "build_progress": build_progress,
+                    "cycle_progress": cycle_progress,
+                    "build_state": build_state,
+                    "build_started_at": build_started_at,
+                    "build_updated_at": build_updated_at,
+                    "build_error_code": build_error_code,
+                    "provider": snapshot_state.get("provider") or provider,
+                    "stale_seconds": stale_seconds,
+                    "stale_threshold_seconds": stale_threshold_seconds,
+                    "active_schema_valid": snapshot_state.get("active_schema_valid"),
+                }
+            )
+    return items
+
+
+def _build_rankings_status_groups(
+    *,
+    provider: str,
+    items: list[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
+    support = _resolve_list_timeframe_support()
+    flat_items = items if isinstance(items, list) else _build_rankings_status_items(provider=provider)
+    by_pair: dict[tuple[str, str], dict[str, object]] = {}
+    for item in flat_items:
+        if not isinstance(item, Mapping):
+            continue
+        list_type = str(item.get("list_type") or "")
+        timeframe = item.get("timeframe")
+        if not isinstance(timeframe, Mapping):
+            continue
+        timeframe_key = str(timeframe.get("key") or "")
+        if not list_type or not timeframe_key:
+            continue
+        by_pair[(list_type, timeframe_key)] = dict(item)
+
+    groups: list[dict[str, object]] = []
+    for timeframe_key, timeframe in TIMEFRAMES.items():
+        group_items: list[dict[str, object]] = []
+        for list_type in LIST_TYPES:
+            supported = timeframe_key in support.get(list_type, ())
+            row = by_pair.get((list_type, timeframe_key))
+            if not isinstance(row, Mapping):
+                row = {
+                    "list_type": list_type,
+                    "timeframe": {
+                        "key": timeframe.key,
+                        "label": timeframe.label,
+                        "label_en": timeframe.label_en,
+                    },
+                    "active_generated_at": None,
+                    "building": False,
+                    "progress": 0,
+                    "build_progress": 0,
+                    "cycle_progress": 0,
+                    "build_state": "idle",
+                    "build_started_at": None,
+                    "build_updated_at": None,
+                    "build_error_code": None,
+                    "provider": provider,
+                    "stale_seconds": None,
+                    "stale_threshold_seconds": _snapshot_ttl_for_timeframe(timeframe.key),
+                    "active_schema_valid": None,
+                }
+            payload = dict(row)
+            payload["supported"] = bool(supported)
+            payload.setdefault(
+                "timeframe",
+                {"key": timeframe.key, "label": timeframe.label, "label_en": timeframe.label_en},
+            )
+            payload.setdefault("provider", provider)
+            payload.setdefault("build_progress", int(payload.get("progress") or 0))
+            payload.setdefault("cycle_progress", 0)
+            payload.setdefault("build_started_at", None)
+            payload.setdefault("build_updated_at", None)
+            payload.setdefault("build_error_code", None)
+            payload.setdefault("build_state", "running" if payload.get("building") else "idle")
+            group_items.append(payload)
+        groups.append(
+            {
+                "timeframe": {
+                    "key": timeframe.key,
+                    "label": timeframe.label,
+                    "label_en": timeframe.label_en,
+                },
+                "items": group_items,
+            }
+        )
+    return groups
+
+
+@login_required
+@require_http_methods(["GET"])
+def market_rankings_status(request: HttpRequest) -> JsonResponse:
+    request_id = ensure_request_id(request)
+    provider = resolve_market_provider(user=request.user)
+    items = _build_rankings_status_items(provider=provider)
+    groups = _build_rankings_status_groups(provider=provider, items=items)
+    # Self-heal path: when snapshots are missing/stalled/over-TTL and nothing is
+    # actively running, kick a non-blocking rebuild so observer/menu does not
+    # stay stale forever.
+    try:
+        has_active = any(
+            isinstance(item, Mapping) and bool(item.get("active_generated_at"))
+            for item in items
+        )
+        has_running = any(
+            isinstance(item, Mapping) and str(item.get("build_state") or "").lower() == "running"
+            for item in items
+        )
+        has_stalled_or_error = any(
+            isinstance(item, Mapping)
+            and str(item.get("build_state") or "").lower() in {"stalled", "error"}
+            for item in items
+        )
+        has_over_ttl_stale = any(
+            isinstance(item, Mapping)
+            and (_coerce_number(item.get("stale_threshold_seconds")) or 0) > 0
+            and (_coerce_number(item.get("stale_seconds")) or 0)
+            >= (_coerce_number(item.get("stale_threshold_seconds")) or 0)
+            for item in items
+        )
+        should_trigger = (not has_active and not has_running) or has_stalled_or_error or (
+            has_over_ttl_stale and not has_running
+        )
+        if should_trigger:
+            from ..tasks import trigger_market_snapshot_refresh
+
+            user_id = str(request.user.id) if request.user.is_authenticated else None
+            trigger_market_snapshot_refresh(user_id=user_id, prefer_thread=True)
+    except Exception:
+        LOGGER.debug("market_rankings_status self-heal trigger failed", exc_info=True)
+    return JsonResponse(
+        {
+            "provider": provider,
+            "items": items,
+            "groups": groups,
+            "generated_at": time.time(),
+            "request_id": request_id,
+        },
+        json_dumps_params={"ensure_ascii": False},
+    )
 
 
 @require_http_methods(["GET"])
@@ -4500,8 +5966,13 @@ def market_news_sentiment(request: HttpRequest) -> JsonResponse:
 @require_http_methods(["GET"])
 def market_chart_data(request: HttpRequest) -> JsonResponse:
     request_id = ensure_request_id(request)
-    key_id, secret = resolve_alpaca_data_credentials(user=request.user)
-    if not (key_id and secret):
+    market_source = resolve_market_provider(user=request.user)
+    if market_source == "alpaca":
+        key_id, secret = resolve_alpaca_data_credentials(user=request.user)
+        has_credentials = bool(key_id and secret)
+    else:
+        has_credentials = has_market_data_credentials(user=request.user, provider=market_source)
+    if not has_credentials:
         return JsonResponse(
             {"error": _("当前环境缺少可用的市场数据源。"), "request_id": request_id},
             status=503,
@@ -4518,6 +5989,10 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
         )
     range_key = str(params.get("range") or "1d").strip().lower()
     interval_key = str(params.get("interval") or params.get("interval_key") or "1m").strip().lower()
+    history_mode = str(params.get("history_mode") or "auto").strip().lower()
+    if history_mode not in {"auto", "flatfiles", "rest"}:
+        history_mode = "auto"
+    flatfiles_enabled = _setting_bool("MASSIVE_FLATFILES_ENABLED", True)
     interval = _resolve_chart_interval(interval_key) or _resolve_chart_interval("1m")
     if interval is None:
         return JsonResponse(
@@ -4539,10 +6014,24 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
             chart_cache_ttl = 30
     has_range_override = bool(params.get("start") or params.get("end"))
     cache_enabled = chart_cache_ttl > 0 and interval.unit not in {"tick", "second"} and not has_range_override
-    cache_key = build_cache_key("market-chart", symbol, range_key, interval.key, DEFAULT_FEED, request.user.id)
+    cache_key = build_cache_key(
+        "market-chart",
+        symbol,
+        range_key,
+        interval.key,
+        DEFAULT_FEED,
+        market_source,
+        history_mode,
+        request.user.id,
+    )
     if cache_enabled:
         cached = cache_get_object(cache_key, cache_alias=cache_alias)
         if isinstance(cached, dict) and cached.get("bars"):
+            cached.setdefault("historical_source", "none")
+            cached.setdefault("intraday_source", "none")
+            cached.setdefault("history_coverage", {"start_ts": None, "end_ts": None, "complete": True})
+            cached.setdefault("history_cursor_next", None)
+            cached.setdefault("cache_meta", {"hit": 0, "miss": 0, "warmed_ranges": []})
             cached["request_id"] = request_id
             return JsonResponse(cached, json_dumps_params={"ensure_ascii": False})
 
@@ -4572,30 +6061,149 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
         "1mo": ("6mo",),
     }
 
+    historical_source = "none"
+    intraday_source = "none"
+    history_cursor_next: float | None = None
+    history_coverage: dict[str, object] = {"start_ts": None, "end_ts": None, "complete": True}
+    cache_meta: dict[str, object] = {"hit": 0, "miss": 0, "warmed_ranges": []}
+
+    def _today_market_start_utc() -> datetime:
+        try:
+            now_et = datetime.now(ZoneInfo("America/New_York"))
+            return now_et.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+        except Exception:
+            now_utc = datetime.now(timezone.utc)
+            return now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+
     def _fetch_ohlc_bars(range_key_value: str) -> tuple[list[dict[str, float | int]], pd.DataFrame]:
+        nonlocal historical_source, intraday_source, history_cursor_next, history_coverage, cache_meta
+        frame_local = pd.DataFrame()
         if has_range_override:
-            frame_local = market_data.fetch(
-                [symbol],
-                start=start,
-                end=end,
-                interval=base_interval,
-                cache=True,
-                timeout=MARKET_REQUEST_TIMEOUT,
-                ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
-                cache_alias=cache_alias,
-                user_id=str(request.user.id),
-            )
+            start_local = start
+            end_local = end
         else:
-            frame_local = market_data.fetch(
-                [symbol],
-                period=range_key_value,
+            start_local, end_local, _window_seconds = _resolve_range_window(range_key_value)
+
+        use_flatfiles = (
+            market_source == "massive"
+            and flatfiles_enabled
+            and history_mode != "rest"
+            and interval.unit in {"minute", "hour", "day"}
+        )
+
+        if use_flatfiles:
+            flatfiles_frame, flatfiles_meta = fetch_massive_flatfile_historical_bars(
+                symbol=symbol,
+                start=start_local,
+                end=end_local,
                 interval=base_interval,
-                cache=True,
-                timeout=MARKET_REQUEST_TIMEOUT,
-                ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
-                cache_alias=cache_alias,
                 user_id=str(request.user.id),
             )
+            historical_source = str(flatfiles_meta.get("historical_source") or "massive_flatfiles")
+            history_cursor_next = _coerce_number(flatfiles_meta.get("history_cursor_next"))
+            meta_coverage = flatfiles_meta.get("history_coverage")
+            if isinstance(meta_coverage, dict):
+                history_coverage = {
+                    "start_ts": _coerce_number(meta_coverage.get("start_ts")),
+                    "end_ts": _coerce_number(meta_coverage.get("end_ts")),
+                    "complete": bool(meta_coverage.get("complete", True)),
+                }
+            cache_meta = {
+                "hit": int(_coerce_number(flatfiles_meta.get("cache_hit")) or 0),
+                "miss": int(_coerce_number(flatfiles_meta.get("cache_miss")) or 0),
+                "warmed_ranges": list(flatfiles_meta.get("warmed_days") or []),
+            }
+
+            intraday_frame = pd.DataFrame()
+            today_start_utc = _today_market_start_utc()
+            if end_local > today_start_utc:
+                intraday_start = max(start_local, today_start_utc)
+                intraday_frame = market_data.fetch(
+                    [symbol],
+                    start=intraday_start,
+                    end=end_local,
+                    interval=base_interval,
+                    cache=True,
+                    timeout=MARKET_REQUEST_TIMEOUT,
+                    ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
+                    cache_alias=cache_alias,
+                    user_id=str(request.user.id),
+                )
+                if isinstance(intraday_frame, pd.DataFrame) and not intraday_frame.empty:
+                    intraday_source = "massive_rest"
+
+            frame_local = _merge_ohlc_frames(flatfiles_frame, intraday_frame)
+            if frame_local.empty and history_mode in {"auto", "rest"}:
+                if has_range_override:
+                    frame_local = market_data.fetch(
+                        [symbol],
+                        start=start_local,
+                        end=end_local,
+                        interval=base_interval,
+                        cache=True,
+                        timeout=MARKET_REQUEST_TIMEOUT,
+                        ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
+                        cache_alias=cache_alias,
+                        user_id=str(request.user.id),
+                    )
+                else:
+                    frame_local = market_data.fetch(
+                        [symbol],
+                        period=range_key_value,
+                        interval=base_interval,
+                        cache=True,
+                        timeout=MARKET_REQUEST_TIMEOUT,
+                        ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
+                        cache_alias=cache_alias,
+                        user_id=str(request.user.id),
+                    )
+                if isinstance(frame_local, pd.DataFrame) and not frame_local.empty:
+                    if historical_source == "none":
+                        historical_source = "massive_rest"
+                    if intraday_source == "none":
+                        intraday_source = "massive_rest"
+                    if history_coverage.get("start_ts") is None:
+                        history_coverage["complete"] = False
+        else:
+            if has_range_override:
+                frame_local = market_data.fetch(
+                    [symbol],
+                    start=start_local,
+                    end=end_local,
+                    interval=base_interval,
+                    cache=True,
+                    timeout=MARKET_REQUEST_TIMEOUT,
+                    ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
+                    cache_alias=cache_alias,
+                    user_id=str(request.user.id),
+                )
+            else:
+                frame_local = market_data.fetch(
+                    [symbol],
+                    period=range_key_value,
+                    interval=base_interval,
+                    cache=True,
+                    timeout=MARKET_REQUEST_TIMEOUT,
+                    ttl=getattr(settings, "MARKET_HISTORY_CACHE_TTL", 300),
+                    cache_alias=cache_alias,
+                    user_id=str(request.user.id),
+                )
+            if market_source == "massive":
+                historical_source = "massive_rest"
+                intraday_source = "massive_rest"
+            else:
+                historical_source = "alpaca_rest"
+                intraday_source = "alpaca_rest"
+
+        if isinstance(frame_local, pd.DataFrame):
+            frame_local.attrs["market_source"] = market_source
+            if historical_source != "none":
+                frame_local.attrs["historical_source"] = historical_source
+            if intraday_source != "none":
+                frame_local.attrs["intraday_source"] = intraday_source
+            frame_local.attrs["history_coverage"] = history_coverage
+            frame_local.attrs["history_cursor_next"] = history_cursor_next
+            frame_local.attrs["cache_meta"] = cache_meta
         bar_frame_local = frame_local
         if resample_rule:
             bar_frame_local = _resample_ohlc_frame(frame_local, symbol, resample_rule)
@@ -4643,7 +6251,7 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
             )
             if fetched:
                 trades = fetched
-                data_origin = "alpaca"
+                data_origin = market_source
                 if cached_trades:
                     fetched_max = max(
                         (parse_timestamp(item.get("ts") or item.get("t") or item.get("timestamp")) or 0.0)
@@ -4717,7 +6325,7 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
                 )
                 if anchored_trades:
                     trades = anchored_trades
-                    data_origin = "alpaca"
+                    data_origin = market_source
                     if anchored_feed:
                         downgrade_to = anchored_feed
                     if anchored_message:
@@ -4774,10 +6382,23 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
                         "generated_at": server_ts,
                         "data_source": _infer_market_source(fallback_frame),
                         "data_origin": "fallback",
+                        "historical_source": str(
+                            getattr(fallback_frame, "attrs", {}).get("historical_source")
+                            or ("massive_rest" if market_source == "massive" else "alpaca_rest")
+                        ),
+                        "intraday_source": str(
+                            getattr(fallback_frame, "attrs", {}).get("intraday_source")
+                            or ("massive_rest" if market_source == "massive" else "alpaca_rest")
+                        ),
                         "bars": fallback_bars,
                         "window_limited": False,
                         "latest_trade_ts": parse_timestamp(fallback_bars[-1]["time"] if fallback_bars else None),
                         "server_ts": server_ts,
+                        "history_coverage": getattr(fallback_frame, "attrs", {}).get("history_coverage")
+                        or {"start_ts": None, "end_ts": None, "complete": True},
+                        "history_cursor_next": getattr(fallback_frame, "attrs", {}).get("history_cursor_next"),
+                        "cache_meta": getattr(fallback_frame, "attrs", {}).get("cache_meta")
+                        or {"hit": 0, "miss": 0, "warmed_ranges": []},
                         "downgrade_to": fallback_interval.key,
                         "downgrade_message": " · ".join(messages),
                         "request_id": request_id,
@@ -4808,13 +6429,18 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
                 "label": interval.label,
             },
             "generated_at": server_ts,
-            "data_source": "alpaca",
+            "data_source": market_source,
             "data_origin": data_origin,
+            "historical_source": "none",
+            "intraday_source": "massive_ws" if market_source == "massive" else "alpaca_ws",
             "bars": bars,
             "window_limited": window_limited,
             "next_page_token": next_token,
             "latest_trade_ts": latest_trade_ts,
             "server_ts": server_ts,
+            "history_coverage": {"start_ts": None, "end_ts": None, "complete": True},
+            "history_cursor_next": None,
+            "cache_meta": {"hit": 0, "miss": 0, "warmed_ranges": []},
         }
         if downgrade_to:
             response["downgrade_to"] = downgrade_to
@@ -4904,10 +6530,15 @@ def market_chart_data(request: HttpRequest) -> JsonResponse:
         },
         "generated_at": server_ts,
         "data_source": _infer_market_source(frame),
+        "historical_source": str(getattr(frame, "attrs", {}).get("historical_source") or historical_source or "none"),
+        "intraday_source": str(getattr(frame, "attrs", {}).get("intraday_source") or intraday_source or "none"),
         "bars": bars,
         "window_limited": window_limited,
         "latest_trade_ts": parse_timestamp(bars[-1]["time"] if bars else None),
         "server_ts": server_ts,
+        "history_coverage": getattr(frame, "attrs", {}).get("history_coverage") or history_coverage,
+        "history_cursor_next": getattr(frame, "attrs", {}).get("history_cursor_next") or history_cursor_next,
+        "cache_meta": getattr(frame, "attrs", {}).get("cache_meta") or cache_meta,
     }
     if downgrade_to:
         response["downgrade_to"] = downgrade_to
@@ -5420,16 +7051,6 @@ def market_assets_data(request: HttpRequest) -> JsonResponse:
     for asset in page_assets:
         symbol = asset.get("symbol") or ""
         snapshot = snapshots.get(symbol, {}) if isinstance(snapshots, dict) else {}
-        latest_trade = (
-            snapshot.get("latestTrade") or snapshot.get("latest_trade")
-            if isinstance(snapshot, dict)
-            else None
-        )
-        latest_quote = (
-            snapshot.get("latestQuote") or snapshot.get("latest_quote")
-            if isinstance(snapshot, dict)
-            else None
-        )
         daily_bar = (
             snapshot.get("dailyBar") or snapshot.get("daily_bar")
             if isinstance(snapshot, dict)
@@ -5445,17 +7066,15 @@ def market_assets_data(request: HttpRequest) -> JsonResponse:
             if isinstance(snapshot, dict)
             else None
         )
-        snapshot_price = _coerce_number(
-            (latest_trade or {}).get("p")
-            or (minute_bar or {}).get("c")
-            or (daily_bar or {}).get("c")
-            or (latest_quote or {}).get("ap")
-            or (latest_quote or {}).get("bp")
+        snapshot_prev_close = _coerce_positive_price((prev_bar or {}).get("c"))
+        snapshot_price = _resolve_snapshot_last_price(
+            snapshot if isinstance(snapshot, dict) else None,
+            prev_close=snapshot_prev_close,
+            allow_quote_fallback=False,
         )
-        snapshot_open = _coerce_number((daily_bar or {}).get("o"))
+        snapshot_open = _coerce_positive_price((daily_bar or {}).get("o"))
         snapshot_high = _coerce_number((daily_bar or {}).get("h"))
         snapshot_low = _coerce_number((daily_bar or {}).get("l"))
-        snapshot_prev_close = _coerce_number((prev_bar or {}).get("c"))
         snapshot_volume = _coerce_number((daily_bar or {}).get("v") or (minute_bar or {}).get("v"))
         snapshot_dollar_volume = snapshot_price * snapshot_volume if snapshot_price is not None and snapshot_volume is not None else None
 
@@ -5528,7 +7147,7 @@ def market_assets_data(request: HttpRequest) -> JsonResponse:
                 "label_en": timeframe.label_en,
                 "clamped": timeframe_clamped,
             },
-            "data_source": "alpaca" if timeframe.key == "1d" else (window_source or "unknown"),
+            "data_source": resolve_market_provider(user=request.user) if timeframe.key == "1d" else (window_source or "unknown"),
             "generated_at": time.time(),
             "request_id": request_id,
         },
@@ -5726,7 +7345,8 @@ def _fetch_history(
     *,
     user_id: str | None = None,
 ) -> tuple[dict[str, pd.Series], str]:
-    cache_key = build_cache_key("market-history", "alpaca", timeframe.key, sorted(symbols))
+    market_source = resolve_market_provider(user_id=user_id)
+    cache_key = build_cache_key("market-history", market_source, timeframe.key, sorted(symbols))
     result = cache_memoize(
         cache_key,
         lambda: _download_history(symbols, timeframe, user_id=user_id),
@@ -5744,11 +7364,20 @@ def _infer_market_source(data: pd.DataFrame | None) -> str:
     fields = {"Open", "High", "Low", "Close", "Adj Close", "Volume"}
     if not isinstance(data, pd.DataFrame) or data.empty:
         return "unknown"
+    attrs = getattr(data, "attrs", {})
+    if isinstance(attrs, dict):
+        source = str(attrs.get("market_source") or "").strip().lower()
+        if source in {"alpaca", "massive"}:
+            return source
     columns = data.columns
     if isinstance(columns, pd.MultiIndex):
         level0 = set(columns.get_level_values(0))
-        return "alpaca" if level0 & fields else "unknown"
-    return "alpaca" if set(columns) & fields else "unknown"
+        if level0 & fields:
+            return "alpaca"
+        return "unknown"
+    if set(columns) & fields:
+        return "alpaca"
+    return "unknown"
 
 
 def _rank_symbols(
@@ -5786,7 +7415,7 @@ def _rank_symbols(
         ranked.append(
             {
                 "symbol": sym,
-                "price": round(end_price, 2),
+                "price": float(end_price),
                 "change_pct_period": round(period_change, 2),
                 "change_pct_day": round(day_change, 2),
                 "period_label": label,

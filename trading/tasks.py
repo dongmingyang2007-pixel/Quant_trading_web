@@ -4,6 +4,8 @@ from dataclasses import fields, replace
 from datetime import date, datetime
 from itertools import product
 import logging
+import threading
+import time
 from typing import Any, Dict, List, get_args, get_origin, get_type_hints
 
 from celery import shared_task
@@ -21,36 +23,157 @@ from .history import (
 )
 from .train_ml import run_engine_benchmark
 from .llm import LLMIntegrationError, generate_ai_commentary
-from .profile import load_api_credentials
 from paper.engine import run_pending_sessions
 
 
 _STRATEGY_INPUT_TYPES = get_type_hints(StrategyInput)
 LOGGER = logging.getLogger(__name__)
+_SNAPSHOT_TRIGGER_LOCK = threading.Lock()
+_SNAPSHOT_TRIGGER_LAST_TS = 0.0
+_SNAPSHOT_TRIGGER_THREAD: threading.Thread | None = None
+_SNAPSHOT_LOOP_TIMER_LOCK = threading.Lock()
+_SNAPSHOT_LOOP_TIMER: threading.Timer | None = None
+
+
+def _use_local_snapshot_loop() -> bool:
+    broker = str(getattr(settings, "CELERY_BROKER_URL", "") or "").strip().lower()
+    always_eager = bool(getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False))
+    return broker.startswith("memory://") and not always_eager
+
+
+def _schedule_snapshot_refresh_timer(*, user_id: str | None, delay: int) -> None:
+    global _SNAPSHOT_LOOP_TIMER
+    safe_delay = max(1, int(delay or 1))
+    with _SNAPSHOT_LOOP_TIMER_LOCK:
+        if _SNAPSHOT_LOOP_TIMER is not None and _SNAPSHOT_LOOP_TIMER.is_alive():
+            return
+
+        def _runner() -> None:
+            try:
+                trigger_market_snapshot_refresh(user_id=user_id)
+            except Exception:
+                LOGGER.exception("Local snapshot loop trigger failed")
+
+        timer = threading.Timer(safe_delay, _runner)
+        timer.daemon = True
+        _SNAPSHOT_LOOP_TIMER = timer
+        timer.start()
 
 
 def _resolve_snapshot_user_id() -> str | None:
     try:
         from .models import RealtimeProfile, UserProfile
+        from .market_provider import has_market_data_credentials, resolve_market_provider
     except Exception:
         return None
 
+    def _user_has_source_credentials(user_id: int | str | None) -> bool:
+        if not user_id:
+            return False
+        normalized = str(user_id)
+        try:
+            provider = resolve_market_provider(user_id=normalized)
+            return has_market_data_credentials(user_id=normalized, provider=provider)
+        except Exception:
+            return False
+
     try:
         active_profile = RealtimeProfile.objects.filter(is_active=True).order_by("-updated_at").first()
-        if active_profile and active_profile.user_id:
+        if active_profile and active_profile.user_id and _user_has_source_credentials(active_profile.user_id):
             return str(active_profile.user_id)
     except Exception:
         pass
 
     try:
-        for profile in UserProfile.objects.order_by("-updated_at")[:10]:
-            creds = load_api_credentials(str(profile.user_id))
-            if creds.get("alpaca_api_key_id") and creds.get("alpaca_api_secret_key"):
-                return str(profile.user_id)
+        preferred_provider = str(getattr(settings, "MARKET_DATA_PROVIDER", "") or "").strip().lower()
+        fallback_user: str | None = None
+        for profile in UserProfile.objects.order_by("-updated_at")[:20]:
+            uid = str(profile.user_id)
+            if not _user_has_source_credentials(uid):
+                continue
+            try:
+                provider = resolve_market_provider(user_id=uid)
+            except Exception:
+                provider = ""
+            if preferred_provider and provider == preferred_provider:
+                return uid
+            if fallback_user is None:
+                fallback_user = uid
+        if fallback_user:
+            return fallback_user
     except Exception:
         pass
 
     return None
+
+
+def trigger_market_snapshot_refresh(
+    *,
+    user_id: str | None = None,
+    prefer_thread: bool = False,
+) -> dict[str, Any]:
+    """Best-effort async trigger for snapshot rankings refresh.
+
+    Prefers Celery scheduling, and falls back to an in-process daemon thread
+    when no worker/broker is available. This function is non-blocking.
+    """
+
+    normalized_user_id = str(user_id).strip() if user_id is not None else None
+    if normalized_user_id == "":
+        normalized_user_id = None
+
+    effective_user_id = normalized_user_id or _resolve_snapshot_user_id()
+    force_thread_fallback = False
+    try:
+        from .market_provider import resolve_market_provider
+        from .views import market as market_views
+
+        provider = resolve_market_provider(user_id=effective_user_id)
+        progress_payload = market_views.read_state(market_views.SNAPSHOT_RANKINGS_PROGRESS_STATE, default={})  # type: ignore[attr-defined]
+        if isinstance(progress_payload, dict):
+            progress_status = str(progress_payload.get("status") or "").strip().lower()
+            if progress_status == "error":
+                force_thread_fallback = True
+        for timeframe_key in ("1d", *tuple(getattr(market_views, "MARKET_RANKINGS_TIMEFRAME_KEYS", ()))):
+            payload = market_views._resolve_building_snapshot_payload(timeframe_key, provider=provider)  # type: ignore[attr-defined]
+            if isinstance(payload, dict) and str(payload.get("status") or "").strip().lower() in {"stalled", "error"}:
+                force_thread_fallback = True
+                break
+    except Exception:
+        force_thread_fallback = False
+    if prefer_thread:
+        force_thread_fallback = True
+
+    if not force_thread_fallback:
+        try:
+            refresh_market_snapshot_rankings.apply_async(kwargs={"user_id": effective_user_id})
+            if _use_local_snapshot_loop():
+                _schedule_snapshot_refresh_timer(user_id=effective_user_id, delay=1)
+            return {"status": "queued", "via": "celery"}
+        except Exception:
+            LOGGER.debug("Celery enqueue for market snapshot refresh failed; fallback to thread", exc_info=True)
+
+    min_interval = max(3, int(getattr(settings, "MARKET_RANKINGS_LOOP_DELAY_SECONDS", 3) or 3))
+    now = time.time()
+    with _SNAPSHOT_TRIGGER_LOCK:
+        global _SNAPSHOT_TRIGGER_LAST_TS, _SNAPSHOT_TRIGGER_THREAD
+        active_thread = _SNAPSHOT_TRIGGER_THREAD
+        if active_thread is not None and active_thread.is_alive():
+            return {"status": "skipped", "via": "thread", "reason": "already_running"}
+        if now - _SNAPSHOT_TRIGGER_LAST_TS < min_interval:
+            return {"status": "skipped", "via": "thread", "reason": "cooldown"}
+
+        def _runner() -> None:
+            try:
+                refresh_market_snapshot_rankings(user_id=effective_user_id)
+            except Exception:
+                LOGGER.exception("In-process market snapshot refresh failed")
+
+        thread = threading.Thread(target=_runner, name="market-snapshot-refresh", daemon=True)
+        _SNAPSHOT_TRIGGER_THREAD = thread
+        _SNAPSHOT_TRIGGER_LAST_TS = now
+        thread.start()
+    return {"status": "queued", "via": "thread"}
 
 
 def _is_date_type(type_hint: object | None) -> bool:
@@ -450,11 +573,38 @@ def run_paper_trading_heartbeat(limit: int = 20) -> list[dict[str, Any]]:
     ignore_result=False,
     queue="paper_trading",
 )
-def refresh_market_snapshot_rankings() -> dict[str, Any]:
+def refresh_market_snapshot_rankings(user_id: str | None = None) -> dict[str, Any]:
     from .views import market as market_views
 
-    user_id = _resolve_snapshot_user_id()
-    return market_views.refresh_snapshot_rankings(user_id=user_id)
+    effective_user_id = str(user_id).strip() if user_id is not None else None
+    if not effective_user_id:
+        effective_user_id = _resolve_snapshot_user_id()
+    result = market_views.refresh_snapshot_rankings(user_id=effective_user_id)
+
+    if getattr(settings, "MARKET_RANKINGS_CONTINUOUS_LOOP", False) and not getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False):
+        status = str((result or {}).get("status") or "").strip().lower()
+        default_delay = int(getattr(settings, "MARKET_RANKINGS_LOOP_DELAY_SECONDS", 3) or 3)
+        if status == "locked":
+            delay = max(1, min(default_delay, 5))
+        elif status in {"missing_credentials", "error"}:
+            delay = max(
+                30,
+                min(
+                    int(getattr(settings, "MARKET_RANKINGS_REFRESH_SECONDS", 900) or 900),
+                    300,
+                ),
+            )
+        else:
+            delay = max(1, default_delay)
+        try:
+            refresh_market_snapshot_rankings.apply_async(countdown=delay)
+            if _use_local_snapshot_loop():
+                _schedule_snapshot_refresh_timer(user_id=effective_user_id, delay=delay)
+        except Exception:
+            LOGGER.exception("Failed to schedule next market rankings refresh loop; falling back to local timer")
+            _schedule_snapshot_refresh_timer(user_id=effective_user_id, delay=delay)
+
+    return result
 
 
 def _normalize_ai_history(raw: Any) -> list[dict[str, str]]:

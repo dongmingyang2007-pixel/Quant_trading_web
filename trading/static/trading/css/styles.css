@@ -4004,6 +4004,89 @@ pre,
     flex-wrap: wrap;
     justify-content: flex-end;
 }
+.nav-api-menu {
+    position: relative;
+}
+.nav-api-toggle {
+    border: 1px solid rgba(255,255,255,0.24);
+    background: rgba(255,255,255,0.08);
+    color: #f5f6f8;
+    padding: 4px 10px;
+    border-radius: 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    min-height: 40px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+.nav-api-menu.is-open .nav-api-toggle {
+    background: rgba(255,255,255,0.16);
+}
+.nav-api-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: #22c55e;
+    box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.18);
+}
+.nav-api-menu.is-error .nav-api-dot {
+    background: #f43f5e;
+    box-shadow: 0 0 0 4px rgba(244, 63, 94, 0.18);
+}
+.nav-api-title {
+    opacity: 0.9;
+}
+.nav-api-count {
+    font-size: 0.8rem;
+    font-weight: 800;
+}
+.nav-api-caret {
+    font-size: 0.72rem;
+    opacity: 0.85;
+}
+.nav-api-dropdown {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 10px);
+    background: #1e222d;
+    border-radius: 16px;
+    min-width: 220px;
+    box-shadow: 0 20px 40px rgba(15,23,42,0.35);
+    border: 1px solid #2a2e39;
+    padding: 12px 14px;
+    z-index: 1000;
+}
+.nav-api-head {
+    font-size: 0.78rem;
+    color: #d1d4dc;
+    font-weight: 700;
+    margin-bottom: 10px;
+}
+.nav-api-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.78rem;
+    color: #d1d4dc;
+    padding: 3px 0;
+}
+.nav-api-key {
+    opacity: 0.9;
+}
+.nav-api-val {
+    font-weight: 700;
+    color: #fff;
+}
+.nav-api-foot {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid #2a2e39;
+    font-size: 0.72rem;
+    color: #aeb4bf;
+}
 .nav-icon-button {
     width: 40px;
     height: 40px;
@@ -9331,6 +9414,15 @@ html[data-theme="dark"] .nav-user-dropdown a.is-danger {
 html[data-theme="dark"] .om-nav {
     background: linear-gradient(135deg, #091128, #0f203a);
     border-bottom-color: rgba(148,163,184,0.35);
+}
+html[data-theme="dark"] .nav-api-toggle {
+    border-color: rgba(148, 163, 184, 0.35);
+    background: rgba(15, 23, 42, 0.42);
+    color: rgba(226, 232, 240, 0.95);
+}
+html[data-theme="dark"] .nav-api-dropdown {
+    background: #0f172a;
+    border-color: rgba(148,163,184,0.45);
 }
 html[data-theme="dark"] .om-nav .nav-link {
     color: rgba(226, 232, 240, 0.82);

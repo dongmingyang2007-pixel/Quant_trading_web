@@ -1,0 +1,21 @@
+<aside class="community-topics community-topics-v2">
+    <div class="topic-head">
+        <span>{% bilingual "Topics" "话题广场" %}</span>
+    </div>
+    <ul class="topic-list" data-role="topic-list">
+        {% for topic in topics %}
+        <li class="topic-item{% if topic.topic_id == active_topic.topic_id %} is-active{% endif %}">
+            <a href="?topic={{ topic.topic_id }}{% if search_query %}&q={{ search_query|urlencode }}{% endif %}{% if sort %}&sort={{ sort }}{% endif %}" data-topic-id="{{ topic.topic_id }}">
+                #{{ topic.name }}
+            </a>
+            <span class="topic-desc text-muted">
+                {% if topic.description %}
+                    {{ topic.description }}
+                {% else %}
+                    {% bilingual "Feel free to chat." "随便聊聊吧。" %}
+                {% endif %}
+            </span>
+        </li>
+        {% endfor %}
+    </ul>
+</aside>

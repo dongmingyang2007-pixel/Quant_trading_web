@@ -54,6 +54,48 @@
     const shareHistoryId = root.dataset.shareHistoryId;
     const backtestBase = root.dataset.backtestBase || "/backtest/";
 
+
+    const loadMoreState = {
+        button: null,
+        loading: null,
+        error: null,
+    };
+
+    const syncLoadMoreNodes = () => {
+        loadMoreState.button = root.querySelector("[data-role='load-more-button']");
+        loadMoreState.loading = root.querySelector("[data-role='load-more-loading']");
+        loadMoreState.error = root.querySelector("[data-role='load-more-error']");
+    };
+
+    const setLoadMoreBusy = (busy) => {
+        if (loadMoreState.button) {
+            const idleLabel = loadMoreState.button.dataset.labelIdle || loadMoreState.button.textContent.trim();
+            const loadingLabel = loadMoreState.button.dataset.labelLoading || idleLabel;
+            if (busy) {
+                loadMoreState.button.dataset.cachedLabel = idleLabel;
+                loadMoreState.button.textContent = loadingLabel;
+                loadMoreState.button.setAttribute("disabled", "disabled");
+                loadMoreState.button.classList.add("is-loading");
+            } else {
+                const restore = loadMoreState.button.dataset.cachedLabel || idleLabel;
+                loadMoreState.button.textContent = restore;
+                loadMoreState.button.removeAttribute("disabled");
+                loadMoreState.button.classList.remove("is-loading");
+            }
+        }
+        if (loadMoreState.loading) {
+            loadMoreState.loading.classList.toggle("d-none", !busy);
+        }
+    };
+
+    const showLoadMoreError = (visible) => {
+        if (loadMoreState.error) {
+            loadMoreState.error.classList.toggle("d-none", !visible);
+        }
+    };
+
+    syncLoadMoreNodes();
+
     const highlightBlocks = (scope) => {
         if (!window.hljs || typeof window.hljs.highlightElement !== "function") return;
         const target = scope || document;
@@ -922,11 +964,45 @@
         }
     });
 
+    document.body.addEventListener("htmx:beforeRequest", (event) => {
+        const elt = event.detail?.elt;
+        if (!elt || !root.contains(elt)) return;
+        if (elt.matches?.("[data-role='load-more-button']")) {
+            syncLoadMoreNodes();
+            showLoadMoreError(false);
+            setLoadMoreBusy(true);
+        }
+    });
+
+    document.body.addEventListener("htmx:afterRequest", (event) => {
+        const elt = event.detail?.elt;
+        if (!elt || !root.contains(elt)) return;
+        if (elt.matches?.("[data-role='load-more-button']")) {
+            setLoadMoreBusy(false);
+            if (event.detail?.failed) {
+                showLoadMoreError(true);
+            }
+        }
+    });
+
+    document.body.addEventListener("htmx:responseError", (event) => {
+        const elt = event.detail?.elt;
+        if (!elt || !root.contains(elt)) return;
+        if (elt.matches?.("[data-role='load-more-button']")) {
+            syncLoadMoreNodes();
+            setLoadMoreBusy(false);
+            showLoadMoreError(true);
+        }
+    });
+
     document.body.addEventListener("htmx:afterSwap", (event) => {
         const target = event.detail?.target;
         if (!target) return;
         if (target.id === "community-post-list" || target.closest?.("#community-post-list")) {
             highlightBlocks(target);
+            syncLoadMoreNodes();
+            setLoadMoreBusy(false);
+            showLoadMoreError(false);
         }
     });
 

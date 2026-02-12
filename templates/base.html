@@ -10,6 +10,8 @@
     <link rel="stylesheet" href="{% static 'trading/css/styles.css' %}">
     <link rel="stylesheet" href="{% static 'trading/css/global_quick_widget.css' %}?v={{ STATIC_VERSION|default:'20260206-gqw-v2' }}">
     {% block extra_head %}{% endblock %}
+    <link rel="stylesheet" href="{% static 'trading/css/clean_theme.css' %}?v={{ STATIC_VERSION|default:'20260211-clean-theme-v7' }}">
+    {% block extra_head_after_theme %}{% endblock %}
 </head>
 <body class="bg-light"
       data-task-status-template="{% url 'trading:api_v1_task_status' task_id='TASK_ID_PLACEHOLDER' %}"
@@ -28,17 +30,6 @@
                     </li>
                     <li class="nav-item">
                         <a class="nav-link{% if request.resolver_match.url_name == 'market_insights' %} active{% endif %}" href="{% url 'trading:market_insights' %}">{% bilingual "Market Insights" "股市信息" %}</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link{% if request.resolver_match.url_name == 'paper_trading' %} active{% endif %}" href="{% url 'trading:paper_trading' %}">{% bilingual "Paper Trading" "模拟实盘" %}</a>
-                    </li>
-                    {% if user.is_authenticated %}
-                        <li class="nav-item">
-                            <a class="nav-link{% if request.resolver_match.url_name == 'realtime_monitor' or request.resolver_match.url_name == 'realtime_settings' %} active{% endif %}" href="{% url 'trading:realtime_monitor' %}">{% bilingual "Realtime" "实时引擎" %}</a>
-                        </li>
-                    {% endif %}
-                    <li class="nav-item">
-                        <a class="nav-link{% if request.resolver_match.url_name == 'learning_center' %} active{% endif %}" href="{% url 'trading:learning_center' %}">{% bilingual "Learning Hub" "学习中心" %}</a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link{% if request.resolver_match.url_name == 'community' %} active{% endif %}" href="{% url 'trading:community' %}">{% bilingual "Community" "社区广场" %}</a>
@@ -63,6 +54,67 @@
                         </div>
                     </form>
                     {% if user.is_authenticated %}
+                        <div class="nav-monitor-group" data-role="nav-monitor-group">
+                            <div class="nav-api-menu"
+                                 data-api-menu
+                                 data-url="{% url 'trading:api_v1_api_usage' %}"
+                                 data-lang="{{ request.LANGUAGE_CODE|default:'zh-hans'|lower|slice:':2' }}">
+                                <button type="button"
+                                        class="nav-api-toggle"
+                                        data-api-toggle
+                                        aria-haspopup="true"
+                                        aria-expanded="false"
+                                        title="{% bilingual 'External market API usage details' '外部行情 API 使用详情' %}">
+                                    <span class="nav-api-dot" aria-hidden="true"></span>
+                                    <span class="nav-api-title">{% bilingual "API" "API" %}</span>
+                                    <span class="nav-api-count" data-role="nav-api-usage-value">--</span>
+                                    <span class="nav-api-caret" aria-hidden="true">▾</span>
+                                </button>
+                                <div class="nav-api-dropdown" data-api-panel hidden>
+                                    <div class="nav-api-head">{% bilingual "Last 1 min usage" "最近1分钟使用" %}</div>
+                                    <div class="nav-api-row">
+                                        <span class="nav-api-key">{% bilingual "Total" "总调用" %}</span>
+                                        <span class="nav-api-val" data-role="nav-api-total">--</span>
+                                    </div>
+                                    <div class="nav-api-row">
+                                        <span class="nav-api-key">Massive</span>
+                                        <span class="nav-api-val" data-role="nav-api-massive">--</span>
+                                    </div>
+                                    <div class="nav-api-row">
+                                        <span class="nav-api-key">Alpaca</span>
+                                        <span class="nav-api-val" data-role="nav-api-alpaca">--</span>
+                                    </div>
+                                    <div class="nav-api-row">
+                                        <span class="nav-api-key">{% bilingual "Status" "状态" %}</span>
+                                        <span class="nav-api-val" data-role="nav-api-level">--</span>
+                                    </div>
+                                    <div class="nav-api-foot" data-role="nav-api-updated">{% bilingual "Updating..." "更新中..." %}</div>
+                                </div>
+                            </div>
+                            <div class="nav-api-menu nav-observer-menu"
+                                 data-observer-menu
+                                 data-url="{% url 'trading:market_rankings_status' %}"
+                                 data-lang="{{ request.LANGUAGE_CODE|default:'zh-hans'|lower|slice:':2' }}">
+                                <button type="button"
+                                        class="nav-api-toggle"
+                                        data-observer-toggle
+                                        aria-haspopup="true"
+                                        aria-expanded="false"
+                                        title="{% bilingual 'Leaderboard status observer' '榜单状态观察' %}">
+                                    <span class="nav-api-dot" aria-hidden="true"></span>
+                                    <span class="nav-api-title">{% bilingual "Observe" "观察" %}</span>
+                                    <span class="nav-api-count" data-role="nav-observer-count">--</span>
+                                    <span class="nav-api-caret" aria-hidden="true">▾</span>
+                                </button>
+                                <div class="nav-api-dropdown nav-observer-dropdown" data-observer-panel hidden>
+                                    <div class="nav-api-head">{% bilingual "Leaderboard status" "榜单状态" %}</div>
+                                    <div class="nav-observer-summary" data-role="nav-observer-summary">
+                                        {% bilingual "Loading..." "加载中..." %}
+                                    </div>
+                                    <div class="nav-observer-list" data-role="nav-observer-list"></div>
+                                </div>
+                            </div>
+                        </div>
                         <a class="nav-icon-button nav-notification"
                            href="{% url 'trading:community_notifications' %}"
                            aria-label="{% bilingual 'Notifications' '通知中心' %}"
@@ -113,24 +165,6 @@
             "shortcut": "M",
             "type": "route",
             "href": "{% url 'trading:market_insights' %}"
-        },
-        {% if user.is_authenticated %}
-        {
-            "id": "realtime",
-            "label": "{% if lang_prefix == 'zh' %}{{ "实时引擎"|escapejs }}{% else %}{{ "Realtime Engine"|escapejs }}{% endif %}",
-            "description": "{% if lang_prefix == 'zh' %}{{ "查看实时监控与 Focus 列表"|escapejs }}{% else %}{{ "Open realtime monitor & focus list"|escapejs }}{% endif %}",
-            "shortcut": "R",
-            "type": "route",
-            "href": "{% url 'trading:realtime_monitor' %}"
-        },
-        {% endif %}
-        {
-            "id": "learning",
-            "label": "{% if lang_prefix == 'zh' %}{{ "学习中心"|escapejs }}{% else %}{{ "Learning Hub"|escapejs }}{% endif %}",
-            "description": "{% if lang_prefix == 'zh' %}{{ "继续学习课程"|escapejs }}{% else %}{{ "Continue structured lessons"|escapejs }}{% endif %}",
-            "shortcut": "L",
-            "type": "route",
-            "href": "{% url 'trading:learning_center' %}"
         },
         {
             "id": "community",
@@ -274,7 +308,7 @@
     <main class="container-xl pb-5">
         {% block content %}{% endblock %}
     </main>
-    <script src="{% static 'trading/js/nav_controls.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
+    <script src="{% static 'trading/js/nav_controls.js' %}?v={{ STATIC_VERSION|default:'20260212-nav-v8' }}" nonce="{{ csp_nonce }}" defer></script>
     <script src="{% static 'trading/js/command_palette.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
     <script src="{% static 'trading/js/task_dock.js' %}?v={{ STATIC_VERSION|default:'1' }}" nonce="{{ csp_nonce }}" defer></script>
     <script src="{% static 'trading/js/global_quick_widget.js' %}?v={{ STATIC_VERSION|default:'20260206-gqw-v2' }}" nonce="{{ csp_nonce }}" defer></script>

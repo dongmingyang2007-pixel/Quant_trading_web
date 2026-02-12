@@ -1,0 +1,53 @@
+<div class="offcanvas offcanvas-end write-meta-drawer"
+     tabindex="-1"
+     id="writeMetaDrawer"
+     aria-labelledby="writeMetaLabel">
+    <div class="offcanvas-header">
+        <h5 class="offcanvas-title" id="writeMetaLabel">{% bilingual "Post settings" "发布设置" %}</h5>
+        <button type="button"
+                class="btn-close"
+                data-bs-dismiss="offcanvas"
+                aria-label="{% bilingual 'Close' '关闭' %}"></button>
+    </div>
+    <div class="offcanvas-body">
+        <div class="mb-4">
+            <div class="write-meta-title">{% bilingual "Topic" "话题" %}</div>
+            <p class="write-meta-hint">
+                {% bilingual "Pick one topic to help readers discover your article." "选择一个话题，方便读者发现你的文章。" %}
+            </p>
+            <div class="write-pill-group">
+                {% for topic in topics %}
+                <input class="btn-check"
+                       type="radio"
+                       name="topic"
+                       id="topic-{{ topic.topic_id }}"
+                       value="{{ topic.topic_id }}"
+                       {% if topic.topic_id == selected_topic %}checked{% endif %}>
+                <label class="write-pill" for="topic-{{ topic.topic_id }}">#{{ topic.name }}</label>
+                {% endfor %}
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<div class="offcanvas offcanvas-start" tabindex="-1" id="draftsDrawer" aria-labelledby="draftsDrawerLabel">
+    <div class="offcanvas-header">
+        <h5 class="offcanvas-title" id="draftsDrawerLabel">{% bilingual "Drafts" "草稿箱" %}</h5>
+        <button type="button"
+                class="btn-close"
+                data-bs-dismiss="offcanvas"
+                aria-label="{% bilingual 'Close' '关闭' %}"></button>
+    </div>
+    <div class="offcanvas-body">
+        <div class="drafts-panel">
+            <button type="button" class="btn btn-primary" data-role="draft-new">
+                + {% bilingual "New article" "新建文章" %}
+            </button>
+            <div class="drafts-list" data-role="drafts-list"></div>
+            <div class="text-muted small d-none" data-role="drafts-empty">
+                {% bilingual "No drafts yet." "暂无草稿" %}
+            </div>
+        </div>
+    </div>
+</div>

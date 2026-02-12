@@ -21,7 +21,8 @@ from django.conf import settings
 
 from .observability import record_metric
 from .cache_utils import cache_get_object, cache_set_object, build_cache_key
-from .alpaca_data import DEFAULT_FEED, fetch_stock_snapshots, resolve_alpaca_data_credentials
+from .alpaca_data import DEFAULT_FEED
+from .market_provider import fetch_stock_snapshots, resolve_market_provider
 
 
 # Cache TTLs (Redis 优先，其次内存)
@@ -107,8 +108,8 @@ def resolve_sector(value: str | None) -> tuple[str, str]:
     return DEFAULT_SECTOR_LABEL, ""
 
 
-def _quote_cache_key(symbol: str) -> str:
-    return build_cache_key("screener-quote", "alpaca", symbol.upper())
+def _quote_cache_key(symbol: str, *, provider: str) -> str:
+    return build_cache_key("screener-quote", provider, symbol.upper())
 
 
 # ---------------------------------------------------------------------------
@@ -127,13 +128,14 @@ def _fetch_quote_snapshot(symbols: Sequence[str], *, user_id: str | None = None)
     if not symbols:
         return results
 
+    provider = resolve_market_provider(user_id=user_id)
     to_fetch: list[str] = []
     for s in symbols:
         sym = s.strip().upper()
         if not sym:
             continue
-        cached = cache_get_object(_quote_cache_key(sym))
-        if isinstance(cached, dict) and cached.get("source") == "alpaca":
+        cached = cache_get_object(_quote_cache_key(sym, provider=provider))
+        if isinstance(cached, dict) and cached.get("source") == provider:
             results[sym] = cached
         else:
             to_fetch.append(sym)
@@ -142,9 +144,6 @@ def _fetch_quote_snapshot(symbols: Sequence[str], *, user_id: str | None = None)
         return results
 
     chunk_size = 40
-    key_id, secret = resolve_alpaca_data_credentials(user_id=user_id)
-    if not (key_id and secret):
-        return results
 
     def _normalize_snapshot(symbol: str, snapshot: dict[str, Any]) -> dict[str, Any] | None:
         latest_trade = snapshot.get("latestTrade") or snapshot.get("latest_trade") or {}
@@ -179,7 +178,7 @@ def _fetch_quote_snapshot(symbols: Sequence[str], *, user_id: str | None = None)
             "regularMarketChangePercent": float(change_pct) if change_pct is not None else None,
             "regularMarketVolume": int(volume) if volume is not None else None,
             "currency": "USD",
-            "source": "alpaca",
+            "source": provider,
             "_ts": time.time(),
         }
 
@@ -187,7 +186,12 @@ def _fetch_quote_snapshot(symbols: Sequence[str], *, user_id: str | None = None)
         chunk = [s for s in to_fetch[idx : idx + chunk_size] if s]
         if not chunk:
             continue
-        snapshots = fetch_stock_snapshots(chunk, feed=DEFAULT_FEED, user_id=user_id)
+        snapshots = fetch_stock_snapshots(
+            chunk,
+            feed=DEFAULT_FEED if provider == "alpaca" else None,
+            user_id=user_id,
+            provider=provider,
+        )
         for symbol in chunk:
             snapshot = snapshots.get(symbol) if isinstance(snapshots, dict) else None
             if not isinstance(snapshot, dict):
@@ -196,7 +200,7 @@ def _fetch_quote_snapshot(symbols: Sequence[str], *, user_id: str | None = None)
             if not entry:
                 continue
             results[symbol] = entry
-            cache_set_object(_quote_cache_key(symbol), entry, SCREENER_CACHE_TTL)
+            cache_set_object(_quote_cache_key(symbol, provider=provider), entry, SCREENER_CACHE_TTL)
 
     total_symbols = len([s for s in symbols if s and s.strip()])
     if total_symbols:

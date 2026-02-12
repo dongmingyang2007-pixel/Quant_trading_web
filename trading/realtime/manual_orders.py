@@ -37,6 +37,23 @@ def _get_active_profile(user) -> RealtimeProfile | None:
     return RealtimeProfile.objects.filter(user=user, is_active=True).first()
 
 
+def _is_daily_loss_guard_triggered(execution: AlpacaExecutionClient, max_daily_loss_pct: float) -> tuple[bool, float]:
+    if max_daily_loss_pct <= 0:
+        return False, 0.0
+    account = execution.get_account() or {}
+    try:
+        equity = float(account.get("equity") or 0.0)
+        baseline = float(account.get("last_equity") or 0.0)
+    except (TypeError, ValueError):
+        return False, 0.0
+    if equity <= 0 or baseline <= 0:
+        return False, 0.0
+    loss_pct = max(0.0, (baseline - equity) / baseline)
+    if loss_pct >= max_daily_loss_pct:
+        return True, loss_pct
+    return False, loss_pct
+
+
 def submit_manual_order(
     *,
     user,
@@ -67,6 +84,16 @@ def submit_manual_order(
         mode = resolve_alpaca_trading_mode(user=user)
 
     execution = AlpacaExecutionClient(user_id=str(user.id), mode=mode)
+    blocked, loss_pct = _is_daily_loss_guard_triggered(execution, config.trading.risk.max_daily_loss_pct)
+    if blocked:
+        return {
+            "ok": False,
+            "message": (
+                "已触发日内风控，暂停手动下单。"
+                f" 当前回撤 {loss_pct * 100:.2f}% ≥ 限额 {config.trading.risk.max_daily_loss_pct * 100:.2f}% 。"
+            ),
+            "status": "risk_blocked:max_daily_loss",
+        }
     order = OrderRequest(
         symbol=symbol,
         qty=qty_val if qty_val > 0 else None,

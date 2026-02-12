@@ -1,0 +1,41 @@
+                            <section class="account-settings-panel" data-settings-panel="security" id="account-settings-panel-security" role="tabpanel" aria-labelledby="account-settings-security">
+                                <section class="account-card account-security">
+                                    <div class="account-card-head">
+                                        <h2>{% bilingual "Security center" "安全中心" %}</h2>
+                                    </div>
+                                    {% if password_success %}
+                                        <div class="alert alert-success mt-2">{{ password_success }}</div>
+                                    {% endif %}
+                                    {% if password_error %}
+                                        <div class="alert alert-danger mt-2">{{ password_error }}</div>
+                                    {% endif %}
+                                    <div class="settings-split">
+                                        <div class="settings-split-main">
+                                            <div class="card">
+                                                <div class="card-header">
+                                                    {% bilingual "Security tips" "安全建议" %}
+                                                </div>
+                                                <div class="card-body">
+                                                    <ul class="mb-0 ps-3">
+                                                        <li>{% bilingual "Update passwords regularly and keep MFA enabled." "定期更新密码，并启用邮箱多重验证。" %}</li>
+                                                        <li>{% bilingual "Store exported reports securely to protect strategies." "下载回测报告后，妥善保管敏感策略信息。" %}</li>
+                                                    </ul>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="settings-split-side">
+                                            <div class="card">
+                                                <div class="card-header">
+                                                    {% bilingual "Password reset" "重置密码" %}
+                                                </div>
+                                                <div class="card-body">
+                                                    <form method="post" class="account-secure-form" action="{% url 'trading:account_reset_password' %}">
+                                                        {% csrf_token %}
+                                                        <button type="submit" class="btn btn-primary w-100">{% bilingual "Send password reset email" "发送重设密码邮件" %}</button>
+                                                    </form>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </section>
+                            </section>

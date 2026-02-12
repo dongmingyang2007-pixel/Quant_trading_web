@@ -15,7 +15,11 @@ class RealtimeTradingConfigTests(SimpleTestCase):
                     {"name": "mean_reversion", "enabled": False, "weight": 0.4},
                 ],
                 "combiner": {"method": "weighted_avg"},
-                "risk": {"max_position_weight": 0.2},
+                "risk": {
+                    "max_position_weight": 0.2,
+                    "max_daily_loss_pct": 0.02,
+                    "kill_switch_cooldown_seconds": 1200,
+                },
                 "execution": {"enabled": False, "max_orders_per_minute": 50},
             }
         }
@@ -28,5 +32,7 @@ class RealtimeTradingConfigTests(SimpleTestCase):
         self.assertEqual(config.trading.strategies[0].params.get("lookback_bars"), 4)
         self.assertEqual(config.trading.combiner.method, "weighted_avg")
         self.assertEqual(config.trading.risk.max_position_weight, 0.2)
+        self.assertAlmostEqual(config.trading.risk.max_daily_loss_pct, 0.02)
+        self.assertEqual(config.trading.risk.kill_switch_cooldown_seconds, 1200)
         self.assertEqual(config.trading.execution.max_orders_per_minute, 50)
         self.assertFalse(config.trading.execution.dry_run)

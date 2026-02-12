@@ -1,0 +1,62 @@
+.backtest-shell-frame {
+    margin-left: auto;
+    margin-right: auto;
+    width: 100%;
+}
+
+.backtest-page {
+    --wb-shell-start: #f8fafc;
+    --wb-shell-mid: #ffffff;
+    --wb-shell-end: #eef4ff;
+    --wb-card: #ffffff;
+    --wb-card-alt: #f8fafc;
+    --wb-border: rgba(148, 163, 184, 0.25);
+    --wb-text: #0f172a;
+    --wb-muted: #64748b;
+    --wb-primary: #2563eb;
+    --wb-shadow: rgba(15, 23, 42, 0.1);
+    position: relative;
+    isolation: isolate;
+}
+
+.backtest-page::before {
+    content: "";
+    position: absolute;
+    inset: -36px -14px auto;
+    height: 260px;
+    border-radius: 28px;
+    z-index: -1;
+    pointer-events: none;
+    background:
+        radial-gradient(circle at 12% 12%, rgba(37, 99, 235, 0.18), transparent 42%),
+        radial-gradient(circle at 75% 2%, rgba(14, 116, 144, 0.2), transparent 52%),
+        linear-gradient(135deg, rgba(15, 23, 42, 0.1), transparent 66%);
+}
+
+.backtest-page .backtest-hero {
+    background:
+        linear-gradient(135deg, rgba(248, 250, 252, 0.95), rgba(255, 255, 255, 0.95)),
+        #ffffff;
+    border-color: var(--wb-border);
+    box-shadow: 0 18px 30px rgba(15, 23, 42, 0.08);
+}
+
+.backtest-page .backtest-kicker,
+.backtest-page .backtest-title,
+.backtest-page .backtest-subtitle,
+.backtest-page .hero-bullets,
+.backtest-page .hero-bullets strong {
+    color: #0f172a !important;
+}
+
+.backtest-page .hero-bullets li {
+    color: #334155;
+}
+
+.backtest-news-top .news-ribbon {
+    border-radius: 20px;
+}
+
+.workbench-panel {
+    border-radius: 20px;
+}

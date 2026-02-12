@@ -7,6 +7,7 @@ from typing import Any, Iterable
 import pandas as pd
 import requests
 
+from .api_usage import record_provider_api_call
 from .network import get_requests_session, resolve_retry_config, retry_call_result
 from .profile import load_api_credentials
 
@@ -124,11 +125,13 @@ def _alpaca_get(
     params: dict[str, Any],
     headers: dict[str, str],
     timeout: float | None,
+    user_id: str | None = None,
 ) -> requests.Response | None:
     config = resolve_retry_config(timeout=timeout)
     session = get_requests_session(config.timeout)
 
     def _call():
+        record_provider_api_call("alpaca", user_id=user_id)
         return session.get(url, params=params, headers=headers, timeout=config.timeout)
 
     def _should_retry(response: requests.Response) -> bool:
@@ -178,6 +181,14 @@ def _format_ts(value: date | datetime | None) -> str | None:
     return dt.isoformat().replace("+00:00", "Z")
 
 
+def _resolve_usage_user_id(*, user: Any | None, user_id: str | None) -> str:
+    if user is not None and getattr(user, "is_authenticated", False):
+        resolved = str(getattr(user, "id", "") or "")
+        if resolved:
+            return resolved
+    return str(user_id or "")
+
+
 def fetch_stock_bars(
     symbols: Iterable[str],
     *,
@@ -192,6 +203,7 @@ def fetch_stock_bars(
     timeout: float | None = None,
     base_url: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
+    usage_user_id = _resolve_usage_user_id(user=user, user_id=user_id)
     key_id, secret = resolve_alpaca_data_credentials(user=user, user_id=user_id)
     if not key_id or not secret:
         return {}
@@ -222,7 +234,7 @@ def fetch_stock_bars(
     for _ in range(60):
         if page_token:
             params["page_token"] = page_token
-        response = _alpaca_get(url, params=params, headers=headers, timeout=timeout)
+        response = _alpaca_get(url, params=params, headers=headers, timeout=timeout, user_id=usage_user_id)
         if response is None:
             break
         try:
@@ -258,6 +270,7 @@ def fetch_stock_trades(
     timeout: float | None = None,
     base_url: str | None = None,
 ) -> TradeFetchResult:
+    usage_user_id = _resolve_usage_user_id(user=user, user_id=user_id)
     # Contract: always return a 4-tuple so callers can safely unpack.
     key_id, secret = resolve_alpaca_data_credentials(user=user, user_id=user_id)
     if not key_id or not secret:
@@ -293,7 +306,13 @@ def fetch_stock_trades(
         for _ in range(pages):
             if next_token:
                 current_params["page_token"] = next_token
-            response = _alpaca_get(url, params=current_params, headers=headers, timeout=timeout)
+            response = _alpaca_get(
+                url,
+                params=current_params,
+                headers=headers,
+                timeout=timeout,
+                user_id=usage_user_id,
+            )
             if response is None:
                 break
             try:
@@ -409,6 +428,7 @@ def fetch_stock_snapshots(
     timeout: float | None = None,
     base_url: str | None = None,
 ) -> dict[str, Any]:
+    usage_user_id = _resolve_usage_user_id(user=user, user_id=user_id)
     key_id, secret = resolve_alpaca_data_credentials(user=user, user_id=user_id)
     if not key_id or not secret:
         return {}
@@ -424,7 +444,7 @@ def fetch_stock_snapshots(
         params: dict[str, Any] = {"symbols": ",".join(chunk)}
         if feed or DEFAULT_FEED:
             params["feed"] = feed or DEFAULT_FEED
-        response = _alpaca_get(url, params=params, headers=headers, timeout=timeout)
+        response = _alpaca_get(url, params=params, headers=headers, timeout=timeout, user_id=usage_user_id)
         if response is None:
             continue
         try:
@@ -454,6 +474,7 @@ def fetch_news(
     path: str | None = None,
     max_pages: int | None = None,
 ) -> list[dict[str, Any]]:
+    usage_user_id = _resolve_usage_user_id(user=user, user_id=user_id)
     key_id, secret = resolve_alpaca_data_credentials(user=user, user_id=user_id)
     if not key_id or not secret:
         return []
@@ -491,7 +512,13 @@ def fetch_news(
                 break
             seen_tokens.add(page_token)
             request_params["page_token"] = page_token
-        response = _alpaca_get(url, params=request_params, headers=headers, timeout=timeout)
+        response = _alpaca_get(
+            url,
+            params=request_params,
+            headers=headers,
+            timeout=timeout,
+            user_id=usage_user_id,
+        )
         if response is None:
             break
         try:
